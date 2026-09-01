@@ -1,6 +1,5 @@
-from pathlib import Path
-
-from echooo.config import PromptSettings, Settings
+from echooo.config import Settings
+from echooo.models import VoiceProfile
 from echooo.providers.tts.cosyvoice import CosyVoiceTTS
 
 
@@ -8,34 +7,35 @@ def test_sft_request_uses_speaker() -> None:
     settings = Settings(
         tts_provider="cosyvoice",
         cosyvoice_base_url="http://cosyvoice:50000/",
-        cosyvoice_mode="sft",
-        cosyvoice_speaker="中文女",
     )
+    provider = CosyVoiceTTS(settings)
+    provider.configure_voice(VoiceProfile(mode="sft", speaker_id="English Female"))
 
-    url, data, files = CosyVoiceTTS(settings)._request("你好")
+    url, data, files = provider._request("Hello")
 
     assert url == "http://cosyvoice:50000/inference_sft"
-    assert data == {"tts_text": "你好", "spk_id": "中文女"}
+    assert data == {"tts_text": "Hello", "spk_id": "English Female"}
     assert files is None
 
 
-def test_zero_shot_request_attaches_prompt_wav(tmp_path: Path) -> None:
-    prompt = tmp_path / "prompt.wav"
-    prompt.write_bytes(b"RIFF-test")
-    settings = Settings(
-        tts_provider="cosyvoice",
-        cosyvoice_mode="zero_shot",
-        prompts=PromptSettings(
-            llm_system="测试系统提示词",
-            cosyvoice_reference_wav=str(prompt),
-            cosyvoice_prompt="参考音频文本",
-            cosyvoice_instruct="测试指令",
-        ),
+def test_zero_shot_request_attaches_uploaded_audio() -> None:
+    provider = CosyVoiceTTS(Settings(tts_provider="cosyvoice"))
+    provider.configure_voice(
+        VoiceProfile(
+            mode="zero_shot",
+            reference_audio=b"RIFF-test",
+            reference_filename="prompt.wav",
+            reference_content_type="audio/wav",
+            reference_text="Reference audio transcript",
+        )
     )
 
-    url, data, files = CosyVoiceTTS(settings)._request("要合成的文本")
+    url, data, files = provider._request("Text to synthesize")
 
     assert url.endswith("/inference_zero_shot")
-    assert data == {"tts_text": "要合成的文本", "prompt_text": "参考音频文本"}
+    assert data == {
+        "tts_text": "Text to synthesize",
+        "prompt_text": "Reference audio transcript",
+    }
     assert files is not None
     assert files["prompt_wav"] == ("prompt.wav", b"RIFF-test", "audio/wav")

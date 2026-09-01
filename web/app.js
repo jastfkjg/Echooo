@@ -1,14 +1,14 @@
 const $ = (id) => document.getElementById(id);
 
 const stateLabels = {
-  idle: "未连接",
-  connecting: "正在连接",
-  listening: "正在聆听",
-  thinking: "正在思考",
-  speaking: "正在回答",
-  interrupting: "正在打断",
-  error: "连接异常",
-  closed: "已结束",
+  idle: "Disconnected",
+  connecting: "Connecting",
+  listening: "Listening",
+  thinking: "Thinking",
+  speaking: "Speaking",
+  interrupting: "Interrupting",
+  error: "Connection error",
+  closed: "Ended",
 };
 
 let socket = null;
@@ -27,12 +27,17 @@ let partialUser = null;
 let liveAssistant = null;
 let activeGeneration = null;
 let inputSampleRate = 16000;
+let publicConfig = null;
+let pendingVoiceProfile = null;
+let voiceSampleId = "";
+let uploadedFileKey = "";
 
 async function loadPublicConfig() {
   try {
     const response = await fetch("/api/config");
     if (!response.ok) return;
     const config = await response.json();
+    publicConfig = config;
     inputSampleRate = Number(config.audio?.input_sample_rate) || inputSampleRate;
     if (config.providers) {
       $("provider-stt").textContent = config.providers.stt || "—";
@@ -58,13 +63,13 @@ async function listMicrophones() {
     microphones.forEach((device, index) => {
       const option = document.createElement("option");
       option.value = device.deviceId;
-      option.textContent = device.label || `麦克风 ${index + 1}`;
+      option.textContent = device.label || `Microphone ${index + 1}`;
       $("microphone").append(option);
     });
     if (!microphones.length) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "默认麦克风";
+      option.textContent = "Default microphone";
       $("microphone").append(option);
     }
     if ([...$("microphone").options].some((option) => option.value === selected)) {
@@ -80,6 +85,7 @@ async function startCall() {
   setState("connecting");
   try {
     await loadPublicConfig();
+    pendingVoiceProfile = await prepareVoiceProfile();
     const constraints = {
       audio: {
         channelCount: 1,
@@ -128,21 +134,22 @@ async function startCall() {
       updateElapsed();
       $("call-button").disabled = false;
       $("call-button").classList.add("active");
-      $("call-label").textContent = "结束会话";
+      $("call-label").textContent = "End session";
       $("send-debug").disabled = false;
       $("microphone").disabled = true;
       $("pipeline-pill").textContent = "Live";
       $("pipeline-pill").classList.add("active");
+      sendVoiceProfile(pendingVoiceProfile);
       logEvent("ws.connected");
     };
     socket.onmessage = handleMessage;
-    socket.onerror = () => showError("WebSocket 连接失败，请检查服务端日志。", false);
+    socket.onerror = () => showError("WebSocket connection failed. Check the server logs.", false);
     socket.onclose = () => {
       logEvent("ws.closed");
       cleanupCall();
     };
   } catch (error) {
-    showError(error.message || "无法启动麦克风。", false);
+    showError(error.message || "Unable to start the microphone.", false);
     cleanupCall();
   }
 }
@@ -168,13 +175,17 @@ function cleanupCall() {
   playbackContext?.close();
   microphoneStream = captureNode = captureSink = playbackNode = captureContext = playbackContext = null;
   socket = null;
+  voiceSampleId = "";
+  uploadedFileKey = "";
+  pendingVoiceProfile = null;
   $("call-button").disabled = false;
   $("call-button").classList.remove("active");
-  $("call-label").textContent = "开始会话";
+  $("call-label").textContent = "Start session";
   $("send-debug").disabled = true;
   $("microphone").disabled = false;
   $("pipeline-pill").textContent = "Standby";
   $("pipeline-pill").classList.remove("active");
+  setVoiceStatus("Not applied");
   setState("idle");
 }
 
@@ -203,13 +214,20 @@ function handleMessage(event) {
     case "session.error":
       showError(message.message, message.recoverable);
       break;
+    case "voice.configured":
+      setVoiceStatus(`Applied · ${formatVoiceMode(message.mode)}`, "ready");
+      break;
+    case "voice.error":
+      setVoiceStatus("Needs attention", "error");
+      showError(message.message, true);
+      break;
     case "transcript.user.partial":
       partialUser = upsertMessage(partialUser, "user", message.text, true);
       break;
     case "transcript.user.final":
       partialUser?.remove();
       partialUser = null;
-      appendMessage("user", message.text, false, message.source === "debug" ? "测试输入" : "语音输入");
+      appendMessage("user", message.text, false, message.source === "debug" ? "Test input" : "Voice input");
       userTurns += 1;
       $("metric-turns").textContent = String(userTurns);
       liveAssistant = null;
@@ -245,7 +263,7 @@ function handleMessage(event) {
       $("metric-interruptions").textContent = String(interruptions);
       if (liveAssistant) {
         liveAssistant.classList.remove("partial");
-        liveAssistant.querySelector(".message-head span:last-child").textContent = "已打断";
+        liveAssistant.querySelector(".message-head span:last-child").textContent = "Interrupted";
         liveAssistant = null;
       }
       break;
@@ -295,6 +313,101 @@ function sendDebugText() {
   $("debug-text").focus();
 }
 
+function formatVoiceMode(mode) {
+  return {
+    sft: "Preset",
+    zero_shot: "Custom",
+    instruct2: "Styled",
+  }[mode] || mode;
+}
+
+function setVoiceStatus(text, state = "") {
+  const status = $("voice-status");
+  status.textContent = text;
+  if (state) status.dataset.state = state;
+  else delete status.dataset.state;
+}
+
+function updateVoiceFields() {
+  const mode = $("voice-mode").value;
+  $("speaker-fields").hidden = mode !== "sft";
+  $("sample-fields").hidden = mode === "sft";
+  $("voice-transcript-label").hidden = mode !== "zero_shot";
+  $("voice-transcript").hidden = mode !== "zero_shot";
+  $("instruction-fields").hidden = mode !== "instruct2";
+  setVoiceStatus("Not applied");
+}
+
+async function uploadVoiceSample(file) {
+  const key = `${file.name}:${file.size}:${file.lastModified}`;
+  if (voiceSampleId && uploadedFileKey === key) return voiceSampleId;
+
+  setVoiceStatus("Uploading…");
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch("/api/voice-samples", { method: "POST", body: form });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.detail || "Voice sample upload failed");
+  voiceSampleId = result.id;
+  uploadedFileKey = key;
+  return voiceSampleId;
+}
+
+async function prepareVoiceProfile() {
+  const mode = $("voice-mode").value;
+  const strict = publicConfig?.providers?.tts === "cosyvoice";
+  const profile = {
+    mode,
+    speaker_id: $("voice-speaker").value.trim(),
+    sample_id: "",
+    reference_text: $("voice-transcript").value.trim(),
+    instruction: $("voice-instruction").value.trim(),
+  };
+
+  if (mode === "sft") {
+    if (strict && !profile.speaker_id) {
+      throw new Error("Enter a speaker ID exposed by the CosyVoice checkpoint.");
+    }
+    return profile;
+  }
+
+  const file = $("voice-file").files[0];
+  if (file) profile.sample_id = await uploadVoiceSample(file);
+  else profile.sample_id = voiceSampleId;
+  if (strict && !profile.sample_id) throw new Error("Choose a reference audio file.");
+  if (strict && mode === "zero_shot" && !profile.reference_text) {
+    throw new Error("Enter the exact transcript of the reference audio.");
+  }
+  if (strict && mode === "instruct2" && !profile.instruction) {
+    throw new Error("Enter a style instruction for the selected mode.");
+  }
+  return profile;
+}
+
+function sendVoiceProfile(profile) {
+  if (!profile || socket?.readyState !== WebSocket.OPEN) return;
+  setVoiceStatus("Applying…");
+  socket.send(JSON.stringify({ type: "session.configure", voice: profile }));
+}
+
+async function applyVoice(event) {
+  event.preventDefault();
+  const button = $("apply-voice");
+  button.disabled = true;
+  $("voice-form").setAttribute("aria-busy", "true");
+  try {
+    pendingVoiceProfile = await prepareVoiceProfile();
+    if (socket?.readyState === WebSocket.OPEN) sendVoiceProfile(pendingVoiceProfile);
+    else setVoiceStatus("Ready for session", "ready");
+  } catch (error) {
+    setVoiceStatus("Needs attention", "error");
+    showError(error.message || "Unable to apply the voice profile.", true);
+  } finally {
+    button.disabled = false;
+    $("voice-form").removeAttribute("aria-busy");
+  }
+}
+
 function setState(state) {
   const connection = document.querySelector(".connection");
   connection.dataset.state = state;
@@ -340,15 +453,24 @@ $("debug-text").addEventListener("keydown", (event) => {
 });
 $("clear-transcript").addEventListener("click", () => {
   $("transcript").replaceChildren();
-  appendMessage("assistant", "对话记录已从当前页面清空，服务端会话上下文保持不变。", false, "系统");
+  appendMessage("assistant", "The visible transcript was cleared. Server-side conversation context is unchanged.", false, "System");
 });
 $("clear-events").addEventListener("click", () => {
-  $("event-log").innerHTML = '<p class="event-placeholder">事件记录已清空。</p>';
+  $("event-log").innerHTML = '<p class="event-placeholder">Event history cleared.</p>';
 });
+$("voice-form").addEventListener("submit", applyVoice);
+$("voice-mode").addEventListener("change", updateVoiceFields);
+$("voice-file").addEventListener("change", () => {
+  voiceSampleId = "";
+  uploadedFileKey = "";
+  $("voice-file-name").textContent = $("voice-file").files[0]?.name || "No file selected";
+  setVoiceStatus("Not applied");
+});
+updateVoiceFields();
 
 if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
   $("call-button").disabled = true;
-  showError("当前浏览器不支持 AudioWorklet，请使用最新版 Chrome、Edge 或 Safari。", false);
+  showError("This browser does not support AudioWorklet. Use a current Chrome, Edge, or Safari release.", false);
 } else {
   $("microphone").disabled = false;
   loadPublicConfig();

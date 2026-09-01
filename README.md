@@ -1,17 +1,17 @@
 # Echooo
 
-Echooo is a small, provider-neutral realtime voice-agent foundation for the AssemblyAI
-hackathon. It keeps speech recognition, reasoning, and speech synthesis behind separate
-interfaces, so each service can be changed without rewriting the browser or conversation
-orchestrator.
+Echooo is a provider-neutral realtime voice-agent foundation for the AssemblyAI
+hackathon. Speech recognition, orchestration, language-model inference, and speech
+synthesis are isolated behind small interfaces so each service can be replaced without
+rewriting the browser application.
 
-The default local mode needs no API key. It uses text input, a deterministic mock LLM,
-and a short generated tone to prove the complete WebSocket and audio playback path.
+The local demo requires no credentials. It includes a deterministic mock LLM and a
+generated audio tone to verify the complete WebSocket and playback path.
 
 ## Architecture
 
 ```text
-Browser microphone (PCM16, 16 kHz)
+Browser microphone (mono PCM16)
           |
           v
 FastAPI WebSocket /ws
@@ -24,7 +24,7 @@ FastAPI WebSocket /ws
                        |  conversation history
                        |  cancellation / barge-in
                        v
-             LanguageModelProvider --> OpenAI-compatible streaming API
+             LanguageModelProvider --> streaming LLM API
                        |
                   text deltas
                        v
@@ -38,13 +38,14 @@ FastAPI WebSocket /ws
               Browser AudioWorklet
 ```
 
-Key boundaries are in [`src/echooo/providers/base.py`](src/echooo/providers/base.py).
-`VoiceSession` depends only on those interfaces. The concrete providers are selected by
-environment variables in [`src/echooo/providers/factory.py`](src/echooo/providers/factory.py).
+Provider contracts live in [`src/echooo/providers/base.py`](src/echooo/providers/base.py).
+Concrete implementations are selected in
+[`src/echooo/providers/factory.py`](src/echooo/providers/factory.py). Per-session voice
+choices use the shared `VoiceProfile` model and are not deployment environment settings.
 
-## 1. Run the zero-credential demo
+## Run the zero-credential demo
 
-Requirements: Python 3.11+ and a recent Chrome, Edge, or Safari.
+Requirements: Python 3.11+ and a current Chrome, Edge, or Safari release.
 
 ```bash
 cd /Users/zilong/Developer/projects/echooo
@@ -55,48 +56,44 @@ cp .env.mock.example .env
 python -m echooo
 ```
 
-If your configured package mirror reports that it cannot find `setuptools`, retry only
-this install with the official index (this does not change global pip settings):
+If a configured package mirror cannot find `setuptools`, retry the install against the
+official index without changing global pip settings:
 
 ```bash
 PIP_INDEX_URL=https://pypi.org/simple python -m pip install -e '.[dev]'
 ```
 
-Open <http://127.0.0.1:8000>. Click **开始会话**, allow microphone access, then use
-the **测试文本** field. Mock STT intentionally ignores microphone audio; the text field
-bypasses STT while exercising the same LLM, segmentation, TTS, binary WebSocket, and
-browser playback code.
+Open <http://127.0.0.1:8000>, select **Start session**, and grant microphone access.
+Mock STT ignores microphone audio; use **Test message** to exercise the LLM, sentence
+segmentation, TTS, binary WebSocket, and browser playback path. The health endpoint is
+available at <http://127.0.0.1:8000/health>.
 
-You can also check the server at <http://127.0.0.1:8000/health>.
+## Connect AssemblyAI Realtime STT
 
-## 2. Connect AssemblyAI Realtime STT
-
-Copy the real-service configuration and set the key:
+Create the real-service configuration and add the API key:
 
 ```bash
 cp .env.example .env
 ```
 
-At minimum, fill in:
-
 ```dotenv
 STT_PROVIDER=assemblyai
 ASSEMBLYAI_API_KEY=...
-ASSEMBLYAI_LANGUAGE_CODE=zh
+ASSEMBLYAI_SPEECH_MODEL=universal-3-5-pro
 ```
 
-The browser sends mono PCM16 in 100 ms frames at 16 kHz. The adapter connects to the
-AssemblyAI v3 streaming WebSocket, emits partial/final `Turn` events, and uses
-`SpeechStarted` for barge-in. `agent_context` is updated after a completed assistant turn
-to reduce transcription errors caused by the agent's own speech.
+The browser sends mono PCM16 in 100 ms frames at 16 kHz. The adapter emits partial and
+final `Turn` events, uses `SpeechStarted` for barge-in, and updates `agent_context` after
+completed assistant turns.
 
-`language_code=zh` pins a Mandarin-only session. Leave it empty if users are expected to
-code-switch between the languages supported by the selected AssemblyAI model.
+No language is pinned in configuration. Universal-3.5 Pro determines the spoken
+language and supports code-switching within a session. The LLM system instruction also
+requires replies to follow the language of the user's latest message.
 
-For a first live test, keep `LLM_PROVIDER=mock` and `TTS_PROVIDER=mock`. This isolates STT
-before adding two more external dependencies.
+For the first live test, keep `LLM_PROVIDER=mock` and `TTS_PROVIDER=mock` so STT can be
+verified independently.
 
-## 3. Connect an LLM
+## Connect an LLM
 
 The included adapter works with a streaming OpenAI-compatible `/chat/completions` route,
 including OpenAI, vLLM, and compatible local servers:
@@ -108,127 +105,118 @@ LLM_API_KEY=...
 LLM_MODEL=your-model-name
 ```
 
-For a local compatible endpoint, change `LLM_BASE_URL`; the key may be empty if that
-trusted local server does not require one. Edit the version-controlled `llm.system` value
-in `config/prompts.toml` to keep responses short and speech-friendly; long Markdown-heavy
-answers sound poor when read aloud.
+For a trusted local endpoint, change `LLM_BASE_URL`; the key may be empty if the server
+does not require one. Agent behavior is versioned in `config/prompts.toml`, not `.env`.
 
-## 4. Start CosyVoice and connect TTS
+## Connect CosyVoice
 
-Clone and install CosyVoice separately on a GPU machine following its official README.
-From the CosyVoice repository, start its provided FastAPI runtime. The exact model path
-depends on the CosyVoice release and checkpoint you install; a typical launch shape is:
+Install CosyVoice separately on a GPU machine and download a compatible checkpoint by
+following its official README:
 
 ```bash
 git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git
 cd CosyVoice
-# Create the Python 3.10 environment and download a checkpoint as documented upstream.
+# Create the documented Python 3.10 environment and download a checkpoint.
 python runtime/python/fastapi/server.py \
   --port 50000 \
   --model_dir pretrained_models/your-cosyvoice-model
 ```
 
-Then configure Echooo. Start with an SFT speaker if your selected checkpoint exposes one:
+Echooo only needs the service connection and output format in `.env`:
 
 ```dotenv
 TTS_PROVIDER=cosyvoice
 COSYVOICE_BASE_URL=http://127.0.0.1:50000
-COSYVOICE_MODE=sft
-COSYVOICE_SPEAKER=中文女
 COSYVOICE_SAMPLE_RATE=24000
+COSYVOICE_TIMEOUT_SECONDS=60
 ```
 
-For zero-shot voice cloning:
+Speaker identity, synthesis mode, reference audio, reference transcript, and style
+instruction are selected from the **Voice profile** panel in the browser. Supported UI
+modes are:
 
-```dotenv
-COSYVOICE_MODE=zero_shot
-```
+- **Preset speaker:** enter a speaker ID exposed by the selected SFT checkpoint.
+- **Custom voice sample:** upload reference audio and enter its exact transcript for
+  zero-shot synthesis.
+- **Styled voice sample:** upload reference audio and provide a natural-language style
+  instruction for `instruct2` synthesis.
 
-Configure the reference audio and its exact transcript outside `.env`:
+Accepted uploads are WAV, MP3, FLAC, M4A, and OGG files up to 10 MB. Uploaded voice
+biometrics are held in process memory, are never written to disk, and are removed when
+the voice session closes. Only use a voice that you own or have explicit permission to
+clone.
 
-```toml
-# config/prompts.toml
-[cosyvoice]
-reference_wav = "assets/voice_prompt.wav"
-prompt = "参考录音中确切说出的文本"
-instruct = "请自然、清晰地说普通话。"
-```
+The CosyVoice adapter also retains backend support for `cross_lingual` and `instruct`
+profiles. It expects the official FastAPI server to return raw mono PCM16 audio. Set
+`COSYVOICE_SAMPLE_RATE` to the actual output rate of the selected checkpoint.
 
-The prompt transcript must match the reference audio. Only clone voices with explicit
-permission. Agent behavior is now versioned in `config/prompts.toml`; `.env` only carries
-deployment/provider settings and secrets. Echooo supports the official runtime endpoints `sft`, `zero_shot`,
-`cross_lingual`, `instruct`, and `instruct2`. It expects the server response to be raw
-mono PCM16; set `COSYVOICE_SAMPLE_RATE` to the checkpoint's actual output rate.
-
-When CosyVoice runs on another host or container, `127.0.0.1` refers to the Echooo host,
-so use a reachable private hostname/IP instead.
+When CosyVoice runs on another host or container, use a hostname or private IP reachable
+from the Echooo process instead of `127.0.0.1`.
 
 ## Recommended integration order
 
-1. Run all three mock providers and submit a test text.
-2. Enable only AssemblyAI; verify partial/final transcripts and turn boundaries.
-3. Enable the real LLM while keeping mock TTS; verify streaming and answer length.
-4. Enable CosyVoice SFT, then zero-shot only after the basic audio path is stable.
-5. Test interruption by speaking while audio is playing, plus silence, background noise,
-   rapid follow-up turns, and Chinese/English code-switching.
+1. Run all three mock providers and submit a test message.
+2. Enable only AssemblyAI and verify multilingual transcripts and turn boundaries.
+3. Enable the real LLM while keeping mock TTS; verify language matching and streaming.
+4. Enable a CosyVoice preset speaker.
+5. Test custom sample upload and zero-shot synthesis.
+6. Test interruption, silence, noise, rapid follow-up turns, and code-switching.
 
-This order makes failures attributable to one service instead of debugging three remote
-systems at once.
+This sequence keeps failures attributable to one service instead of three remote systems.
 
-## Swapping a provider
-
-To add a new provider:
+## Replace a provider
 
 1. Implement one interface from `src/echooo/providers/base.py`.
-2. Normalize its output to the shared models in `src/echooo/models.py`:
-   STT events, text deltas, or mono PCM16 `AudioChunk`s.
-3. Add one factory branch in `src/echooo/providers/factory.py` and a configuration value.
-4. Add a request/protocol mapping test; the orchestrator and browser need no change.
+2. Normalize output to the shared models in `src/echooo/models.py`.
+3. Add a factory branch in `src/echooo/providers/factory.py`.
+4. Add protocol and request-mapping tests.
 
-Examples: Deepgram/Azure for STT, a native Anthropic or Responses API adapter for LLM,
-and ElevenLabs/Azure Speech for TTS. If a TTS returns MP3/Opus, decode it server-side or
-add an explicit browser codec protocol instead of pretending it is PCM16.
+STT implementations return normalized turn events, LLM implementations stream text
+deltas, and TTS implementations return mono PCM16 `AudioChunk` objects. Providers that
+return MP3 or Opus should decode server-side or introduce an explicit codec protocol.
 
 ## Test and inspect
 
 ```bash
 source .venv/bin/activate
 pytest -q
-python -m compileall -q src
+python -m compileall -q src tests
+node --check web/app.js
 ```
 
-The right-side console shows provider selection, first-token/first-audio latency, turn
-count, interruption count, and key WebSocket events. Server logs contain provider errors.
-Secrets are never included in `/api/config` or WebSocket `session.ready` messages.
+The inspector shows active providers, first-token and first-audio latency, turn count,
+interruptions, voice-profile status, and key WebSocket events. Secrets are never exposed
+through `/api/config` or `session.ready` messages.
 
 ## Production notes
 
-- Microphone capture requires HTTPS except on localhost. Deploy behind a reverse proxy
-  that supports WebSocket upgrades and use `wss://` from the browser.
-- Do not put AssemblyAI or LLM keys in frontend code. This project keeps them server-side.
-- Add authentication, rate limits, request/session IDs, structured logs, and per-provider
-  timeouts before exposing a public endpoint.
-- Run CosyVoice behind a private network or authenticated gateway; its sample FastAPI
-  server should not be treated as an internet-facing production service.
-- Scale with sticky WebSocket sessions because conversation state and provider streams
-  live in one process for the duration of a call.
+- Microphone capture requires HTTPS except on localhost. Use a reverse proxy that
+  supports WebSocket upgrades and serve the browser over `wss://`.
+- Keep AssemblyAI and LLM keys server-side.
+- Protect `/api/voice-samples` with authentication and rate limiting before public use.
+- Consider encrypting samples in a dedicated expiring object store when running multiple
+  processes; the included in-memory store is intentionally single-process.
+- Add request IDs, structured logs, per-provider timeouts, and abuse controls.
+- Keep the sample CosyVoice FastAPI server behind a private network or authenticated
+  gateway.
+- Use sticky WebSocket sessions because provider streams and conversation state live in
+  one process for the duration of a call.
 
-## Strong next directions for the hackathon
+## Strong hackathon directions
 
-The transport layer is now generic; differentiation should live above it. A generic
-assistant only demonstrates infrastructure, so give the demo one memorable capability:
+A generic voice assistant demonstrates infrastructure but is not enough differentiation
+on its own. Build one memorable capability above this transport layer:
 
-- **Voice workflow runner:** the user describes an objective, the agent creates a visible
-  plan, asks confirmation before external actions, and narrates progress.
-- **Conversation memory with consent:** users can inspect, correct, and delete what the
-  assistant remembers, creating a trust-focused voice UX.
-- **Adaptive speaking:** use interruption rate and speaking pace to adjust answer length,
-  turn silence, and TTS style in real time.
+- **Voice workflow runner:** create a visible plan, confirm side effects, execute tools,
+  and narrate progress while remaining interruptible.
+- **Consent-based memory:** let users inspect, correct, export, and delete remembered
+  information.
+- **Adaptive speaking:** adjust answer length, turn timing, and synthesis style from
+  interruption rate and speaking pace.
 
-Whichever direction you choose, add a small tool registry with strict schemas and an
-approval step for side effects, then record outcome metrics such as task completion,
-time-to-first-audio, interruption recovery, and transcription correction rate. That is
-substantially more defensible than presenting “a general chatbot with a microphone.”
+Track task completion, time to first audio, interruption recovery, transcription
+corrections, and voice-profile application failures. These metrics make the project more
+defensible than a microphone attached to a general chatbot.
 
 ## Upstream references
 

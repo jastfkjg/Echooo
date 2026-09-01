@@ -8,10 +8,16 @@ import time
 from fastapi import WebSocket
 
 from echooo.config import Settings
-from echooo.models import ChatMessage, SessionPhase, STTEventType
-from echooo.providers.base import LanguageModelProvider, SpeechToTextProvider, TextToSpeechProvider
+from echooo.models import ChatMessage, SessionPhase, STTEventType, VoiceProfile
+from echooo.providers.base import (
+    LanguageModelProvider,
+    ProviderError,
+    SpeechToTextProvider,
+    TextToSpeechProvider,
+)
 from echooo.providers.factory import create_llm, create_stt, create_tts
 from echooo.segmenter import SentenceSegmenter
+from echooo.voice_samples import VoiceSampleError, VoiceSampleStore
 
 
 logger = logging.getLogger(__name__)
@@ -26,12 +32,14 @@ class VoiceSession:
         stt: SpeechToTextProvider | None = None,
         llm: LanguageModelProvider | None = None,
         tts: TextToSpeechProvider | None = None,
+        voice_samples: VoiceSampleStore | None = None,
     ):
         self.websocket = websocket
         self.settings = settings
         self.stt = stt or create_stt(settings)
         self.llm = llm or create_llm(settings)
         self.tts = tts or create_tts(settings)
+        self.voice_samples = voice_samples
         self.phase = SessionPhase.IDLE
         self.history: list[ChatMessage] = []
         self.generation_id = 0
@@ -40,6 +48,7 @@ class VoiceSession:
         self._cancel = asyncio.Event()
         self._send_lock = asyncio.Lock()
         self._closed = False
+        self._voice_sample_id = ""
 
     async def run(self) -> None:
         await self._set_phase(SessionPhase.CONNECTING)
@@ -79,10 +88,48 @@ class VoiceSession:
             kind = payload.get("type")
             if kind == "session.end":
                 return
+            if kind == "session.configure":
+                await self._configure_voice(payload.get("voice", {}))
+                continue
             if kind == "debug.user_text":
                 transcript = str(payload.get("text", "")).strip()
                 if transcript:
                     await self.handle_final_transcript(transcript, source="debug")
+
+    async def _configure_voice(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            await self._send_json({"type": "voice.error", "message": "Invalid voice profile"})
+            return
+        try:
+            mode = str(payload.get("mode", "sft")).strip()
+            sample_id = str(payload.get("sample_id", "")).strip()
+            sample = None
+            if sample_id:
+                if self.voice_samples is None:
+                    raise VoiceSampleError("Voice sample uploads are unavailable")
+                sample = await self.voice_samples.get(sample_id)
+            profile = VoiceProfile(
+                mode=mode,
+                speaker_id=str(payload.get("speaker_id", "")).strip(),
+                reference_audio=sample.data if sample else None,
+                reference_filename=sample.filename if sample else "reference.wav",
+                reference_content_type=sample.content_type if sample else "audio/wav",
+                reference_text=str(payload.get("reference_text", "")).strip(),
+                instruction=str(payload.get("instruction", "")).strip(),
+            )
+            self.tts.configure_voice(profile)
+            if self._voice_sample_id and self._voice_sample_id != sample_id and self.voice_samples:
+                await self.voice_samples.delete(self._voice_sample_id)
+            self._voice_sample_id = sample_id
+            await self._send_json(
+                {
+                    "type": "voice.configured",
+                    "mode": mode,
+                    "uses_custom_sample": bool(sample),
+                }
+            )
+        except (ProviderError, ValueError, VoiceSampleError) as exc:
+            await self._send_json({"type": "voice.error", "message": str(exc)})
 
     async def _consume_stt(self) -> None:
         async for event in self.stt.events():
@@ -233,11 +280,16 @@ class VoiceSession:
         await self.interrupt("session_closed", announce=False)
         if self._stt_task and not self._stt_task.done():
             self._stt_task.cancel()
-        await self.stt.close()
-        if self._stt_task:
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._stt_task
-        self.phase = SessionPhase.CLOSED
+        try:
+            await self.stt.close()
+        finally:
+            if self._voice_sample_id and self.voice_samples:
+                await self.voice_samples.delete(self._voice_sample_id)
+                self._voice_sample_id = ""
+            if self._stt_task:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._stt_task
+            self.phase = SessionPhase.CLOSED
 
     def _trim_history(self) -> None:
         if len(self.history) > self.settings.history_limit:

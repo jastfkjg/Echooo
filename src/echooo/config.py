@@ -30,9 +30,6 @@ class PromptSettings:
     """Version-controlled agent behavior, deliberately kept out of .env."""
 
     llm_system: str
-    cosyvoice_reference_wav: str
-    cosyvoice_prompt: str
-    cosyvoice_instruct: str
 
     @classmethod
     def load(cls, path: Path = PROMPTS_FILE) -> "PromptSettings":
@@ -41,9 +38,6 @@ class PromptSettings:
                 document = tomllib.load(handle)
             return cls(
                 llm_system=str(document["llm"]["system"]).strip(),
-                cosyvoice_reference_wav=str(document["cosyvoice"]["reference_wav"]).strip(),
-                cosyvoice_prompt=str(document["cosyvoice"]["prompt"]).strip(),
-                cosyvoice_instruct=str(document["cosyvoice"]["instruct"]).strip(),
             )
         except FileNotFoundError as exc:
             raise ValueError(f"Prompt configuration not found: {path}") from exc
@@ -74,9 +68,6 @@ class Settings:
         default_factory=lambda: _int("ASSEMBLYAI_SAMPLE_RATE", 16000)
     )
     assemblyai_mode: str = field(default_factory=lambda: os.getenv("ASSEMBLYAI_MODE", "balanced"))
-    assemblyai_language_code: str = field(
-        default_factory=lambda: os.getenv("ASSEMBLYAI_LANGUAGE_CODE", "").strip()
-    )
     assemblyai_min_turn_silence: int | None = field(
         default_factory=lambda: _optional_int("ASSEMBLYAI_MIN_TURN_SILENCE")
     )
@@ -95,13 +86,9 @@ class Settings:
     cosyvoice_base_url: str = field(
         default_factory=lambda: os.getenv("COSYVOICE_BASE_URL", "http://127.0.0.1:50000")
     )
-    cosyvoice_mode: str = field(default_factory=lambda: os.getenv("COSYVOICE_MODE", "sft"))
     cosyvoice_sample_rate: int = field(default_factory=lambda: _int("COSYVOICE_SAMPLE_RATE", 24000))
     cosyvoice_timeout_seconds: float = field(
         default_factory=lambda: _float("COSYVOICE_TIMEOUT_SECONDS", 60)
-    )
-    cosyvoice_speaker: str = field(
-        default_factory=lambda: os.getenv("COSYVOICE_SPEAKER", "中文女")
     )
     history_limit: int = field(default_factory=lambda: _int("HISTORY_LIMIT", 20))
     prompts: PromptSettings = field(default_factory=PromptSettings.load)
@@ -118,37 +105,6 @@ class Settings:
             raise ValueError("LLM_MODEL is required when LLM_PROVIDER=openai_compatible")
         if self.llm_provider == "openai_compatible" and not self.prompts.llm_system:
             raise ValueError("config/prompts.toml must define a non-empty llm.system prompt")
-        if self.tts_provider == "cosyvoice":
-            if self.cosyvoice_mode not in {
-                "sft",
-                "zero_shot",
-                "cross_lingual",
-                "instruct",
-                "instruct2",
-            }:
-                raise ValueError(f"Unsupported COSYVOICE_MODE: {self.cosyvoice_mode}")
-            if self.cosyvoice_mode in {"zero_shot", "cross_lingual", "instruct2"}:
-                prompt = self.resolve_path(self.prompts.cosyvoice_reference_wav)
-                if not prompt or not prompt.is_file():
-                    raise ValueError(
-                        "config/prompts.toml cosyvoice.reference_wav must point to a readable file for "
-                        f"COSYVOICE_MODE={self.cosyvoice_mode}"
-                    )
-            if self.cosyvoice_mode == "zero_shot" and not self.prompts.cosyvoice_prompt:
-                raise ValueError(
-                    "config/prompts.toml must define cosyvoice.prompt for zero_shot mode"
-                )
-            if self.cosyvoice_mode in {"instruct", "instruct2"} and not self.prompts.cosyvoice_instruct:
-                raise ValueError(
-                    "config/prompts.toml must define cosyvoice.instruct for instruct modes"
-                )
-
-    @staticmethod
-    def resolve_path(value: str) -> Path | None:
-        if not value:
-            return None
-        path = Path(value).expanduser()
-        return path if path.is_absolute() else ROOT / path
 
     def public_dict(self) -> dict[str, object]:
         return {

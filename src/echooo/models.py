@@ -47,3 +47,15 @@ class AudioChunk:
     encoding: str = "pcm_s16le"
     channels: int = 1
 
+
+@dataclass(frozen=True, slots=True)
+class VoiceProfile:
+    """Per-session synthesis voice selected by the user."""
+
+    mode: str = "sft"
+    speaker_id: str = ""
+    reference_audio: bytes | None = None
+    reference_filename: str = "reference.wav"
+    reference_content_type: str = "audio/wav"
+    reference_text: str = ""
+    instruction: str = ""

@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
 
-from echooo.models import AudioChunk, ChatMessage, STTEvent
+from echooo.models import AudioChunk, ChatMessage, STTEvent, VoiceProfile
 
 
 class SpeechToTextProvider(ABC):
@@ -46,6 +46,9 @@ class TextToSpeechProvider(ABC):
     def sample_rate(self) -> int: ...
 
     @abstractmethod
+    def configure_voice(self, profile: VoiceProfile) -> None: ...
+
+    @abstractmethod
     def stream_audio(
         self,
         text: str,
@@ -56,4 +59,3 @@ class TextToSpeechProvider(ABC):
 
 class ProviderError(RuntimeError):
     pass
-

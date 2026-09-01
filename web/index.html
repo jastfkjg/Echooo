@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <a class="skip-link" href="#conversation">跳到对话</a>
+    <a class="skip-link" href="#conversation">Skip to conversation</a>
     <div class="ambient ambient-one" aria-hidden="true"></div>
     <div class="ambient ambient-two" aria-hidden="true"></div>
 
@@ -28,7 +28,7 @@
 
       <div class="connection" aria-live="polite" aria-atomic="true">
         <span class="status-dot" id="status-dot" aria-hidden="true"></span>
-        <span id="status-label">未连接</span>
+        <span id="status-label">Disconnected</span>
       </div>
     </header>
 
@@ -37,30 +37,30 @@
         <div class="panel-heading">
           <div>
             <p class="eyebrow">Conversation</p>
-            <h2 id="conversation-title">实时对话</h2>
+            <h2 id="conversation-title">Live conversation</h2>
           </div>
-          <button class="quiet-button" id="clear-transcript" type="button">清空记录</button>
+          <button class="quiet-button" id="clear-transcript" type="button">Clear</button>
         </div>
 
         <div class="transcript" id="transcript" aria-live="polite" aria-relevant="additions text">
           <div class="empty-state" id="empty-state">
             <span class="empty-wave" aria-hidden="true"></span>
-            <h3>准备开始一次对话</h3>
-            <p>启动会话后直接说话；Mock 模式也可以用下方文本输入验证完整管线。</p>
+            <h3>Ready for a conversation</h3>
+            <p>Start a session and speak, or use the text input to test the pipeline in Mock mode.</p>
           </div>
         </div>
 
         <div class="composer">
-          <label for="debug-text">测试文本 <span>绕过 STT，保留 LLM → TTS 流程</span></label>
+          <label for="debug-text">Test message <span>Bypasses STT; keeps the LLM → TTS path</span></label>
           <div class="composer-row">
             <input
               id="debug-text"
               type="text"
               autocomplete="off"
-              placeholder="例如：介绍一下当前语音管线"
+              placeholder="Ask about the current voice pipeline"
             />
             <button class="send-button" id="send-debug" type="button" disabled>
-              <span>发送</span>
+              <span>Send</span>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z" /></svg>
             </button>
           </div>
@@ -68,9 +68,9 @@
 
         <div class="call-controls">
           <label class="mic-field" for="microphone">
-            <span>输入设备</span>
+            <span>Input device</span>
             <select id="microphone" disabled>
-              <option value="">默认麦克风</option>
+              <option value="">Default microphone</option>
             </select>
           </label>
           <button class="call-button" id="call-button" type="button">
@@ -78,12 +78,12 @@
               <svg class="mic-icon" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8" /></svg>
               <svg class="stop-icon" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
             </span>
-            <span id="call-label">开始会话</span>
+            <span id="call-label">Start session</span>
           </button>
         </div>
       </section>
 
-      <aside class="inspector" aria-label="管线状态">
+      <aside class="inspector" aria-label="Pipeline status and settings">
         <section class="inspector-section">
           <div class="section-title">
             <p class="eyebrow">Pipeline</p>
@@ -105,6 +105,52 @@
               <div><small>Text to speech</small><strong id="provider-tts">—</strong></div>
             </div>
           </div>
+        </section>
+
+        <section class="inspector-section voice-section">
+          <details class="voice-profile" id="voice-profile">
+            <summary>
+              <span>
+                <span class="eyebrow">Voice profile</span>
+                <strong>Configure synthesis</strong>
+              </span>
+              <span class="voice-status" id="voice-status" role="status" aria-atomic="true">Not applied</span>
+            </summary>
+
+            <form id="voice-form" class="voice-form">
+              <label for="voice-mode">Voice source</label>
+              <select id="voice-mode">
+                <option value="sft">Preset speaker</option>
+                <option value="zero_shot">Custom voice sample</option>
+                <option value="instruct2">Styled voice sample</option>
+              </select>
+
+              <div id="speaker-fields">
+                <label for="voice-speaker">Speaker ID</label>
+                <input id="voice-speaker" type="text" autocomplete="off" placeholder="Speaker ID exposed by the checkpoint" />
+              </div>
+
+              <div id="sample-fields" hidden>
+                <label for="voice-file">Reference audio</label>
+                <div class="file-picker">
+                  <input class="visually-hidden" id="voice-file" type="file" accept=".wav,.mp3,.flac,.m4a,.ogg,audio/*" />
+                  <label class="file-button" for="voice-file">Choose audio</label>
+                  <span class="file-name" id="voice-file-name">No file selected</span>
+                </div>
+                <small>WAV, MP3, FLAC, M4A, or OGG; up to 10 MB. Use only a voice you have permission to clone.</small>
+
+                <label id="voice-transcript-label" for="voice-transcript">Reference transcript</label>
+                <textarea id="voice-transcript" rows="3" placeholder="Enter the exact words spoken in the sample"></textarea>
+              </div>
+
+              <div id="instruction-fields" hidden>
+                <label for="voice-instruction">Style instruction</label>
+                <textarea id="voice-instruction" rows="2" placeholder="For example: calm, clear, and conversational"></textarea>
+              </div>
+
+              <button class="apply-button" id="apply-voice" type="submit">Apply voice</button>
+            </form>
+          </details>
         </section>
 
         <section class="inspector-section telemetry">
@@ -135,10 +181,10 @@
         <section class="inspector-section event-section">
           <div class="section-title">
             <p class="eyebrow">Event trace</p>
-            <button class="quiet-button" id="clear-events" type="button">清空</button>
+            <button class="quiet-button" id="clear-events" type="button">Clear</button>
           </div>
           <div class="event-log mono" id="event-log" aria-live="off">
-            <p class="event-placeholder">连接后显示关键 WebSocket 事件。</p>
+            <p class="event-placeholder">Key WebSocket events appear after connecting.</p>
           </div>
         </section>
       </aside>

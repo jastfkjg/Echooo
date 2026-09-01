@@ -1,5 +1,9 @@
 import asyncio
+from io import BytesIO
 from typing import Any
+
+import pytest
+from starlette.datastructures import UploadFile
 
 from echooo.config import Settings
 from echooo.models import ChatMessage
@@ -7,6 +11,7 @@ from echooo.orchestrator import VoiceSession
 from echooo.providers.llm.mock import MockLLM
 from echooo.providers.stt.mock import MockSTT
 from echooo.providers.tts.mock import MockToneTTS
+from echooo.voice_samples import VoiceSampleError, VoiceSampleStore
 
 
 class RecordingWebSocket:
@@ -67,3 +72,30 @@ async def test_new_turn_cancels_in_flight_response() -> None:
         "第一句",
         "第二句",
     ]
+
+
+async def test_session_releases_uploaded_voice_sample_on_close() -> None:
+    store = VoiceSampleStore()
+    sample = await store.save_upload(
+        UploadFile(filename="voice.wav", file=BytesIO(b"RIFF-session-sample"))
+    )
+    session = VoiceSession(  # type: ignore[arg-type]
+        RecordingWebSocket(),
+        Settings(),
+        stt=MockSTT(),
+        llm=MockLLM(),
+        tts=MockToneTTS(),
+        voice_samples=store,
+    )
+
+    await session._configure_voice(
+        {
+            "mode": "zero_shot",
+            "sample_id": sample.id,
+            "reference_text": "Reference words",
+        }
+    )
+    await session.close()
+
+    with pytest.raises(VoiceSampleError):
+        await store.get(sample.id)

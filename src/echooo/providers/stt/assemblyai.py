@@ -26,8 +26,6 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
             "speech_model": self.settings.assemblyai_speech_model,
             "mode": self.settings.assemblyai_mode,
         }
-        if self.settings.assemblyai_language_code:
-            params["language_code"] = self.settings.assemblyai_language_code
         if self.settings.assemblyai_min_turn_silence is not None:
             params["min_turn_silence"] = self.settings.assemblyai_min_turn_silence
         if self.settings.assemblyai_max_turn_silence is not None:
@@ -118,4 +116,3 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
         finally:
             await self._ws.close()
             self._ws = None
-

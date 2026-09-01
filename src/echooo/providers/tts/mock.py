@@ -5,7 +5,7 @@ import math
 from array import array
 from collections.abc import AsyncIterator
 
-from echooo.models import AudioChunk
+from echooo.models import AudioChunk, VoiceProfile
 from echooo.providers.base import TextToSpeechProvider
 
 
@@ -17,6 +17,9 @@ class MockToneTTS(TextToSpeechProvider):
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    def configure_voice(self, profile: VoiceProfile) -> None:
+        return None
 
     async def stream_audio(
         self,
@@ -39,4 +42,3 @@ class MockToneTTS(TextToSpeechProvider):
                 return
             await asyncio.sleep(0)
             yield AudioChunk(data=samples[offset : offset + block].tobytes(), sample_rate=self.sample_rate)
-

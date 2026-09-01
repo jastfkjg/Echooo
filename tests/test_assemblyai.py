@@ -8,7 +8,6 @@ from echooo.providers.stt.assemblyai import AssemblyAIStreamingSTT
 def test_builds_current_v3_streaming_url() -> None:
     settings = Settings(
         assemblyai_api_key="test-key",
-        assemblyai_language_code="zh",
         assemblyai_min_turn_silence=160,
         assemblyai_max_turn_silence=2400,
     )
@@ -20,7 +19,7 @@ def test_builds_current_v3_streaming_url() -> None:
     assert parsed.scheme == "wss"
     assert query["sample_rate"] == ["16000"]
     assert query["speech_model"] == ["universal-3-5-pro"]
-    assert query["language_code"] == ["zh"]
+    assert "language_code" not in query
     assert query["agent_context"] == ["Echooo 刚刚说了你好"]
 
 
