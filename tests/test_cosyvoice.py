@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from echooo.config import Settings
+from echooo.config import PromptSettings, Settings
 from echooo.providers.tts.cosyvoice import CosyVoiceTTS
 
 
@@ -25,8 +25,12 @@ def test_zero_shot_request_attaches_prompt_wav(tmp_path: Path) -> None:
     settings = Settings(
         tts_provider="cosyvoice",
         cosyvoice_mode="zero_shot",
-        cosyvoice_prompt_wav=str(prompt),
-        cosyvoice_prompt_text="参考音频文本",
+        prompts=PromptSettings(
+            llm_system="测试系统提示词",
+            cosyvoice_reference_wav=str(prompt),
+            cosyvoice_prompt="参考音频文本",
+            cosyvoice_instruct="测试指令",
+        ),
     )
 
     url, data, files = CosyVoiceTTS(settings)._request("要合成的文本")

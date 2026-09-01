@@ -29,7 +29,7 @@ class OpenAICompatibleLLM(LanguageModelProvider):
         payload = {
             "model": self.settings.llm_model,
             "messages": [
-                {"role": "system", "content": self.settings.llm_system_prompt},
+                {"role": "system", "content": self.settings.prompts.llm_system},
                 *[{"role": item.role, "content": item.content} for item in messages],
             ],
             "temperature": self.settings.llm_temperature,
@@ -63,4 +63,3 @@ class OpenAICompatibleLLM(LanguageModelProvider):
             raise ProviderError(f"LLM request failed ({exc.response.status_code}): {body}") from exc
         except httpx.HTTPError as exc:
             raise ProviderError(f"LLM connection failed: {exc}") from exc
-

@@ -109,8 +109,9 @@ LLM_MODEL=your-model-name
 ```
 
 For a local compatible endpoint, change `LLM_BASE_URL`; the key may be empty if that
-trusted local server does not require one. Keep responses short and speech-friendly in
-`LLM_SYSTEM_PROMPT`, because long Markdown-heavy answers sound poor when read aloud.
+trusted local server does not require one. Edit the version-controlled `llm.system` value
+in `config/prompts.toml` to keep responses short and speech-friendly; long Markdown-heavy
+answers sound poor when read aloud.
 
 ## 4. Start CosyVoice and connect TTS
 
@@ -141,12 +142,21 @@ For zero-shot voice cloning:
 
 ```dotenv
 COSYVOICE_MODE=zero_shot
-COSYVOICE_PROMPT_WAV=assets/voice_prompt.wav
-COSYVOICE_PROMPT_TEXT=参考录音中确切说出的文本
+```
+
+Configure the reference audio and its exact transcript outside `.env`:
+
+```toml
+# config/prompts.toml
+[cosyvoice]
+reference_wav = "assets/voice_prompt.wav"
+prompt = "参考录音中确切说出的文本"
+instruct = "请自然、清晰地说普通话。"
 ```
 
 The prompt transcript must match the reference audio. Only clone voices with explicit
-permission. Echooo supports the official runtime endpoints `sft`, `zero_shot`,
+permission. Agent behavior is now versioned in `config/prompts.toml`; `.env` only carries
+deployment/provider settings and secrets. Echooo supports the official runtime endpoints `sft`, `zero_shot`,
 `cross_lingual`, `instruct`, and `instruct2`. It expects the server response to be raw
 mono PCM16; set `COSYVOICE_SAMPLE_RATE` to the checkpoint's actual output rate.
 

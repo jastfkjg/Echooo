@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parents[2]
+PROMPTS_FILE = ROOT / "config" / "prompts.toml"
 
 
 def _int(name: str, default: int) -> int:
@@ -21,6 +23,32 @@ def _float(name: str, default: float) -> float:
 def _optional_int(name: str) -> int | None:
     value = os.getenv(name, "").strip()
     return int(value) if value else None
+
+
+@dataclass(frozen=True, slots=True)
+class PromptSettings:
+    """Version-controlled agent behavior, deliberately kept out of .env."""
+
+    llm_system: str
+    cosyvoice_reference_wav: str
+    cosyvoice_prompt: str
+    cosyvoice_instruct: str
+
+    @classmethod
+    def load(cls, path: Path = PROMPTS_FILE) -> "PromptSettings":
+        try:
+            with path.open("rb") as handle:
+                document = tomllib.load(handle)
+            return cls(
+                llm_system=str(document["llm"]["system"]).strip(),
+                cosyvoice_reference_wav=str(document["cosyvoice"]["reference_wav"]).strip(),
+                cosyvoice_prompt=str(document["cosyvoice"]["prompt"]).strip(),
+                cosyvoice_instruct=str(document["cosyvoice"]["instruct"]).strip(),
+            )
+        except FileNotFoundError as exc:
+            raise ValueError(f"Prompt configuration not found: {path}") from exc
+        except (KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+            raise ValueError(f"Invalid prompt configuration: {path}: {exc}") from exc
 
 
 @dataclass(slots=True)
@@ -63,12 +91,6 @@ class Settings:
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "local-model"))
     llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.4))
     llm_timeout_seconds: float = field(default_factory=lambda: _float("LLM_TIMEOUT_SECONDS", 60))
-    llm_system_prompt: str = field(
-        default_factory=lambda: os.getenv(
-            "LLM_SYSTEM_PROMPT",
-            "你是一个简洁、可靠的中文语音助手。回答适合被朗读，不使用 Markdown 表格。",
-        )
-    )
 
     cosyvoice_base_url: str = field(
         default_factory=lambda: os.getenv("COSYVOICE_BASE_URL", "http://127.0.0.1:50000")
@@ -81,17 +103,8 @@ class Settings:
     cosyvoice_speaker: str = field(
         default_factory=lambda: os.getenv("COSYVOICE_SPEAKER", "中文女")
     )
-    cosyvoice_prompt_wav: str = field(
-        default_factory=lambda: os.getenv("COSYVOICE_PROMPT_WAV", "")
-    )
-    cosyvoice_prompt_text: str = field(
-        default_factory=lambda: os.getenv("COSYVOICE_PROMPT_TEXT", "")
-    )
-    cosyvoice_instruct_text: str = field(
-        default_factory=lambda: os.getenv("COSYVOICE_INSTRUCT_TEXT", "")
-    )
-
     history_limit: int = field(default_factory=lambda: _int("HISTORY_LIMIT", 20))
+    prompts: PromptSettings = field(default_factory=PromptSettings.load)
 
     @classmethod
     def load(cls, env_file: Path | None = None) -> "Settings":
@@ -103,6 +116,8 @@ class Settings:
             raise ValueError("ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai")
         if self.llm_provider == "openai_compatible" and not self.llm_model:
             raise ValueError("LLM_MODEL is required when LLM_PROVIDER=openai_compatible")
+        if self.llm_provider == "openai_compatible" and not self.prompts.llm_system:
+            raise ValueError("config/prompts.toml must define a non-empty llm.system prompt")
         if self.tts_provider == "cosyvoice":
             if self.cosyvoice_mode not in {
                 "sft",
@@ -113,12 +128,20 @@ class Settings:
             }:
                 raise ValueError(f"Unsupported COSYVOICE_MODE: {self.cosyvoice_mode}")
             if self.cosyvoice_mode in {"zero_shot", "cross_lingual", "instruct2"}:
-                prompt = self.resolve_path(self.cosyvoice_prompt_wav)
+                prompt = self.resolve_path(self.prompts.cosyvoice_reference_wav)
                 if not prompt or not prompt.is_file():
                     raise ValueError(
-                        "COSYVOICE_PROMPT_WAV must point to a readable file for "
+                        "config/prompts.toml cosyvoice.reference_wav must point to a readable file for "
                         f"COSYVOICE_MODE={self.cosyvoice_mode}"
                     )
+            if self.cosyvoice_mode == "zero_shot" and not self.prompts.cosyvoice_prompt:
+                raise ValueError(
+                    "config/prompts.toml must define cosyvoice.prompt for zero_shot mode"
+                )
+            if self.cosyvoice_mode in {"instruct", "instruct2"} and not self.prompts.cosyvoice_instruct:
+                raise ValueError(
+                    "config/prompts.toml must define cosyvoice.instruct for instruct modes"
+                )
 
     @staticmethod
     def resolve_path(value: str) -> Path | None:
@@ -140,4 +163,3 @@ class Settings:
             },
             "debug_text_enabled": True,
         }
-

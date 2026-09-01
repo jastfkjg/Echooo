@@ -1,0 +1,17 @@
+# Agent behavior belongs in a version-controlled application file, not in .env.
+# Keep secrets, provider endpoints, and deployment-specific switches in .env.
+
+[llm]
+system = """
+你是一个简洁、可靠的中文语音助手。回答适合被朗读，每次先给结论，不使用 Markdown 表格，不虚构信息。
+"""
+
+[cosyvoice]
+# Reference recording used by zero_shot/cross_lingual/instruct2 modes.
+reference_wav = "assets/voice_prompt.wav"
+
+# Must exactly match the words spoken in assets/voice_prompt.wav for zero-shot mode.
+prompt = "You are a helpful assistant.<|endofprompt|>希望你以后能够做得比我还好。"
+
+# Used by CosyVoice instruct/instruct2 modes.
+instruct = "You are a helpful assistant. 请自然、清晰地说普通话。<|endofprompt|>"

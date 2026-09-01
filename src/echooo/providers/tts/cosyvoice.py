@@ -29,22 +29,22 @@ class CosyVoiceTTS(TextToSpeechProvider):
         if mode == "sft":
             data["spk_id"] = self.settings.cosyvoice_speaker
         elif mode == "zero_shot":
-            data["prompt_text"] = self.settings.cosyvoice_prompt_text
+            data["prompt_text"] = self.settings.prompts.cosyvoice_prompt
             files = self._prompt_file()
         elif mode == "cross_lingual":
             files = self._prompt_file()
         elif mode == "instruct":
             data["spk_id"] = self.settings.cosyvoice_speaker
-            data["instruct_text"] = self.settings.cosyvoice_instruct_text
+            data["instruct_text"] = self.settings.prompts.cosyvoice_instruct
         elif mode == "instruct2":
-            data["instruct_text"] = self.settings.cosyvoice_instruct_text
+            data["instruct_text"] = self.settings.prompts.cosyvoice_instruct
             files = self._prompt_file()
         else:
             raise ProviderError(f"Unsupported CosyVoice mode: {mode}")
         return url, data, files
 
     def _prompt_file(self) -> dict:
-        path = self.settings.resolve_path(self.settings.cosyvoice_prompt_wav)
+        path = self.settings.resolve_path(self.settings.prompts.cosyvoice_reference_wav)
         if path is None or not path.is_file():
             raise ProviderError("CosyVoice prompt WAV is missing")
         return {"prompt_wav": (path.name, path.read_bytes(), "audio/wav")}
@@ -75,4 +75,3 @@ class CosyVoiceTTS(TextToSpeechProvider):
             ) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(f"CosyVoice connection failed: {exc}") from exc
-
