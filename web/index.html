@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Echooo provider-neutral realtime voice agent console" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f172a'/%3E%3Cpath d='M6 16h3m3-7v14m4-18v22m4-15v8m4-6v4' fill='none' stroke='%234ade80' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <title>Echooo · Realtime Voice Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#conversation">跳到对话</a>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img">
+            <path d="M5 16h4m3-7v14m4-18v22m4-15v8m4-6v4" />
+          </svg>
+        </span>
+        <div>
+          <p class="eyebrow">Realtime voice pipeline</p>
+          <h1>Echooo</h1>
+        </div>
+      </div>
+
+      <div class="connection" aria-live="polite" aria-atomic="true">
+        <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+        <span id="status-label">未连接</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="conversation-panel" id="conversation" aria-labelledby="conversation-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Conversation</p>
+            <h2 id="conversation-title">实时对话</h2>
+          </div>
+          <button class="quiet-button" id="clear-transcript" type="button">清空记录</button>
+        </div>
+
+        <div class="transcript" id="transcript" aria-live="polite" aria-relevant="additions text">
+          <div class="empty-state" id="empty-state">
+            <span class="empty-wave" aria-hidden="true"></span>
+            <h3>准备开始一次对话</h3>
+            <p>启动会话后直接说话；Mock 模式也可以用下方文本输入验证完整管线。</p>
+          </div>
+        </div>
+
+        <div class="composer">
+          <label for="debug-text">测试文本 <span>绕过 STT，保留 LLM → TTS 流程</span></label>
+          <div class="composer-row">
+            <input
+              id="debug-text"
+              type="text"
+              autocomplete="off"
+              placeholder="例如：介绍一下当前语音管线"
+            />
+            <button class="send-button" id="send-debug" type="button" disabled>
+              <span>发送</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z" /></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="call-controls">
+          <label class="mic-field" for="microphone">
+            <span>输入设备</span>
+            <select id="microphone" disabled>
+              <option value="">默认麦克风</option>
+            </select>
+          </label>
+          <button class="call-button" id="call-button" type="button">
+            <span class="call-icon" aria-hidden="true">
+              <svg class="mic-icon" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3m-4 0h8" /></svg>
+              <svg class="stop-icon" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+            </span>
+            <span id="call-label">开始会话</span>
+          </button>
+        </div>
+      </section>
+
+      <aside class="inspector" aria-label="管线状态">
+        <section class="inspector-section">
+          <div class="section-title">
+            <p class="eyebrow">Pipeline</p>
+            <span class="live-pill" id="pipeline-pill">Standby</span>
+          </div>
+          <div class="provider-list" id="provider-list">
+            <div class="provider-row">
+              <span class="provider-index">01</span>
+              <div><small>Speech to text</small><strong id="provider-stt">—</strong></div>
+            </div>
+            <div class="provider-connector" aria-hidden="true"></div>
+            <div class="provider-row">
+              <span class="provider-index">02</span>
+              <div><small>Language model</small><strong id="provider-llm">—</strong></div>
+            </div>
+            <div class="provider-connector" aria-hidden="true"></div>
+            <div class="provider-row">
+              <span class="provider-index">03</span>
+              <div><small>Text to speech</small><strong id="provider-tts">—</strong></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="inspector-section telemetry">
+          <div class="section-title">
+            <p class="eyebrow">Telemetry</p>
+            <span class="mono" id="elapsed">00:00</span>
+          </div>
+          <dl class="metric-grid">
+            <div>
+              <dt>LLM first token</dt>
+              <dd id="metric-llm">—</dd>
+            </div>
+            <div>
+              <dt>First audio</dt>
+              <dd id="metric-tts">—</dd>
+            </div>
+            <div>
+              <dt>User turns</dt>
+              <dd id="metric-turns">0</dd>
+            </div>
+            <div>
+              <dt>Interruptions</dt>
+              <dd id="metric-interruptions">0</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="inspector-section event-section">
+          <div class="section-title">
+            <p class="eyebrow">Event trace</p>
+            <button class="quiet-button" id="clear-events" type="button">清空</button>
+          </div>
+          <div class="event-log mono" id="event-log" aria-live="off">
+            <p class="event-placeholder">连接后显示关键 WebSocket 事件。</p>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <div class="toast" id="toast" role="alert" hidden></div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

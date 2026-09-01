@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.playwright-cli/
+output/
+dist/
+build/
+*.egg-info/
+.DS_Store
+assets/voice_prompt.wav
