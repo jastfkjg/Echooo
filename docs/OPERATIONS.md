@@ -1,68 +1,69 @@
-# 运行与部署
+# Operations and deployment
 
-## 本地和旧版升级
+## Local setup and upgrading from the old demo
 
-使用源码仓库运行，先 `python -m pip install -e '.[dev]'`。Web 文件与 prompts 从仓库读取；当前不是可脱离源码独立安装的 wheel 产品。
+Run from the source checkout after `python -m pip install -e '.[dev]'`. Web assets and prompts are loaded from the repository. This release is not a standalone wheel that can run without the source tree.
 
-新版本首次创建数据库表，不预置领域或个人资料。旧演示没有持久化个人数据库，无需迁移其进程内聊天记录。已有 `.env` 请与示例对照：原 `TTS_PROVIDER=mock` 改为 `browser`；旧通用 `/ws` 和声音样本上传入口已移除。不会覆盖用户现有 `.env` 或密钥。
+The new version creates its database tables on first launch, with no seeded domains or personal information. The old demo had no persistent personal database, so its in-memory conversations do not need migration. Compare your existing `.env` with the examples: change the former `TTS_PROVIDER=mock` to `browser`. The generic `/ws` and voice-sample upload endpoints have been removed. Existing `.env` files and keys are not overwritten.
 
-数据库保存到 `DATABASE_URL`；SQLite 相对路径以启动目录为准。请始终在仓库根目录启动。切换数据库不会自动转移内容。此版本创建初始 schema，尚未提供后续版本的 Alembic 迁移或 JSON 导入恢复；不要通过更换数据库连接期待自动迁移。
+Data is stored at `DATABASE_URL`. Relative SQLite paths are resolved from the working directory, so start the application from the repository root. Changing databases does not transfer existing content. Startup includes an idempotent upgrade making the conversation memory destination optional. SQLite rebuilds only the sessions table in a transaction, preserving rows, dependent records, indexes, and triggers; PostgreSQL drops the column’s NOT NULL constraint. Stop existing application processes and keep a backup before upgrading, then restart normally. A full Alembic migration framework and JSON import/restore are not provided.
 
-## 配置说明
+## Configuration
 
-| 配置 | 说明 |
+| Setting | Description |
 | --- | --- |
-| `DATABASE_URL` | SQLite 或 SQLAlchemy psycopg PostgreSQL URL；密码中特殊字符必须 URL 编码 |
-| `APP_HOST` / `APP_PORT` | 默认 127.0.0.1:8000，开发不要监听公网 |
-| `PUBLIC_ORIGIN` | 浏览器看到的完整 origin，不带路径，如 https://assistant.example.com |
-| `COOKIE_SECURE` | HTTPS 公网部署必须为 true；本地 HTTP 为 false |
-| `STT_PROVIDER` | mock 或 assemblyai；mock 模式文字可用、语音识别不可用 |
-| `LLM_PROVIDER` | mock 或 openai_compatible |
-| `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | 可信 chat/completions 服务；密钥只留在服务端 |
-| `LLM_TIMEOUT_SECONDS` | 模型 HTTP 超时，默认 60 秒；外部回复通常调用草稿和检查两次 |
-| `TTS_PROVIDER` | browser 或 cosyvoice；麦克风和朗读默认需要用户主动开启 |
-| `COSYVOICE_*` | 可信私有服务地址、输出采样率、超时与预设说话人 |
+| `DATABASE_URL` | SQLite or SQLAlchemy psycopg PostgreSQL URL; URL-encode special characters in passwords |
+| `APP_HOST` / `APP_PORT` | Defaults to 127.0.0.1:8000; keep development servers private |
+| `PUBLIC_ORIGIN` | Full browser-facing origin without a path, such as https://assistant.example.com |
+| `COOKIE_SECURE` | Must be true for public HTTPS deployment; false for local HTTP |
+| `STT_PROVIDER` | mock or assemblyai; mock supports text but does not recognize speech |
+| `LLM_PROVIDER` | mock or openai_compatible |
+| `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | Trusted chat/completions service; credentials remain server-side |
+| `LLM_TIMEOUT_SECONDS` | HTTP timeout, default 60 seconds; public replies normally require both draft and checker calls |
+| `TTS_PROVIDER` | browser or cosyvoice; recording and playback require explicit user action |
+| `COSYVOICE_*` | Trusted private service address, output sample rate, timeout, and preset speaker |
 
-浏览器录音固定为 16 kHz、PCM16、单声道、100 ms 帧。本版拒绝其他 STT 输入采样率；CosyVoice 输出采样率需要与实际 checkpoint 匹配。CosyVoice 预设模式需对应 SFT checkpoint，不能假定任意新 checkpoint 都包含预设说话人。
+Browser input is fixed at 16 kHz mono PCM16 in 100 ms frames. This release rejects other STT input sample rates. CosyVoice output rate must match the checkpoint. Preset mode requires a compatible SFT checkpoint; do not assume every checkpoint provides preset voices. Speaker IDs are literal provider values and should not be translated.
 
-资料限制：单文件 5 MB；提取文字最多 100,000 字符；PDF 最多 100 页、不处理加密 PDF 和纯扫描件；DOCX 解压上限 20 MB。上传后只存提取的文字，不保留二进制原件。会话最多选择 12 个领域、100 条记忆，最多 100 轮；授权有效期 5 分钟至 24 小时。较长资料的建议有数量上限，提取不是全量知识覆盖保证，重要事实可手工录入。
+Upload limits: 5 MB per file; 100,000 extracted characters; up to 100 PDF pages. Encrypted PDFs and image-only scans are unsupported. DOCX uncompressed content is limited to 20 MB. Only extracted text is stored, not the original binary file. Conversations may select up to 12 domains and 100 memories, last up to 100 turns, and be authorized for 5 minutes to 24 hours. Extraction has a proposal-count limit; it does not guarantee exhaustive coverage of long sources. Important facts can be entered manually.
 
 ## PostgreSQL
 
-可使用现有实例，或 README 的本地 `docker compose` 数据库。Compose 仅启动数据库、端口绑定本机；它不是完整生产部署。关闭服务用 `docker compose down`；不要添加 `-v`，否则持久卷会被删除。
+Use an existing instance or the local `docker compose` database described in the README. Compose starts only a database, bound to localhost; it is not a complete production deployment. Stop it with `docker compose down`. Adding `-v` deletes its persistent volume.
 
-初始化连接需要创建表、创建/授权 `echooo_scoped` 角色、创建 RLS policy 的权限。应用数据事务切换到该受限角色；认证与初始化连接仍是可信管理通道。现有受管数据库若不允许 CREATE ROLE，需管理员预建角色并授予连接账号相应权限。本版尚未拆分迁移账号与运行账号，不应作为可公开注册的多租户 SaaS 直接上线。
+The initialization connection needs privileges to create tables, create or grant the `echooo_scoped` role, and manage RLS policies. Application-data transactions switch to that restricted role; authentication and initialization remain trusted administrative paths. If a managed database prohibits CREATE ROLE, an administrator must create the role and grant the required privileges. This release does not separate migration and runtime accounts and should not be exposed as a publicly registered multi-tenant SaaS.
 
-## 对外开放
+## Public access
 
-1. 本机完成首次所有者设置，使用长期随机密码；本版无邮件找回功能，请妥善保存。
-2. 确保所有模型端点可信。音频发给 STT；获准事实与会话文本发给 LLM；已核验的回复发给配置的 TTS。开启私人对话意味着所选私人事实可发送到该 LLM。
-3. 在受信任反向代理后提供 HTTPS 和 WebSocket Upgrade，配置准确的 `PUBLIC_ORIGIN`、`COOKIE_SECURE=true`。只信任代理的转发头，避免直接开放后端端口。
-4. 应用只启动一个 worker。生产扩容前需共享撤销通知、任务取消、房间分发和限流状态。
-5. 在代理设置连接、请求速率、请求体大小与超时上限。应用已有登录尝试限制和内容上限，但不包含完整的公网滥用防护或模型费用配额。
-6. CosyVoice 放在私网，限制管理端口；不要将没有身份验证的推理服务开放到公网。
+1. Complete initial owner setup locally and use a long random password. There is no email recovery flow in this release, so keep the credential safe.
+2. Use trusted model endpoints. Audio goes to STT; authorized facts and conversation text go to the LLM; checked replies go to the configured TTS provider. Selecting private facts for a private conversation allows those facts to be sent to that LLM.
+3. Provide HTTPS and WebSocket upgrades through a trusted reverse proxy. Set `PUBLIC_ORIGIN` accurately and enable `COOKIE_SECURE=true`. Trust forwarded headers only from your proxy and avoid exposing the backend port directly.
+4. Run one application worker. Scaling requires shared revocation notices, cancellation, room distribution, and rate-limit state.
+5. Configure connection limits, request rates, body-size limits, and timeouts at the proxy. The application has login-attempt and content limits, but not comprehensive public abuse controls or model-spending quotas.
+6. Keep CosyVoice on a private network with restricted management ports. Do not expose unauthenticated inference servers publicly.
 
-不记录完整音频到文件。当前日志以 Web 服务基础日志为主；排障不要添加令牌、消息原文或模型请求全量日志。邀请 token 在 fragment 中，不进入 HTTP URL 日志；兑换请求体仍应避免被代理记录。
+Full audio is not logged to files. Current logs are basic web-service logs. Avoid adding tokens, message content, or full model requests while debugging. Invitation fragments do not enter HTTP URL logs, but proxies should also avoid logging the redemption request body.
 
-## 撤销、删除、导出与备份
+## Revocation, deletion, export, and backups
 
-- 撤销阻止后续交流并关闭播放；正常结束还会尝试提取建议。提取失败时文本记录保留，可手动重试。
-- 更新领域或已授权记忆会撤销相关活动会话。本人需要重新创建授权，确保对方使用最新范围。
-- 领域/来源/记忆删除会传播到依赖会话和派生记忆。混合领域会话会整体清除，不只删其中一句。请在界面确认影响。
-- 导出是所有者可下载的 JSON，包含私人资料与证据，不含密码、密钥和登录 token。它用于审阅与可携带性，不是自动恢复工具。
-- SQLite 设置 foreign_keys、WAL、secure_delete，但不保证底层磁盘不可恢复。数据库文件及备份需使用磁盘加密和受限文件权限。
-- 备份 SQLite 时使用一致性备份工具或停止应用再备份，不能只复制活动数据库的主文件而忽略 WAL。PostgreSQL 使用经过演练的 pg_dump / 恢复流程。
-- 删除不会自动改写旧备份、第三方模型日志或用户已下载文件。生产需设置备份保留期限、供应商数据策略，并在恢复后重放必要删除记录。现在没有独立删除台账服务。
+- Initial setup includes an empty `default` domain. On startup, existing workspaces with no domains receive one without changes to their conversations. Quick chat reuses the owner's domain named `default`, or creates an empty one if it was deleted or renamed; no deleted memories are restored.
+- Revocation stops further conversation and playback. A normal ending also attempts memory extraction. If extraction fails, the transcript remains available and the owner can retry.
+- Updating a domain or an authorized memory revokes affected active conversations. Create a new authorization to use the latest knowledge and scope.
+- Domain, source, and memory deletion propagates to dependent conversations and derived memories. A mixed-domain conversation is removed as a whole, not sentence by sentence. Review the consequences in the interface.
+- Owner-only JSON exports include private sources and evidence, but exclude passwords, keys, and login tokens. Export is for inspection and portability, not automatic restore.
+- SQLite enables foreign_keys, WAL, and secure_delete, but does not guarantee irrecoverable disk erasure. Use disk encryption and restricted permissions for database files and backups.
+- Back up SQLite consistently with a backup tool or by stopping the application. Do not copy only a live main database file while ignoring WAL. Use a tested pg_dump and restore process for PostgreSQL.
+- Deletion does not rewrite old backups, provider logs, or downloaded files. Production needs backup retention and provider policies, plus replay of required deletions after restore. There is no independent deletion-ledger service yet.
 
-## 验收真实服务
+## Live-service acceptance
 
-先用合成测试资料，分别启用 STT、真实 LLM、TTS：
+Start with synthetic data and enable STT, the live LLM, and TTS separately. Validate:
 
-- 普通话、夹杂英文、停顿、噪声下的转写和轮次边界。
-- 对方追问其他领域、要求改变权限、引用恶意资料时的上下文和回复。
-- 模糊承诺、历史承诺与新承诺的区分；检查失败时的退回处理。
-- 播放中说话打断、生成中撤销、重新发邀请、刷新和断网恢复。
-- 结束到首个可听语音的 P50 / P95 延迟、误打断率、有效回答率。
-- 会后建议中的说话者归属、错误合并和需要本人修改的比例。
+- English, Mandarin, mixed-language speech, pauses, and noise, including transcription and turn boundaries.
+- Questions about other domains, attempts to change permissions, and malicious source content.
+- Implicit commitments and the distinction between historical and new commitments; fallbacks when checks fail.
+- Speaking during playback, revocation during generation, invitation rotation, refresh, and network recovery.
+- P50 and P95 latency from the end of speech to first audible reply, false interruptions, and useful-answer rate.
+- Attribution in memory proposals, incorrect merges, and the proportion requiring owner edits.
 
-已完成的自动测试使用模拟服务事件或 HTTP transport 来验证协议和权限，没有向真实 AssemblyAI / LLM / CosyVoice 提交验收语料，也没有测定真实声音质量。运行状态见 `/health`；它表示 Web 服务存活，不表示所有供应商已连通。
+Automated tests use simulated provider events or HTTP transports to verify protocols and authorization. They have not submitted acceptance audio to live AssemblyAI, LLM, or CosyVoice services or measured actual voice quality. `/health` reports that the web service is running, not that every provider is connected.

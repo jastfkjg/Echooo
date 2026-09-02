@@ -1,92 +1,120 @@
-# 架构与信息边界
+# Architecture and information boundaries
 
-## 产品模型
+## Product model
 
-领域是用户管理的数据对象，不是写在代码中的枚举。每条原始资料、记忆和记忆建议有一个领域。用户可以同时开启多个领域，但每次会话必须明确指定一个写入领域；单领域项目讨论只读写该领域。
+A domain is a user-managed data object. Each workspace starts with an ordinary `default` domain, and each source, memory, and proposed update belongs to one domain. Quick chats read and propose updates within `default`. Users may explicitly choose other domains, or disable memory by selecting none. Automatic proposals use one destination domain and require owner review. A discussion scoped to a single project reads and writes only that domain.
 
 ```mermaid
 flowchart TD
-    Owner[本人] --> Domains[动态领域与已确认记忆]
-    Owner --> Grant[一次会话授权]
-    Domains --> Select[服务端检查领域、对象、版本与有效期]
+    Owner[Owner] --> Domains[User-defined domains and confirmed memories]
+    Owner --> Grant[Conversation authorization]
+    Domains --> Select[Check domains, audience, versions, and expiry]
     Grant --> Select
-    Guest[受邀参与者的文字或语音] --> Input[文字输入或 STT]
-    Input --> Scoped[会话内上下文]
+    Guest[Guest text or speech] --> Input[Text input or STT]
+    Input --> Scoped[Conversation-scoped context]
     Select --> Scoped
-    Scoped --> Draft[回复草稿]
-    Draft --> Check[输出检查与引用验证]
-    Check --> Approval[新决定由本人确认]
-    Check --> Output[核验后的文字与 TTS]
+    Scoped --> Draft[Reply draft]
+    Draft --> Check[Output check and citation validation]
+    Check --> Approval[Owner approval for new decisions]
+    Check --> Output[Checked text and TTS]
     Approval --> Output
-    Scoped --> Evidence[会后提取带说话者的建议]
-    Evidence --> Review[本人编辑、批准或拒绝]
-    Review --> Write[指定领域的版本化记忆]
+    Scoped --> Evidence[Attributed memory proposals after the conversation]
+    Evidence --> Review[Owner edits, approves, or rejects]
+    Review --> Write[Versioned memory in the authorized domain]
 ```
 
-## 四种权限
+## Four permissions
 
-| 权限 | 当前实现 |
+| Permission | Current implementation |
 | --- | --- |
-| read | 所选领域内逐条选择的有效记忆；私人会话可使用这些记忆 |
-| disclose | read 的子集，必须标为可披露且对象匹配；**委托回复模型只接收这个子集** |
-| act | `ask`：新承诺等待本人确认；`none`：只交流信息，不受理决定 |
-| write | 一个选定领域，加独立学习开关；只生成待审核建议，审核后落库 |
+| read | Valid memories in `default` for quick chats, or individually selected memories in explicitly enabled domains |
+| disclose | A subset of read, marked shareable and matching the audience; **the delegated reply model receives only this subset** |
+| act | `ask`: new commitments await owner approval; `none`: share information without accepting decisions |
+| write | One selected domain and a separate learning switch; only proposes updates until the owner approves them |
 
-`read` 中未选 `disclose` 的私人信息不会进入对外模型。这一版尚未实现利用私人底价进行内部推理的第二个决策代理；不会因为有读取权限就把底价交给对外模型。交流对象是本人填写的授权标签，不是自动验证的组织身份；邀请是持有即可兑换的凭证，应由本人交给指定对象。
+Private information selected for read but not disclose never enters the public reply model. This release does not implement a separate internal decision agent that reasons over a private reservation price. Read permission alone does not expose that price to the public model. An audience is an owner-defined authorization label, not a verified organization identity. Invitations are bearer credentials and should be delivered to the intended person.
 
-会话创建后，领域、所选记忆、对象、有效期、写入目标和行动策略固定。知识版本存入授权快照。编辑已选记忆或领域会撤销活动会话；到期、删除和撤销也会中止回复及播放。扩大范围需新建会话。
+Domains, selected memories, audience, expiry, destination domain, and action policy are fixed when a conversation is created. The authorization snapshots memory versions. Editing a selected memory or domain revokes active conversations using it. Expiry, deletion, and revocation also stop replies and playback. Changing domains starts a new conversation with an empty transcript; the previous chat remains in history. A private chat cannot be converted into a delegation.
 
-## 代码职责
+## Code responsibilities
 
-| 文件 | 责任 |
+| File | Responsibility |
 | --- | --- |
-| `database.py` | 持久化表、owner 范围仓库、PostgreSQL RLS |
-| `auth.py` | 密码验证、散列凭证、一次性邀请、过期与撤销 |
-| `contracts.py` | 严格输入校验；禁止传入额外权限字段 |
-| `service.py` | 领域、记忆、授权、回复、承诺审批、学习与删除规则 |
-| `intelligence.py` | 授权集内检索、模型调用、草稿检查、只读记忆提取 |
-| `rooms.py` | WebSocket 身份复核、STT、打断、核验后的语音输出 |
-| `ingestion.py` | 有上限的文件文字提取，无自动远程抓取 |
-| `app.py` | HTTP / WebSocket 入口、同源限制、静态界面 |
-| `web/app.js`、`web/voice.js` | 本人与访客界面、显式录音与播放 |
+| `database.py` | Persistent tables, owner-scoped repository, PostgreSQL RLS |
+| `auth.py` | Password verification, hashed credentials, one-time invitations, expiry, revocation |
+| `contracts.py` | Strict input validation; rejects additional authority fields |
+| `service.py` | Domain, memory, authorization, reply, approval, learning, and deletion rules |
+| `intelligence.py` | Retrieval within authorized facts, model calls, draft checking, read-only extraction |
+| `rooms.py` | WebSocket identity revalidation, STT, interruption, checked speech output |
+| `ingestion.py` | Bounded file-to-text extraction without automatic remote fetching |
+| `app.py` | HTTP and WebSocket routes, same-origin restrictions, static interface |
+| `web/app.js`, `web/voice.js` | Owner and guest interfaces, explicit recording and playback |
 
-所有浏览器路径共享 Service 的权限判断。模型没有数据库连接、动态 SQL、任意领域查询、文件系统和外部副作用工具。模型只返回结构化建议，不能签发授权。
+All browser paths share the Service permission checks. Models have no database connection, dynamic SQL, arbitrary domain query, filesystem access, or external side-effect tools. They return structured proposals and cannot grant authority.
 
-## 身份和存储隔离
+## Identity and storage isolation
 
-- 本版是单所有者部署，首次设置后不开放注册。底层表仍有 owner_id，仓库始终按验证后的身份筛选。
-- owner 与 guest 使用独立 HttpOnly、SameSite=Strict cookie；数据库只保存随机 token 的 SHA-256 散列。密码使用 scrypt。邀请通过 URL fragment 传递，页面加载后移除 fragment，兑换时原 token 被原子消费。
-- 访客凭证绑定一个会话；不开放 owner API、领域列表、私人笔记、授权细节或其他房间。重新发放邀请使原访客凭证失效。
-- PostgreSQL 应用数据事务切换到无登录、无 BYPASSRLS 的 `echooo_scoped` 角色；RLS 用可信 owner 范围限制读取和写入。SQLite 则依赖服务端仓库与权限检查。
-- RLS 当前是 **owner 级**，领域和披露是 Service 的显式检查。初始化 / 认证连接保有较高权限。数据库管理者、服务器管理员或应用进程完全失陷不在此边界内；生产强化需要独立迁移与运行账号。
-- HTTP 变更请求和 WebSocket 检查来源；响应禁止缓存并设 CSP。没有跨站开放的 CORS 接口。开发时的非浏览器 API 客户端可省略 Origin，但仍需有效凭证。
+- This release is a single-owner deployment. Registration closes after initial setup. Tables still have owner_id, and repository queries always use the authenticated owner.
+- Owner and guest use separate HttpOnly, SameSite=Strict cookies. Only SHA-256 hashes of random tokens are stored. Passwords use scrypt. Invitation tokens arrive in a URL fragment, which is removed on page load; redemption atomically consumes the original token.
+- A guest credential is bound to one conversation. It does not grant owner APIs, domain lists, private notes, authorization details, or other rooms. Issuing another invitation invalidates previous guest credentials.
+- PostgreSQL application-data transactions switch to the `echooo_scoped` role, which has no login or BYPASSRLS privilege. RLS restricts reads and writes using the trusted owner scope. SQLite relies on repository and service checks.
+- RLS is currently **owner-level**; domain and disclosure restrictions are explicit Service checks. Initialization and authentication connections retain elevated privileges. Database administrators, server administrators, and a fully compromised application process are outside this boundary. Production hardening requires separate migration and runtime accounts.
+- Mutating HTTP requests and WebSocket connections check origins. Responses prohibit caching and set a CSP. There is no cross-site CORS interface. Non-browser API clients may omit Origin but still require valid credentials.
 
-## 回复路径
+## Reply path
 
-1. 复核调用者凭证及活动授权；HTTP 和 WebSocket 都执行。
-2. 只取本次所选且有效的事实。委托使用 disclose 集；私人会话使用 read 集。私人旁听笔记不进入回复上下文。
-3. 在已授权集合内按词项相关度排序；真实模型最多接收 12 条、合计约 36,000 字符的记忆，附最近 12 条当前会话消息。小规模事实同时保留没有字面重合的候选，由模型理解同义表达。**目前没有向量索引或跨领域语义搜索**。
-4. 生成 JSON 草稿，校验结构和引用。委托额外调用检查器；不允许、格式错误、未知引用或服务失败时输出有限说明，不透出供应商错误、密钥或请求上下文。
-5. 新承诺进入本人确认；审批采用一次性状态更新。本人提供发送给对方的确切文字。
-6. 在模型返回后再次复核授权和调用者凭证，防止生成期间到期、撤销或轮换邀请。
-7. 只发布已检查文本，随后播放。打断取消当前生成或合成；活动连接另有周期复核，音频块发送前也复核权限。
+1. Revalidate the caller credential and active authorization on both HTTP and WebSocket paths.
+2. Load only valid facts selected for this conversation. Delegated replies use disclose; private replies use read. Private supervision notes are excluded.
+3. Rank within the authorized set by lexical relevance. Live models receive at most 12 memories, totaling approximately 36,000 characters, plus the latest 12 messages from this conversation. Additional authorized candidates without exact lexical overlap are retained within that budget so the model can interpret paraphrases. **There is no vector index or cross-domain semantic search yet.**
+4. Generate a JSON draft and validate its structure and citations. Delegated replies also call a checker. A denied check, invalid structure, unknown citation, or provider failure produces a limited fallback, without provider errors, keys, or request context.
+5. Route new commitments to owner approval using a one-time state update. The owner supplies the exact message authorized for the guest.
+6. Revalidate authorization and caller credentials after generation to catch expiry, revocation, or invitation rotation during the model call.
+7. Publish only checked text, then play it. Interruption cancels the current generation or synthesis. Active connections also revalidate periodically and before sending audio chunks.
 
-数据库与输入上下文的范围限制是确定性的；模型的事实归因、隐含承诺识别和输出检查具有误判可能。不能据此承诺“绝对不泄露”。参与者在当前会话中主动提供的内容、本人写入交流目标或审批文案的信息，也可能进入对话上下文。因此目标输入明确提示不填写秘密，私人监督笔记独立保存。
+Database and input-context scope restrictions are deterministic. Model attribution, implicit commitment detection, and output checks can be wrong; this is not a guarantee of zero disclosure. Information volunteered by participants, entered in a conversation goal, or explicitly included in an approval may enter the conversation context. The goal field therefore asks users not to include secrets, while private supervision notes are stored separately.
 
-## 学习与更正
+## Learning and corrections
 
-原始文件先存为领域内的来源；提取只创建 pending 建议。会话学习在正常结束后发生，带说话者和证据 ID。撤销会话不自动学习；本人私人旁听笔记、助手自己的回答都不作为新记忆的证据。客户的请求会保留“客户表示”的归属，不直接变成本人的承诺。
+Files are first stored as domain-bound sources. Extraction creates pending proposals only. Conversation learning runs after a normal ending and includes speaker attribution and evidence IDs. Revoked conversations do not automatically produce memories. Private supervision notes and the assistant's own replies are not evidence for new memories. A client's request retains its attribution instead of becoming the owner's commitment.
 
-批准时可编辑标题、内容、披露范围、对象和有效期，选择新增或替换。新记忆默认私有。替换检查目标领域与 expected_version；版本不匹配返回冲突，拒绝静默覆盖。旧版本保留来源和证据；恢复旧内容会产生新版本。
+On approval, the owner may edit the title, content, disclosure setting, audience, and expiry, then add or replace a memory. New memories default to private. Replacements validate the destination domain and expected_version. A version mismatch returns a conflict rather than silently overwriting changes. Earlier versions retain provenance and evidence; restoring earlier content creates a new version.
 
-## 删除与可追溯性
+## Deletion and traceability
 
-删除领域会删除资料、记忆、版本、建议及使用该领域的会话、消息和审批记录。删除来源或记忆时，也会移除读取过它的会话。删除传播还跟踪由这些会话产生的记忆及其历史版本，避免“原文删除、复制品仍可检索”。因此混合领域会话及其派生记忆可能一起被清除，即使派生记忆写入了其他领域。
+Deleting a domain removes its sources, memories, versions, proposals, and conversations using that domain, including messages and approvals. Deleting a source or memory also removes conversations that read it. Deletion follows memories derived from those conversations and their historical versions, preventing retrievable copies from surviving deletion of their source. Mixed-domain conversations and derived memories may therefore be removed together, even if a derived memory was saved in another domain.
 
-这属于应用层逻辑删除传播。已被他人听到、截图或导出的内容不能收回；数据库 WAL、备份和云供应商保留数据需要独立生命周期策略，见运行文档。审计记录用于追踪本地操作，不是防篡改的法律证据。回顾是带归属的陈述和决定记录，尚无自动主题化会议纪要。
+This is application-level deletion propagation. Already heard, captured, or exported information cannot be recalled. Database WAL, backups, and provider-retained data need separate lifecycle policies; see Operations. Audit records support local traceability and are not tamper-proof legal evidence. Conversation review currently provides attributed statements and decisions, not automatically organized meeting minutes.
 
-## 语音与部署边界
+## Language, speech, and deployment boundaries
 
-当前采用浏览器与 FastAPI 的 PCM WebSocket 房间。保留可替换 STT、LLM、TTS；选择 AssemblyAI 只做 STT，是为了让个人数据与权限编排独立于语音服务。浏览器朗读优先设备本地声音，但设备可能选择云语音；使用私有 CosyVoice 可明确控制语音合成位置。
+The interface, application-owned notices, and documentation default to English. Stored user content is not translated or rewritten. Live model prompts continue to follow the latest message language; browser speech chooses a matching voice for English or Chinese text. Chinese recognition patterns and literal provider speaker IDs are retained for compatibility.
 
-此版没有 LiveKit、多人音轨或会议机器人。先验证一个参与者的授权交流，再把同一 Service 接到 WebRTC / LiveKit。房间广播、取消任务和锁在一个进程内，部署必须单 worker。文本记录代表服务器发布的完整文字，不证明对方听完了整段音频；音频打断后的精确已播放文本截断属于后续语音验收项。
+The current media layer uses a PCM WebSocket connection between the browser and FastAPI. STT, LLM, and TTS remain replaceable. Using AssemblyAI for STT keeps personal data and authority orchestration independent of the speech service. Browser synthesis prefers a local device voice, but the device may use cloud speech; a private CosyVoice service provides explicit control over the synthesis location.
+
+This release has no LiveKit, multiple participant tracks, or meeting bot. First validate a single guest's authorized conversation, then connect the same Service to WebRTC or LiveKit. Broadcasts, cancellation tasks, and locks live in one process, so deployment requires one worker. The transcript records the full published text; it does not prove that a participant heard every audio segment. Exact played-text accounting after interruption remains a future acceptance item.
+
+## Global private-chat entry
+
+The home page, sidebar, and conversation list share an immediate private-chat
+entry, `POST /api/sessions/quick-chat`. The server resolves or creates the owner's
+`default` domain and snapshots its confirmed, unexpired memories in the same
+transaction as session creation. Only that domain is authorized for reads and
+end-of-chat proposals; disclosure remains empty. It uses the normal authenticated
+text and voice paths, version checks, and owner review. Neither other domains nor
+previous transcripts are inherited.
+
+Initial setup creates `default` atomically with the owner. Startup also provisions
+existing owners with no domains. The ordinary domain CRUD rules still apply; a
+renamed or deleted `default` is replaced by a fresh empty domain on the next quick
+chat. An existing domain named `default` is reused without changing its content.
+Explicit custom sessions can still set empty `domain_ids` and `read_ids`, with
+`write_domain_id=null` and `allow_learning=false`, to disable personal memory.
+
+The owner can explicitly save one of their own messages through
+`POST /api/sessions/{id}/memory-proposals`, supplying a destination, title, and
+content. This creates a pending proposal with the original message as evidence.
+It cannot copy assistant messages, another conversation's messages, or another
+owner's domain. Scoped chats only allow destinations in their selected domains;
+a general chat can target any domain the owner explicitly chooses. Creating the
+proposal does not change the chat's permissions. Manual proposals do not prevent
+normal end-of-chat extraction in sessions where it was separately enabled.

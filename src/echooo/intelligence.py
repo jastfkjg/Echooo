@@ -14,7 +14,7 @@ import httpx
 from echooo.config import Settings
 
 
-FALLBACK = "这超出了本次可确认的信息范围，我会请本人补充。"
+FALLBACK = "That is outside the information I can confirm in this conversation. I will ask the owner to clarify."
 COMMITMENT = re.compile(r"(承诺|保证|同意|接受报价|成交|签约|签字|付款|转账|下单|预订|确定交期|答应|保证交付|commit|promise|guarantee|accept.{0,20}(offer|price)|agree|book|purchase|pay\b|sign\b)", re.I)
 
 
@@ -73,10 +73,10 @@ class Intelligence:
         selected = relevant(query, facts)
         if self.settings.llm_provider == "mock":
             if mode == "delegate" and COMMITMENT.search(query):
-                return {"kind": "approval", "reply": "这项承诺需要本人确认，我已记录请求。", "citations": [], "proposal": query}
+                return {"kind": "approval", "reply": "This commitment requires owner approval. I have recorded the request.", "citations": [], "proposal": query}
             if not selected:
-                return {"kind": "clarify", "reply": FALLBACK if mode == "delegate" else "当前领域还没有相关记忆。你可以告诉我更多，随后在待审核中确认保存。", "citations": []}
-            return {"kind": "answer", "reply": "根据已确认的信息：" + "；".join(f["content"] for f in selected[:3]),
+                return {"kind": "clarify", "reply": FALLBACK if mode == "delegate" else "This is a local demo. Connect a live model for general conversation. No personal memory was used for this reply.", "citations": []}
+            return {"kind": "answer", "reply": "Based on confirmed information: " + "; ".join(f["content"] for f in selected[:3]),
                 "citations": [f["id"] for f in selected[:3]]}
         # Real models can resolve paraphrases; retain additional authorized facts
         # within a bounded context even when lexical overlap is absent.
@@ -102,11 +102,11 @@ class Intelligence:
             raise ValueError("Unknown citation")
         if mode == "delegate":
             if COMMITMENT.search(query) or draft["kind"] == "approval":
-                return {"kind": "approval", "reply": "这项决定需要本人确认，我已记录请求。", "proposal": query, "citations": []}
+                return {"kind": "approval", "reply": "This decision requires owner approval. I have recorded the request.", "proposal": query, "citations": []}
             # The checker sees only the same disclosure set, not a global private profile.
             check = await self.json_call(self.settings.prompts.check_system, {**context, "draft": draft})
             if check.get("commitment") is True:
-                return {"kind": "approval", "reply": "这项决定需要本人确认，我已记录请求。", "proposal": query, "citations": []}
+                return {"kind": "approval", "reply": "This decision requires owner approval. I have recorded the request.", "proposal": query, "citations": []}
             if check.get("allow") is not True:
                 return {"kind": "clarify", "reply": FALLBACK, "citations": []}
         return {**draft, "citations": ids}

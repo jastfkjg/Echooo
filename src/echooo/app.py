@@ -15,7 +15,7 @@ from echooo import database as db
 from echooo.auth import Auth, AuthError
 from echooo.config import ROOT, Settings
 from echooo.contracts import (Credentials, DomainInput, MemoryInput, SourceInput,
-    SessionInput, MessageInput, ReviewInput, DecisionInput, InviteInput)
+    SessionInput, MessageInput, ReviewInput, DecisionInput, InviteInput, SaveConversationMemory)
 from echooo.ingestion import MAX_UPLOAD, extract_file
 from echooo.intelligence import Intelligence
 from echooo.rooms import Rooms, public_message
@@ -35,7 +35,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         yield
         for clients in list(rooms.clients.values()):
             for client in tuple(clients):
-                await client.stop("服务正在关闭。")
+                await client.stop("The service is shutting down.")
         store.close()
 
     app = FastAPI(title="Echooo · Scoped personal representative", version="0.2.0", lifespan=lifespan)
@@ -50,7 +50,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         if request.method not in {"GET", "HEAD", "OPTIONS"} and (
             request.headers.get("sec-fetch-site") == "cross-site" or
             not same_origin(request.headers.get("origin"), str(request.base_url))):
-            return JSONResponse({"detail": "跨站请求被拒绝。"}, status_code=403)
+            return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -70,7 +70,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
 
     @app.exception_handler(IntegrityError)
     async def conflict_handler(request, exc):
-        return JSONResponse({"detail": "记录发生冲突，请刷新后重试。"}, status_code=409)
+        return JSONResponse({"detail": "A record conflict occurred. Refresh and try again."}, status_code=409)
 
     def owner(request: Request) -> str:
         return auth.resolve(request.cookies.get("echooo_owner"), "owner")["owner_id"]
@@ -78,7 +78,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     def guest(request: Request, sid: str) -> str:
         c = auth.resolve(request.cookies.get("echooo_guest"), "guest")
         if c["session_id"] != sid:
-            raise Problem("邀请不属于此会话。", 403)
+            raise Problem("This invitation does not belong to this conversation.", 403)
         service.active(c["owner_id"], sid)
         return c["owner_id"]
 
@@ -169,7 +169,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     @app.get("/api/memories/{mid}/versions")
     async def memory_versions(request: Request, mid: str):
         with store.scope(owner(request)) as r:
-            need(r.get(db.memories, mid), "记忆")
+            need(r.get(db.memories, mid), "Memory")
             return r.list(db.versions, db.versions.c.memory_id == mid)
 
     @app.delete("/api/memories/{mid}")
@@ -181,7 +181,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     @app.get("/api/domains/{did}/sources")
     async def list_sources(request: Request, did: str):
         with store.scope(owner(request)) as r:
-            need(r.get(db.domains, did), "领域")
+            need(r.get(db.domains, did), "Domain")
             return r.list(db.sources, db.sources.c.domain_id == did)
 
     @app.post("/api/domains/{did}/sources", status_code=201)
@@ -206,7 +206,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         except (Problem, AuthError):
             raise
         except Exception as exc:
-            raise Problem("提取暂不可用。资料已保存，可以稍后重试或手动添加记忆。", 503) from exc
+            raise Problem("Extraction is unavailable. Your source is saved; try again later or add memories manually.", 503) from exc
 
     @app.delete("/api/sources/{source_id}")
     async def remove_source(request: Request, source_id: str):
@@ -234,6 +234,10 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     async def new_session(request: Request, data: SessionInput):
         return service.create_session(owner(request), data)
 
+    @app.post("/api/sessions/quick-chat", status_code=201)
+    async def quick_chat(request: Request):
+        return service.quick_chat(owner(request))
+
     @app.get("/api/sessions/{sid}")
     async def session(request: Request, sid: str):
         return service.view_session(owner(request), sid)
@@ -243,7 +247,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         who = owner(request)
         s = service.active(who, sid)
         if s["mode"] != "delegate":
-            raise Problem("私人会话不能邀请他人。")
+            raise Problem("Private conversations cannot have guests.")
         auth.revoke_room(who, sid)
         await rooms.invalidate()
         token = auth.issue(who, "invite", s["expires_at"] - time.time(), sid)
@@ -254,7 +258,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         c = auth.consume_invite(data.token)
         s = service.active(c["owner_id"], c["session_id"])
         if s["mode"] != "delegate":
-            raise Problem("此邀请不可用。", 403)
+            raise Problem("This invitation is unavailable.", 403)
         ttl = s["expires_at"] - time.time()
         token = auth.issue(c["owner_id"], "guest", ttl, s["id"])
         return with_cookie({"session_id": s["id"]}, token, "guest", ttl)
@@ -284,6 +288,10 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     async def note(request: Request, sid: str, data: MessageInput):
         return service.private_note(owner(request), sid, data.content)
 
+    @app.post("/api/sessions/{sid}/memory-proposals", status_code=201)
+    async def save_chat_memory(request: Request, sid: str, data: SaveConversationMemory):
+        return service.save_conversation_memory(owner(request), sid, data)
+
     @app.post("/api/actions/{aid}/decision")
     async def decision(request: Request, aid: str, data: DecisionInput):
         m = service.decide(owner(request), aid, data.decision, data.response)
@@ -301,7 +309,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         try:
             await service.learn_session(who, sid)
         except Exception:
-            warning = "会话已结束。记忆提取暂未完成，可在会后回顾中重试。"
+            warning = "The conversation has ended. Memory extraction is incomplete; retry from the conversation review."
         return {**service.view_session(who, sid), "warning": warning}
 
     @app.post("/api/sessions/{sid}/revoke")
@@ -319,7 +327,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         except (Problem, AuthError):
             raise
         except Exception as exc:
-            raise Problem("记忆提取暂不可用，请稍后重试。", 503) from exc
+            raise Problem("Memory extraction is unavailable. Please try again later.", 503) from exc
 
     @app.get("/api/export")
     async def export(request: Request):
@@ -335,10 +343,10 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         base = ("https" if ws.url.scheme == "wss" else "http") + "://" + ws.url.netloc
         try:
             if not same_origin(ws.headers.get("origin"), base):
-                raise AuthError("跨站连接被拒绝")
+                raise AuthError("Cross-site connections are not allowed")
             c = auth.resolve(token, "guest" if is_guest else "owner")
             if is_guest and c["session_id"] != sid:
-                raise AuthError("无权访问此会话")
+                raise AuthError("You do not have access to this conversation")
             service.active(c["owner_id"], sid)
         except (AuthError, Problem):
             await ws.close(code=1008)

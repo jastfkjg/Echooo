@@ -69,8 +69,10 @@ def join(client, app, sid):
     return guest, invitation
 
 
-def test_dynamic_domains_and_empty_initial_state(client):
-    assert client.get('/api/domains').json() == []
+def test_dynamic_domains_and_default_initial_state(client):
+    initial = client.get('/api/domains').json()
+    assert [d['name'] for d in initial] == ['default']
+    assert initial[0]['memory_count'] == initial[0]['pending_count'] == 0
     d = domain(client, '自定义火星温室研究🪴')
     assert d['name'] == '自定义火星温室研究🪴'
     r = client.put(f"/api/domains/{d['id']}", json={'name':'新名称','description':'任意边界','color':'violet'})
@@ -168,7 +170,7 @@ def test_no_action_and_no_learning_policies(client,app):
     s=session(client,d['id'],[],action_policy='none',allow_learning=False)
     guest,_=join(client,app,s['id'])
     r=guest.post(f"/api/guest/sessions/{s['id']}/messages",json={'content':'请同意报价'}).json()
-    assert '不能代表' in r['assistant']['content']
+    assert 'cannot make decisions' in r['assistant']['content']
     result=client.post(f"/api/sessions/{s['id']}/end").json()
     assert result['actions']==[] and result['proposals']==[]
 
@@ -229,7 +231,8 @@ def test_revocation_expiry_fact_changes_and_domain_deletion(client,app):
     assert client.post(f"/api/sessions/{private['id']}/messages",json={'content':'你好'}).status_code==410
     assert client.delete(f"/api/domains/{d['id']}").status_code==200
     exported=client.get('/api/export').json()
-    for table in ('domains','memories','memory_versions','sources','sessions','messages','proposals','actions'):
+    assert [d['name'] for d in exported['domains']] == ['default']
+    for table in ('memories','memory_versions','sources','sessions','messages','proposals','actions'):
         assert exported[table]==[],table
 
 
@@ -259,7 +262,7 @@ def test_websocket_checks_and_revoke_stops_playback(client,app):
         while True:
             item=ws.receive_json();events.append(item)
             if item['type']=='speech.checked':break
-        assert events[-1]['content']=='根据已确认的信息：原型已完成'
+        assert events[-1]['content']=='Based on confirmed information: 原型已完成'
         assert any(e['type']=='message' and e['message']['role']=='assistant' for e in events)
         client.post(f"/api/sessions/{s['id']}/revoke")
         assert ws.receive_json()['type']=='playback.stop'
@@ -364,7 +367,7 @@ def test_audio_transcript_uses_scoped_checked_reply_and_pcm_alignment(client,app
         sample_rate=24000
         def configure_voice(self,profile):pass
         async def stream_audio(self,text,*,cancel):
-            assert text=='根据已确认的信息：已完成原型'
+            assert text=='Based on confirmed information: 已完成原型'
             yield AudioChunk(b'\1\0\2',24000)
             yield AudioChunk(b'\0',24000)
     monkeypatch.setattr('echooo.rooms.create_stt',lambda _:InputAudio())
@@ -456,7 +459,10 @@ def test_store_reopen_preserves_auth_and_domains(tmp_path):
     with TestClient(create_app(settings)) as first:
         first.post('/api/auth/setup',json={'name':'persistent-owner','password':'persistent-password'})
         d=domain(first,'可持续的领域')
+        initial=first.get('/api/domains').json()
     with TestClient(create_app(settings)) as second:
         assert second.get('/api/auth').json()['needs_setup'] is False
         assert second.post('/api/auth/login',json={'name':'persistent-owner','password':'persistent-password'}).status_code==200
-        assert second.get('/api/domains').json()[0]['id']==d['id']
+        reopened=second.get('/api/domains').json()
+        assert reopened==initial
+        assert any(item['id']==d['id'] for item in reopened)

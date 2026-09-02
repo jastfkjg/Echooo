@@ -7,7 +7,7 @@ from collections import defaultdict
 from sqlalchemy import update
 
 from echooo import database as db
-from echooo.contracts import DomainInput, MemoryInput, SessionInput, ReviewInput
+from echooo.contracts import DomainInput, MemoryInput, SessionInput, ReviewInput, SaveConversationMemory
 from echooo.intelligence import FALLBACK, Intelligence
 
 
@@ -17,16 +17,16 @@ class Problem(Exception):
         super().__init__(message)
 
 
-def need(item: dict | None, label: str = "记录") -> dict:
+def need(item: dict | None, label: str = "Record") -> dict:
     if item is None:
-        raise Problem(f"{label}不存在或无权访问。", 404)
+        raise Problem(f"{label} was not found or is not accessible.", 404)
     return item
 
 
 def memory_values(data: MemoryInput) -> dict:
     values = data.model_dump(exclude={"expected_version"})
     if values["expires_at"] is not None and values["expires_at"] <= time.time():
-        raise Problem("有效期必须晚于当前时间。")
+        raise Problem("The expiry must be in the future.")
     return values
 
 
@@ -47,16 +47,16 @@ class Service:
     def create_domain(self, owner: str, data: DomainInput) -> dict:
         with self.store.scope(owner) as r:
             if r.list(db.domains, db.domains.c.name == data.name):
-                raise Problem("已有同名领域。", 409)
+                raise Problem("A domain with this name already exists.", 409)
             d = r.add(db.domains, **data.model_dump())
             r.log("domain.created", domain_id=d["id"])
             return d
 
     def update_domain(self, owner: str, item_id: str, data: DomainInput) -> dict:
         with self.store.scope(owner) as r:
-            need(r.get(db.domains, item_id), "领域")
+            need(r.get(db.domains, item_id), "Domain")
             if r.list(db.domains, db.domains.c.name == data.name, db.domains.c.id != item_id):
-                raise Problem("已有同名领域。", 409)
+                raise Problem("A domain with this name already exists.", 409)
             r.change(db.domains, item_id, **data.model_dump())
             self._invalidate(r, domain_id=item_id)
             r.log("domain.updated", domain_id=item_id)
@@ -64,7 +64,7 @@ class Service:
 
     def delete_domain(self, owner: str, item_id: str) -> list[str]:
         with self.store.scope(owner) as r:
-            need(r.get(db.domains, item_id), "领域")
+            need(r.get(db.domains, item_id), "Domain")
             affected = [s["id"] for s in r.list(db.sessions) if item_id in s["domain_ids"]]
             self._purge(r, session_ids=set(affected), memory_ids={m["id"] for m in r.list(db.memories, db.memories.c.domain_id == item_id)})
             r.remove(db.domains, item_id)
@@ -107,34 +107,34 @@ class Service:
 
     def memories(self, owner: str, domain: str) -> list[dict]:
         with self.store.scope(owner) as r:
-            need(r.get(db.domains, domain), "领域")
+            need(r.get(db.domains, domain), "Domain")
             return r.list(db.memories, db.memories.c.domain_id == domain)
 
     def create_memory(self, owner: str, domain: str, data: MemoryInput) -> dict:
         with self.store.scope(owner) as r:
-            need(r.get(db.domains, domain), "领域")
+            need(r.get(db.domains, domain), "Domain")
             m = r.add(db.memories, domain_id=domain, **memory_values(data), source_id=None,
-                provenance={"kind": "owner", "note": "本人直接确认"}, version=1, updated_at=time.time())
+                provenance={"kind": "owner", "note": "Confirmed by owner"}, version=1, updated_at=time.time())
             r.add(db.versions, domain_id=domain, memory_id=m["id"], version=1, snapshot=m)
             r.log("memory.created", domain_id=domain, memory_id=m["id"])
             return m
 
     def update_memory(self, owner: str, mid: str, data: MemoryInput) -> dict:
         with self.store.scope(owner) as r:
-            m = need(r.get(db.memories, mid), "记忆")
+            m = need(r.get(db.memories, mid), "Memory")
             result = self._replace_memory(r, m, data, m["provenance"])
             self._invalidate(r, memory_id=mid)
             return result
 
     def _replace_memory(self, r, current: dict, data: MemoryInput, provenance: dict) -> dict:
         if data.expected_version != current["version"]:
-            raise Problem("记忆已发生变化，请查看最新版本后重新确认。", 409)
+            raise Problem("This memory has changed. Review the latest version before confirming.", 409)
         values = {**memory_values(data), "version": current["version"] + 1,
             "updated_at": time.time(), "provenance": provenance}
         result = r.c.execute(update(db.memories).where(db.memories.c.owner_id == r.owner,
             db.memories.c.id == current["id"], db.memories.c.version == data.expected_version).values(**values))
         if result.rowcount != 1:
-            raise Problem("记忆已被其他操作更新，请重试。", 409)
+            raise Problem("This memory was updated by another operation. Please try again.", 409)
         m = {**current, **values}
         r.add(db.versions, domain_id=m["domain_id"], memory_id=m["id"], version=m["version"], snapshot=m)
         r.log("memory.updated", domain_id=m["domain_id"], memory_id=m["id"], version=m["version"])
@@ -142,15 +142,15 @@ class Service:
 
     def delete_memory(self, owner: str, mid: str):
         with self.store.scope(owner) as r:
-            m = need(r.get(db.memories, mid), "记忆")
+            m = need(r.get(db.memories, mid), "Memory")
             self._purge(r, memory_ids={mid})
             r.log("memory.deleted", domain_id=m["domain_id"])
 
     def source(self, owner: str, domain: str, title: str, content: str, kind="text") -> dict:
         with self.store.scope(owner) as r:
-            need(r.get(db.domains, domain), "领域")
+            need(r.get(db.domains, domain), "Domain")
             if not content.strip() or len(content) > 100000:
-                raise Problem("资料为空或超过 100,000 字符。")
+                raise Problem("The source is empty or exceeds 100,000 characters.")
             item = r.add(db.sources, domain_id=domain, title=title, content=content, kind=kind)
             r.log("source.created", domain_id=domain, source_id=item["id"])
             return item
@@ -158,15 +158,15 @@ class Service:
     async def extract_source(self, owner: str, source_id: str) -> list[dict]:
         async with self.learning_locks[source_id]:
             with self.store.scope(owner) as r:
-                source = need(r.get(db.sources, source_id), "资料")
+                source = need(r.get(db.sources, source_id), "Source")
                 existing = r.list(db.proposals, db.proposals.c.source_id == source_id)
                 if existing:
                     return existing
             chunks = [source["content"][i:i+4000] for i in range(0, len(source["content"]), 4000)]
-            records = [{"id": f"{source_id}:{i}", "content": s, "speaker": "本人导入资料"} for i, s in enumerate(chunks)]
+            records = [{"id": f"{source_id}:{i}", "content": s, "speaker": "Source imported by owner"} for i, s in enumerate(chunks)]
             extracted = await self.ai.extract(records)
             with self.store.scope(owner) as r:
-                need(r.get(db.sources, source_id), "资料")  # deletion during model call
+                need(r.get(db.sources, source_id), "Source")  # deletion during model call
                 existing = r.list(db.proposals, db.proposals.c.source_id == source_id)
                 if existing:
                     return existing
@@ -178,7 +178,7 @@ class Service:
 
     def delete_source(self, owner: str, source_id: str):
         with self.store.scope(owner) as r:
-            source = need(r.get(db.sources, source_id), "资料")
+            source = need(r.get(db.sources, source_id), "Source")
             ids = {m["id"] for m in r.list(db.memories) if m["source_id"] == source_id or m["provenance"].get("source_id") == source_id}
             ids.update(v["memory_id"] for v in r.list(db.versions)
                 if v["snapshot"].get("source_id") == source_id or v["snapshot"].get("provenance", {}).get("source_id") == source_id)
@@ -188,26 +188,39 @@ class Service:
 
     def create_session(self, owner: str, data: SessionInput) -> dict:
         with self.store.scope(owner) as r:
-            for domain in data.domain_ids:
-                need(r.get(db.domains, domain), "领域")
-            facts = []
-            for mid in data.read_ids:
-                m = need(r.get(db.memories, mid), "记忆")
-                if m["domain_id"] not in data.domain_ids:
-                    raise Problem("读取记忆超出了选定领域。", 403)
-                if m["expires_at"] and m["expires_at"] <= time.time():
-                    raise Problem("选定记忆已过期。", 409)
-                if mid in data.disclose_ids and not self._disclosable(m, data.audience):
-                    raise Problem("选定记忆未获准向此交流对象披露。", 403)
-                facts.append(m)
-            values = data.model_dump(exclude={"duration_minutes"})
-            if data.mode == "private":
-                values["disclose_ids"] = []
-            s = r.add(db.sessions, **values, status="active", expires_at=time.time() + data.duration_minutes * 60,
-                grants={m["id"]: m["version"] for m in facts}, summary={})
-            r.log("session.created", session_id=s["id"], domain_ids=data.domain_ids,
-                disclose_count=len(s["disclose_ids"]), action_policy=data.action_policy)
-            return s
+            return self._create_session(r, data)
+
+    def quick_chat(self, owner: str) -> dict:
+        with self.store.scope(owner) as r:
+            domain = db.ensure_default_domain(r.c, owner)
+            facts = r.list(db.memories, db.memories.c.domain_id == domain["id"])
+            facts = [m for m in facts if m["expires_at"] is None or m["expires_at"] > time.time()]
+            data = SessionInput(mode="private", domain_ids=[domain["id"]],
+                write_domain_id=domain["id"], allow_learning=True, action_policy="none")
+            return self._create_session(r, data, facts=facts)
+
+    def _create_session(self, r, data: SessionInput, *, facts: list[dict] | None = None) -> dict:
+        for domain in data.domain_ids:
+            need(r.get(db.domains, domain), "Domain")
+        if facts is None:
+            facts = [need(r.get(db.memories, mid), "Memory") for mid in data.read_ids]
+        for m in facts:
+            if m["domain_id"] not in data.domain_ids:
+                raise Problem("A selected memory is outside the authorized domains.", 403)
+            if m["expires_at"] and m["expires_at"] <= time.time():
+                raise Problem("A selected memory has expired.", 409)
+            if m["id"] in data.disclose_ids and not self._disclosable(m, data.audience):
+                raise Problem("A selected memory cannot be disclosed to this audience.", 403)
+        values = data.model_dump(exclude={"duration_minutes"})
+        # Server-selected default memories use the same version and scope checks.
+        values["read_ids"] = [m["id"] for m in facts]
+        if data.mode == "private":
+            values["disclose_ids"] = []
+        s = r.add(db.sessions, **values, status="active", expires_at=time.time() + data.duration_minutes * 60,
+            grants={m["id"]: m["version"] for m in facts}, summary={})
+        r.log("session.created", session_id=s["id"], domain_ids=data.domain_ids,
+            disclose_count=len(s["disclose_ids"]), action_policy=data.action_policy)
+        return s
 
     @staticmethod
     def _disclosable(m: dict, audience: str) -> bool:
@@ -215,17 +228,17 @@ class Service:
             and (not m["expires_at"] or m["expires_at"] > time.time()))
 
     def _active(self, r, sid: str) -> dict:
-        s = need(r.get(db.sessions, sid), "会话")
+        s = need(r.get(db.sessions, sid), "Conversation")
         if s["status"] != "active" or s["expires_at"] <= time.time():
-            raise Problem("会话已结束、过期或被撤销。", 410)
+            raise Problem("This conversation has ended, expired, or been revoked.", 410)
         for domain in s["domain_ids"]:
-            need(r.get(db.domains, domain), "领域")
+            need(r.get(db.domains, domain), "Domain")
         for mid, version in s["grants"].items():
             m = r.get(db.memories, mid)
             if not m or m["version"] != version or (m["expires_at"] and m["expires_at"] <= time.time()):
-                raise Problem("授权资料已变化，请由本人创建新会话。", 410)
+                raise Problem("Authorized knowledge has changed. Ask the owner to create a new conversation.", 410)
             if mid in s["disclose_ids"] and not self._disclosable(m, s["audience"]):
-                raise Problem("披露授权已变化。", 410)
+                raise Problem("Disclosure permissions have changed.", 410)
         return s
 
     def active(self, owner: str, sid: str) -> dict:
@@ -234,11 +247,11 @@ class Service:
 
     def view_session(self, owner: str, sid: str, *, guest=False) -> dict:
         with self.store.scope(owner) as r:
-            s = need(r.get(db.sessions, sid), "会话")
+            s = need(r.get(db.sessions, sid), "Conversation")
             if guest:
                 self._active(r, sid)
                 if s["mode"] != "delegate":
-                    raise Problem("不能访问私人会话。", 403)
+                    raise Problem("Private conversations are not accessible to guests.", 403)
                 return {"id": s["id"], "title": s["title"], "audience": s["audience"],
                     "status": s["status"], "expires_at": s["expires_at"], "messages": self._public_messages(r, sid)}
             return {**s, "messages": r.list(db.messages, db.messages.c.session_id == sid),
@@ -258,16 +271,18 @@ class Service:
             with self.store.scope(owner) as r:
                 s = self._active(r, sid)
                 if guest and s["mode"] != "delegate":
-                    raise Problem("无权访问私人会话。", 403)
+                    raise Problem("You do not have access to this private conversation.", 403)
                 if not guest and s["mode"] == "delegate":
-                    raise Problem("委托会话请通过访客入口发言；私人指示不会发送给对方。", 403)
+                    raise Problem("Use the guest entrance to speak in delegated conversations. Private notes are not sent to the guest.", 403)
                 history = r.list(db.messages, db.messages.c.session_id == sid,
                     db.messages.c.role != "private_note")
                 if len(history) >= 200:
-                    raise Problem("本次会话已达 100 轮，请结束并创建新会话。", 409)
+                    raise Problem("This conversation has reached 100 turns. End it and create a new one.", 409)
                 permitted = s["disclose_ids"] if s["mode"] == "delegate" else s["read_ids"]
                 facts = [need(r.get(db.memories, mid)) for mid in permitted]
                 speaker = "guest" if guest else "owner"
+                if s["mode"] == "private" and s["title"] == "New conversation" and not history:
+                    r.change(db.sessions, sid, title=content[:60])
                 user_message = r.add(db.messages, session_id=sid, role=speaker, content=content,
                     citations=[], delivery="received")
             try:
@@ -277,7 +292,7 @@ class Service:
                 raise
             except Exception:
                 # Never expose vendor errors, endpoints, request context or keys.
-                reply = {"kind": "unavailable", "reply": "暂时无法核验回复，请稍后重试或联系本人。", "citations": []}
+                reply = {"kind": "unavailable", "reply": "Unable to verify a reply right now. Please try again later or contact the owner.", "citations": []}
             if authorize:
                 authorize()  # Invitation rotation/logout can revoke a caller without ending the room.
             with self.store.scope(owner) as r:
@@ -286,7 +301,7 @@ class Service:
                     reply = {"kind": "clarify", "reply": FALLBACK, "citations": []}
                 if reply["kind"] == "approval":
                     if s["action_policy"] == "none":
-                        reply["reply"] = "本次授权仅限信息交流，我不能代表本人作出决定。"
+                        reply["reply"] = "This authorization only allows sharing information. I cannot make decisions for the owner."
                     else:
                         r.add(db.actions, session_id=sid, request=content, status="pending", response="")
                 assistant = r.add(db.messages, session_id=sid, role="assistant", content=reply["reply"],
@@ -301,18 +316,37 @@ class Service:
             return r.add(db.messages, session_id=sid, role="private_note", content=content,
                 citations=[], delivery="owner_only")
 
+    def save_conversation_memory(self, owner: str, sid: str, data: SaveConversationMemory):
+        """An explicit owner request, distinct from automatic conversation learning."""
+        with self.store.scope(owner) as r:
+            s = need(r.get(db.sessions, sid), "Conversation")
+            if s["mode"] != "private" or s["status"] == "revoked":
+                raise Problem("Only private, non-revoked conversations can be saved this way.", 403)
+            need(r.get(db.domains, data.domain_id), "Destination domain")
+            if s["domain_ids"] and data.domain_id not in s["domain_ids"]:
+                raise Problem("Save this memory to a domain selected for the conversation.", 403)
+            message = need(r.get(db.messages, data.message_id), "Message")
+            if message["session_id"] != sid or message["role"] != "owner":
+                raise Problem("Select your own message from this conversation.", 403)
+            evidence = [{"id": message["id"], "speaker": "Owner", "content": message["content"], "manual_save": True}]
+            p = r.add(db.proposals, domain_id=data.domain_id, session_id=sid, source_id=None,
+                title=data.title, content=data.content, evidence=evidence, status="pending",
+                target_id=None, expected_version=None, result_id=None)
+            r.log("memory.manually_proposed", session_id=sid, domain_id=data.domain_id, proposal_id=p["id"])
+            return p
+
     def decide(self, owner: str, aid: str, decision: str, response: str) -> dict:
         with self.store.scope(owner) as r:
-            a = need(r.get(db.actions, aid), "确认请求")
+            a = need(r.get(db.actions, aid), "Approval request")
             self._active(r, a["session_id"])
             if decision == "approve" and not response.strip():
-                raise Problem("请明确填写获准向对方表达的内容。")
+                raise Problem("Enter the exact wording you authorize the assistant to share.")
             status = "approved" if decision == "approve" else "rejected"
             result = r.c.execute(update(db.actions).where(db.actions.c.owner_id == owner,
                 db.actions.c.id == aid, db.actions.c.status == "pending").values(status=status, response=response))
             if result.rowcount != 1:
-                raise Problem("该请求已经处理。", 409)
-            text = response.strip() if response.strip() else "本人未批准这项请求，暂不作出承诺。"
+                raise Problem("This request has already been handled.", 409)
+            text = response.strip() if response.strip() else "The owner has not approved this request. No commitment has been made."
             message = r.add(db.messages, session_id=a["session_id"], role="owner_approved",
                 content=text, citations=[], delivery="approved")
             r.log("action." + status, session_id=a["session_id"], action_id=aid, message_id=message["id"])
@@ -320,7 +354,7 @@ class Service:
 
     def stop(self, owner: str, sid: str, status: str):
         with self.store.scope(owner) as r:
-            s = need(r.get(db.sessions, sid), "会话")
+            s = need(r.get(db.sessions, sid), "Conversation")
             if s["status"] == "active" or status == "revoked":
                 r.change(db.sessions, sid, status=status)
                 r.log("session." + status, session_id=sid)
@@ -338,55 +372,57 @@ class Service:
     async def learn_session(self, owner: str, sid: str) -> list[dict]:
         async with self.learning_locks[sid]:
             with self.store.scope(owner) as r:
-                s = need(r.get(db.sessions, sid), "会话")
+                s = need(r.get(db.sessions, sid), "Conversation")
                 if not s["allow_learning"]:
                     return []
                 if s["status"] != "ended":
-                    raise Problem("请先结束会话；撤销的会话不会自动学习。", 409)
-                existing = r.list(db.proposals, db.proposals.c.session_id == sid)
+                    raise Problem("End the conversation first. Revoked conversations do not automatically produce memories.", 409)
+                existing = [p for p in r.list(db.proposals, db.proposals.c.session_id == sid)
+                    if not any(e.get("manual_save") for e in p["evidence"])]
                 if existing:
                     return existing
-                records = [{"id": m["id"], "speaker": s["audience"] if m["role"] == "guest" else "本人",
+                records = [{"id": m["id"], "speaker": s["audience"] if m["role"] == "guest" else "Owner",
                     "content": m["content"]} for m in r.list(db.messages, db.messages.c.session_id == sid)
                     if m["role"] in {"guest", "owner", "owner_approved"}]
             extracted = await self.ai.extract(records)
             with self.store.scope(owner) as r:
-                s = need(r.get(db.sessions, sid), "会话")
+                s = need(r.get(db.sessions, sid), "Conversation")
                 if s["status"] != "ended" or not s["allow_learning"]:
-                    raise Problem("学习授权已撤销。", 410)
-                existing = r.list(db.proposals, db.proposals.c.session_id == sid)
+                    raise Problem("Permission to learn from this conversation has been revoked.", 410)
+                existing = [p for p in r.list(db.proposals, db.proposals.c.session_id == sid)
+                    if not any(e.get("manual_save") for e in p["evidence"])]
                 if existing:
                     return existing
                 by_id = {x["id"]: x for x in records}
                 result = []
                 for p in extracted:
                     evidence = [by_id[i] for i in p["evidence_ids"]]
-                    speakers = "、".join(dict.fromkeys(x["speaker"] for x in evidence))
+                    speakers = ", ".join(dict.fromkeys(x["speaker"] for x in evidence))
                     result.append(r.add(db.proposals, domain_id=s["write_domain_id"], session_id=sid,
-                        source_id=None, title=p["title"], content=f"{speakers}在本次交流中表示：{p['content']}",
+                        source_id=None, title=p["title"], content=f"{speakers} stated in this conversation: {p['content']}",
                         evidence=evidence, status="pending", target_id=None, expected_version=None, result_id=None))
                 r.log("memory.proposed", session_id=sid, count=len(result))
                 return result
 
     def review(self, owner: str, pid: str, data: ReviewInput) -> dict:
         with self.store.scope(owner) as r:
-            p = need(r.get(db.proposals, pid), "更新建议")
+            p = need(r.get(db.proposals, pid), "Proposed update")
             if p["status"] != "pending":
-                raise Problem("此更新已处理。", 409)
+                raise Problem("This update has already been reviewed.", 409)
             status = "approved" if data.decision == "approve" else "rejected"
             claim = r.c.execute(update(db.proposals).where(db.proposals.c.owner_id == owner,
                 db.proposals.c.id == pid, db.proposals.c.status == "pending").values(status=status))
             if claim.rowcount != 1:
-                raise Problem("此更新已被处理。", 409)
+                raise Problem("This update has already been handled.", 409)
             result = None
             if data.decision == "approve":
                 content = MemoryInput(**data.model_dump(exclude={"decision", "target_id"}))
                 provenance = {"kind": "reviewed", "proposal_id": pid, "evidence": p["evidence"],
                     "session_id": p["session_id"], "source_id": p["source_id"]}
                 if data.target_id:
-                    current = need(r.get(db.memories, data.target_id), "目标记忆")
+                    current = need(r.get(db.memories, data.target_id), "Target memory")
                     if current["domain_id"] != p["domain_id"]:
-                        raise Problem("更新不能跨领域写入。", 403)
+                        raise Problem("Updates cannot be written to another domain.", 403)
                     result = self._replace_memory(r, current, content, provenance)
                     self._invalidate(r, memory_id=current["id"])
                 else:

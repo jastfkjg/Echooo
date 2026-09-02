@@ -30,7 +30,7 @@ class Rooms:
                 client.validate()
                 await client.send(event)
             except (Problem, AuthError):
-                await client.stop("授权已结束或变更。")
+                await client.stop("Authorization has ended or changed.")
             except Exception:
                 pass
 
@@ -40,12 +40,12 @@ class Rooms:
                 try:
                     client.validate()
                 except (Problem, AuthError):
-                    await client.stop("授权已结束或变更。")
+                    await client.stop("Authorization has ended or changed.")
 
     async def connect(self, ws: WebSocket, owner: str, sid: str, guest: bool, token: str):
         s = self.service.active(owner, sid)
         if guest and s["mode"] != "delegate":
-            raise Problem("无权访问", 403)
+            raise Problem("Access denied", 403)
         connection = Connection(self, ws, owner, sid, guest, token, s["mode"])
         self.clients[sid].add(connection)
         try:
@@ -76,7 +76,7 @@ class Connection:
         self.rooms.service.active(self.owner, self.sid)
         c = self.rooms.auth.resolve(self.token, "guest" if self.guest else "owner")
         if c["owner_id"] != self.owner or (self.guest and c["session_id"] != self.sid):
-            raise AuthError("授权已失效")
+            raise AuthError("Authorization is no longer valid")
 
     async def stop(self, reason):
         if not self.active:
@@ -96,7 +96,7 @@ class Connection:
             try:
                 self.validate()
             except (Problem, AuthError):
-                await self.stop("本次授权已结束。")
+                await self.stop("This authorization has ended.")
 
     async def run(self):
         await self.send({"type": "session.ready", "can_speak": self.can_speak,
@@ -110,7 +110,7 @@ class Connection:
                 self.validate()
                 if packet.get("bytes") is not None:
                     if not self.can_speak or len(packet["bytes"]) > 32000:
-                        raise Problem("音频未启用或数据帧过大。")
+                        raise Problem("Audio is not enabled or the frame is too large.")
                     if self.stt is None:
                         continue  # In-flight frames can arrive after recognition stops.
                     await self.stt.send_audio(packet["bytes"])
@@ -118,19 +118,19 @@ class Connection:
                 try:
                     raw = packet.get("text", "")
                     if len(raw) > 8000:
-                        raise Problem("消息过长。")
+                        raise Problem("The message is too long.")
                     p = json.loads(raw)
                     if not isinstance(p, dict):
-                        raise Problem("消息格式无效。")
+                        raise Problem("Invalid message format.")
                     kind = p.get("type")
                     if kind == "input.text" and self.can_speak:
                         content = p.get("content", "")
                         if not isinstance(content, str) or not 0 < len(content.strip()) <= 6000:
-                            raise Problem("请输入 1–6000 字符。")
+                            raise Problem("Enter between 1 and 6,000 characters.")
                         await self.begin_reply(content.strip())
                     elif kind == "audio.enable" and self.can_speak:
                         if self.rooms.settings.stt_provider == "mock":
-                            await self.send({"type": "error", "message": "本地演示使用文字输入；配置 AssemblyAI 后可开启麦克风。"})
+                            await self.send({"type": "error", "message": "The local demo uses text input. Configure AssemblyAI to enable the microphone."})
                             continue
                         if self.stt is None:
                             self.stt = create_stt(self.rooms.settings)
@@ -139,7 +139,7 @@ class Connection:
                                 self.stt_task = asyncio.create_task(self.consume_stt())
                             except Exception:
                                 await self.close_stt()
-                                await self.send({"type": "audio.error", "message": "语音识别暂不可用，可继续输入文字。"})
+                                await self.send({"type": "audio.error", "message": "Speech recognition is unavailable. You can still type messages."})
                                 continue
                         await self.send({"type": "audio.ready", "sample_rate": self.rooms.settings.assemblyai_sample_rate})
                     elif kind == "audio.disable":
@@ -147,14 +147,14 @@ class Connection:
                     elif kind == "interrupt":
                         await self.interrupt()
                     else:
-                        raise Problem("本次角色不支持此操作。", 403)
+                        raise Problem("Your role does not allow this operation.", 403)
                 except (ValueError, Problem) as exc:
                     await self.send({"type": "error", "message": str(exc)})
         except (Problem, AuthError):
-            await self.stop("授权已结束。")
+            await self.stop("Authorization has ended.")
         except Exception:
             with contextlib.suppress(Exception):
-                await self.send({"type": "error", "message": "会话连接中断，请重新连接。"})
+                await self.send({"type": "error", "message": "The conversation was disconnected. Please reconnect."})
         finally:
             self.active = False
             watcher.cancel()
@@ -185,12 +185,12 @@ class Connection:
                 elif event.type == STTEventType.FINAL and event.transcript:
                     await self.begin_reply(event.transcript[:6000])
                 elif event.type in {STTEventType.ERROR, STTEventType.TERMINATED}:
-                    await self.send({"type": "audio.error", "message": "语音识别暂不可用，可继续输入文字。"})
+                    await self.send({"type": "audio.error", "message": "Speech recognition is unavailable. You can still type messages."})
                     break
         except asyncio.CancelledError:
             raise
         except Exception:
-            await self.send({"type": "audio.error", "message": "语音识别连接中断，请重新开启麦克风。"})
+            await self.send({"type": "audio.error", "message": "Speech recognition disconnected. Please turn the microphone on again."})
         finally:
             if self.stt:
                 with contextlib.suppress(Exception):
@@ -247,8 +247,8 @@ class Connection:
         except asyncio.CancelledError:
             raise
         except (Problem, AuthError):
-            await self.stop("本次授权已结束。")
+            await self.stop("This authorization has ended.")
         except Exception:
             with contextlib.suppress(Exception):
-                await self.send({"type": "error", "message": "语音输出暂不可用，已核验的回复保留在文字记录中。"})
+                await self.send({"type": "error", "message": "Voice output is unavailable. The checked reply remains in the transcript."})
                 await self.send({"type": "session.state", "state": "listening"})

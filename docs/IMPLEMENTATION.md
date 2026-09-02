@@ -13,6 +13,7 @@ delegate a bounded conversation to an invited participant.
 
 - Persistent owner authentication and owner-scoped data access.
 - Arbitrary domain CRUD; no seeded personal data.
+- English interface, application notices, and documentation by default; preserve the language of user-provided content.
 - Domain-bound source ingestion and confirmed/versioned memories, including
   disclosure settings, audience restrictions, provenance, and expiry.
 - Private owner conversations and separate delegated sessions. Each delegated
@@ -72,3 +73,66 @@ External AssemblyAI / LLM / CosyVoice calls and physical microphone/audio qualit
 Delivered: dynamic domains, persistent knowledge, scoped private and delegated conversations, invitations, text/voice adapters, owner approval, reviewed learning, lineage-aware deletion, PostgreSQL RLS, and a usable owner/guest interface.
 
 The media layer is a one-participant browser WebSocket room in this release. LiveKit/multi-party conferences, pgvector semantic search, exact played-text accounting, external action execution, and public multi-tenant deployment are subsequent stages with explicit acceptance criteria in ROADMAP.md. Memory updates require review; automatic unreviewed learning is not enabled. This is a working first product release, not a claim of fully autonomous meeting participation or guaranteed model secrecy.
+
+## English default update
+
+The UI, metadata, accessibility labels, dates and counts, service notices, demo reply
+wrappers, and project documentation now default to English. Existing user content
+is not rewritten; multilingual recognition rules and literal provider voice IDs
+are retained. Existing password-validation changes were preserved.
+
+Validation: 28 tests passed with one PostgreSQL-only skip; Python compilation,
+JavaScript syntax, and whitespace checks passed. Browser inspection covered English
+setup, domain creation, and delegation and invitation dialogs at desktop and
+375 × 812 mobile size, with no dialog overflow in the inspected views. The guest
+invitation and conversation flow also displayed English, including the default
+fallback reply. Browser error/warning logs were empty, and the viewport was reset.
+
+## Global conversation entry update
+
+The home page, sidebar, and Conversations list now expose **Talk with Echooo**.
+It opens a private chat without requiring manual domain selection or a title.
+The default-domain update below enables everyday memory in this entry. Explicitly
+empty scopes never load personal memories, and learning is off without a destination.
+The first owner message supplies the initial title. Domain shortcuts still select
+the current domain; choosing domains from a chat starts a fresh context. Delegation
+remains separately authorized and does not inherit private conversation history.
+
+The owner can explicitly create a pending memory proposal from one of their own
+messages, selecting a destination or creating their first domain. Scoped chats
+cannot save outside their selected domains; general chats do not acquire access
+to a destination merely by saving a proposal. SQLite startup upgrade preserves old
+sessions and dependent messages while making the memory destination nullable.
+
+Verification: 34 tests passed with one PostgreSQL-only skip, including six new
+cases covering empty scopes, private context isolation, explicit memory saving,
+voice-room compatibility, and legacy SQLite migration. JavaScript syntax, Python
+compilation, and whitespace checks passed. Browser verification used an isolated
+loopback server and disposable database; no existing workspace was migrated or
+restarted. It covered an empty workspace, immediate chat, manual save into a new
+domain, review with private defaults, and fresh context after domain selection.
+
+The new chat and voice controls were also inspected at 375 × 812 with no horizontal
+overflow. The delegation dialog remained separate, with no preselected domains or
+copied private goal/transcript. Browser error and warning logs were empty. The
+viewport was restored and the disposable test server was stopped afterward.
+
+## Default domain for everyday conversations
+
+Initial setup atomically creates an ordinary domain named `default`. Startup
+backfills existing owners with no domains. The quick-chat endpoint resolves that
+owner's default domain, reads its confirmed and unexpired memories, and enables
+end-of-chat proposals in the same domain. Other domains require explicit selection,
+and proposed updates still require review before becoming private memories.
+
+The interface names the active domain and proposal destination. Domain changes
+still open a fresh conversation; explicitly selecting no domains disables memory.
+Renaming or deleting `default` leaves ordinary CRUD behavior intact. A later quick
+chat creates a new empty default domain without restoring removed information.
+
+Verification: 38 tests passed with one PostgreSQL-only skip. New coverage verifies
+first-run voice chat, review and recall, expired-memory filtering, owner and domain
+isolation, deletion without restoration, and idempotent startup backfill. The
+browser flow on a disposable database confirmed initial provisioning, one-click
+chat, visible default scope, and end-of-chat proposals. Existing local services
+and workspace data were not restarted or migrated during validation.

@@ -1,40 +1,40 @@
-# 后续方向
+# Roadmap
 
-领域始终由用户管理。产品重点是可控的个人代表：在正确的信息范围内交流，知道何时必须交给本人，并留下可检查、可更正的记忆。
+Domains remain user-managed. The product focus is a controllable personal representative: communicate within the right information scope, know when to involve the owner, and leave memories that can be inspected and corrected.
 
-## 第一优先级：真实中文语音试点
+## Priority 1: Live speech pilot
 
-用当前文字、权限和审批链连接真实 STT / LLM / TTS，先验证一对一项目讨论。建立固定回归语料，包含越域追问、提示注入、含糊承诺、噪声和中途撤销。记录首个语音延迟、错误披露、未经确认的承诺、人工接管比例及记忆修改比例。
+Connect the current text, permission, and approval flow to live STT, LLM, and TTS providers. Start with one-to-one project discussions, including Mandarin. Build a repeatable evaluation set covering cross-domain probing, prompt injection, implicit commitments, noise, and revocation during a turn. Measure first-audio latency, incorrect disclosure, unapproved commitments, owner takeover, and memory correction rates.
 
-验收条件：确定性授权测试持续通过；试点攻击集中无已知越域泄漏；每个有副作用的决定都有明确授权记录；识别与声音质量由真实使用者评估。有限测试集不等同于绝对安全证明。
+Acceptance criteria: deterministic authorization tests remain passing; no known cross-domain leaks in the pilot attack set; every side-effecting decision has explicit authorization; real users assess recognition and voice quality. Passing a finite evaluation set is not proof of absolute safety.
 
-语音改进包括：完整记录打断位置和已播放文本、避免上下文误认为对方听完；更自然的静默判断；音频重连和背压；在检查机制不被绕过的前提下优化首句延迟。先测再决定是否进行逐句核验和合成。
+Speech improvements include exact played-text accounting after interruptions so context does not assume the guest heard everything, more natural silence detection, reconnection and backpressure, and first-response latency improvements that preserve output checks. Measure before choosing sentence-by-sentence checking and synthesis.
 
-## 第二优先级：让记忆更好用
+## Priority 2: More useful memory
 
-- 引入分段资料与 pgvector 语义检索，**先过滤 owner / domain / disclose，再检索**；检索缓存同样绑定授权版本。
-- 增加记忆类型、事实有效时间、置信来源、过期提醒和冲突对照；自动分类只给建议，不自动移动到其他领域。
-- 大批量导入、增量同步、可回滚批量审核；完善数据导出/导入与正式迁移。
-- 支持领域层级或标签，但明确它们不会自动继承披露权限；共享事实通过显式授权引用处理。
-- 可选的低风险自动记忆更新必须由本人为领域单独开启，并保留证据、版本与回滚；新承诺、敏感信息和冲突继续人工审核。
+- Add source chunking and pgvector semantic retrieval. **Filter owner, domain, and disclosure scope before retrieval.** Bind retrieval caches to authorization versions too.
+- Add memory types, effective dates, source confidence, expiry reminders, and conflict comparisons. Automatic classification proposes changes; it does not move information between domains on its own.
+- Support bulk import, incremental synchronization, reversible batch review, data import and export, and formal schema migrations.
+- Support domain hierarchies or tags without implicitly inheriting disclosure permissions. Shared facts require explicit authorized references.
+- Optional low-risk automatic memory updates must be enabled separately by the owner for each domain and retain evidence, versions, and rollback. New commitments, sensitive information, and conflicts still require review.
 
-验收条件：新的检索路径通过相同的越域测试；权限缩小立即失效；删除覆盖索引、缓存及派生内容；语义召回收益有标注集支撑。
+Acceptance criteria: new retrieval paths pass the same cross-domain tests; reducing permissions invalidates access immediately; deletion covers indexes, caches, and derived data; labeled evaluations demonstrate improved semantic recall.
 
-## 第三优先级：会议参与与私人决策
+## Priority 3: Meeting participation and private decisions
 
-- 接入 LiveKit / WebRTC，支持多人音轨、身份与说话者归属，再接具体会议平台。机器人明确以 AI 身份加入，遵守参与者的录音与数据选择。
-- 本人可切换旁听、接管、暂停代理与提交一次性公开指示；明确哪些笔记私人可见、哪些可以表达。
-- 独立内部决策模块可使用 read-only 私人约束，输出有类型的行动建议；对外模型仍不能获得底价、私人日程等原始秘密。
-- 为协商引入金额、时段、次数等可执行授权边界，超界自动交给本人；每类动作按参数和结果验收，不依靠一句“允许协商”。
+- Integrate LiveKit or WebRTC for multiple participant tracks, identity, and speaker attribution, followed by specific meeting platforms. The bot identifies itself as AI and respects participant recording and data choices.
+- Let the owner observe, take over, pause the agent, and submit one-time public instructions. Clearly distinguish private notes from statements authorized for disclosure.
+- Introduce a separate internal decision component that can read private constraints and emit typed action proposals. The public reply model still does not receive reservation prices, private schedules, or other raw secrets.
+- Give negotiations enforceable limits on amounts, time slots, or attempts. Escalate when limits are exceeded. Validate each action type by its parameters and results instead of relying on a broad instruction to negotiate.
 
-验收条件：新参与者加入不会继承多余权限；身份/说话者不确定时停止学习归属；内外代理之间只有受校验的必要信息。
+Acceptance criteria: new participants do not inherit excess access; uncertain identity or speaker attribution blocks attributed learning; internal and public agents exchange only necessary, validated information.
 
-## 第四优先级：真实工具和部署强化
+## Priority 4: Real tools and deployment hardening
 
-日历、邮件、项目工具先接只读查询，再逐一增加需要确认的写操作。使用明确工具参数、短时授权、幂等键、执行结果核验及重试边界；确认失效或工具参数改变必须重新审核。
+Start calendar, email, and project integrations with read-only queries, then add individually approved writes. Use explicit parameters, short-lived authority, idempotency keys, verified execution results, and bounded retries. Expired approval or changed tool parameters requires a new review.
 
-部署方面拆分数据库迁移和运行账号，引入正式 schema 迁移、共享会话/撤销协调、后台任务、费用配额、细粒度审计、备份恢复演练与删除台账。完成这些工作后再考虑多所有者公开部署。
+Separate migration and runtime database accounts. Add formal schema migrations, shared conversation and revocation coordination, background jobs, spending quotas, detailed auditing, backup and restore drills, and a deletion ledger. Complete this work before considering public multi-owner deployment.
 
-## 暂不优先
+## Not an immediate priority
 
-不急于自研 STT / TTS、复刻人的声音、无监督地自动承诺，或同时接入所有会议平台。若改用一体化 Voice Agent API，先证明它能在知识进入模型前执行领域筛选、在语音发布前执行权限检查，并完整支持撤销与受控写入；否则仍保留当前独立编排层。
+Do not rush into training STT or TTS models, cloning a person's voice, making unsupervised commitments, or connecting every meeting platform at once. Before adopting an integrated Voice Agent API, demonstrate domain filtering before model access, permission checks before speech publication, complete revocation, and controlled memory writes. Otherwise, keep the independent orchestration layer.

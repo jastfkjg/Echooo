@@ -50,6 +50,19 @@ domains = owned_table("domains", Column("name", String, nullable=False),
     constraints=(UniqueConstraint("owner_id", "name"),))
 
 
+def ensure_default_domain(connection, owner: str) -> dict:
+    """Provision the owner's ordinary default domain, safely across requests."""
+    if connection.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as upsert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as upsert
+    connection.execute(upsert(domains).values(id=uid(), owner_id=owner, name="default",
+        description="Everyday conversations and memories. Choose another domain for a specific context.",
+        color="sage", created_at=time.time()).on_conflict_do_nothing(index_elements=["owner_id", "name"]))
+    return dict(connection.execute(select(domains).where(
+        domains.c.owner_id == owner, domains.c.name == "default")).mappings().one())
+
+
 def domain_ref() -> Column:
     return Column("domain_id", String, ForeignKey("domains.id", ondelete="CASCADE"), nullable=False, index=True)
 
@@ -70,7 +83,7 @@ sessions = owned_table("sessions", Column("title", String, nullable=False),
     Column("goal", Text, nullable=False), Column("domain_ids", JSON, nullable=False),
     Column("read_ids", JSON, nullable=False), Column("disclose_ids", JSON, nullable=False),
     Column("grants", JSON, nullable=False),
-    Column("write_domain_id", String, ForeignKey("domains.id", ondelete="CASCADE"), nullable=False),
+    Column("write_domain_id", String, ForeignKey("domains.id", ondelete="CASCADE"), nullable=True),
     Column("allow_learning", Integer, nullable=False), Column("action_policy", String, nullable=False),
     Column("status", String, nullable=False), Column("expires_at", Float, nullable=False),
     Column("summary", JSON, nullable=False), Column("voice", JSON, nullable=False))
@@ -118,6 +131,14 @@ class Store:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA secure_delete=ON")
         metadata.create_all(self.engine)
+        from echooo.migrations import allow_unscoped_private_chats
+        allow_unscoped_private_chats(self.engine)
+        # Upgrade existing empty workspaces without moving their data or scopes.
+        with self.engine.begin() as c:
+            empty_owners = c.execute(select(users.c.id).where(~select(domains.c.id).where(
+                domains.c.owner_id == users.c.id).exists())).scalars().all()
+            for owner in empty_owners:
+                ensure_default_domain(c, owner)
         if self.postgres:
             self._rls()
 

@@ -26,7 +26,7 @@ export class Voice {
       this.source=context.createMediaStreamSource(this.stream);this.source.connect(this.worklet);
       this.silent=context.createGain();this.silent.gain.value=0;this.worklet.connect(this.silent);this.silent.connect(context.destination);
       await context.resume();
-    }catch{this.stopMic();if(this.socket.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify({type:'audio.disable'}));this.notify('麦克风初始化失败，请使用文字输入。');}
+    }catch{this.stopMic();if(this.socket.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify({type:'audio.disable'}));this.notify('Microphone setup failed. Please use text input.');}
   }
   speak(text) {
     if(!this.enabled||this.closed||!('speechSynthesis' in window))return;
@@ -44,7 +44,7 @@ export class Voice {
         await context.audioWorklet.addModule('/static/playback-worklet.js');
         if(this.closed||this.playContext!==context)return;
         this.playback=new AudioWorkletNode(context,'pcm16-playback');this.playback.connect(context.destination);
-      })().catch(()=>{this.playReady=null;this.notify('音频播放暂不可用，请阅读文字回复。');});
+      })().catch(()=>{this.playReady=null;this.notify('Audio playback is unavailable. Please read the text reply.');});
     }
     await this.playReady;
     if(this.closed||epoch!==this.playEpoch||!this.playback)return;
