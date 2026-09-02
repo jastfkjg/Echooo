@@ -11,3 +11,7 @@ build/
 *.egg-info/
 .DS_Store
 assets/voice_prompt.wav
+data/
+*.db
+*.db-wal
+*.db-shm

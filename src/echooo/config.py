@@ -29,7 +29,9 @@ def _optional_int(name: str) -> int | None:
 class PromptSettings:
     """Version-controlled agent behavior, deliberately kept out of .env."""
 
-    llm_system: str
+    delegate_system: str = ""
+    check_system: str = ""
+    memory_system: str = ""
 
     @classmethod
     def load(cls, path: Path = PROMPTS_FILE) -> "PromptSettings":
@@ -37,7 +39,9 @@ class PromptSettings:
             with path.open("rb") as handle:
                 document = tomllib.load(handle)
             return cls(
-                llm_system=str(document["llm"]["system"]).strip(),
+                delegate_system=str(document.get("delegate", {}).get("system", "")).strip(),
+                check_system=str(document.get("check", {}).get("system", "")).strip(),
+                memory_system=str(document.get("memory", {}).get("system", "")).strip(),
             )
         except FileNotFoundError as exc:
             raise ValueError(f"Prompt configuration not found: {path}") from exc
@@ -47,13 +51,16 @@ class PromptSettings:
 
 @dataclass(slots=True)
 class Settings:
+    database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", "sqlite:///data/echooo.db"))
+    public_origin: str = field(default_factory=lambda: os.getenv("PUBLIC_ORIGIN", ""))
+    cookie_secure: bool = field(default_factory=lambda: os.getenv("COOKIE_SECURE", "false").lower() == "true")
     app_host: str = field(default_factory=lambda: os.getenv("APP_HOST", "127.0.0.1"))
     app_port: int = field(default_factory=lambda: _int("APP_PORT", 8000))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 
     stt_provider: str = field(default_factory=lambda: os.getenv("STT_PROVIDER", "mock"))
     llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "mock"))
-    tts_provider: str = field(default_factory=lambda: os.getenv("TTS_PROVIDER", "mock"))
+    tts_provider: str = field(default_factory=lambda: os.getenv("TTS_PROVIDER", "browser"))
 
     assemblyai_api_key: str = field(default_factory=lambda: os.getenv("ASSEMBLYAI_API_KEY", ""))
     assemblyai_streaming_url: str = field(
@@ -90,7 +97,7 @@ class Settings:
     cosyvoice_timeout_seconds: float = field(
         default_factory=lambda: _float("COSYVOICE_TIMEOUT_SECONDS", 60)
     )
-    history_limit: int = field(default_factory=lambda: _int("HISTORY_LIMIT", 20))
+    cosyvoice_speaker_id: str = field(default_factory=lambda: os.getenv("COSYVOICE_SPEAKER_ID", "中文女"))
     prompts: PromptSettings = field(default_factory=PromptSettings.load)
 
     @classmethod
@@ -99,12 +106,21 @@ class Settings:
         return cls()
 
     def validate(self) -> None:
+        if self.tts_provider == "mock":
+            self.tts_provider = "browser"  # Compatibility with the former local demo .env.
+        for value, choices, label in ((self.stt_provider, {"mock", "assemblyai"}, "STT"),
+            (self.llm_provider, {"mock", "openai_compatible"}, "LLM"),
+            (self.tts_provider, {"browser", "cosyvoice"}, "TTS")):
+            if value not in choices:
+                raise ValueError(f"Unsupported {label} provider: {value}")
+        if self.assemblyai_sample_rate != 16000:
+            raise ValueError("This browser capture release requires ASSEMBLYAI_SAMPLE_RATE=16000")
         if self.stt_provider == "assemblyai" and not self.assemblyai_api_key:
             raise ValueError("ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai")
         if self.llm_provider == "openai_compatible" and not self.llm_model:
             raise ValueError("LLM_MODEL is required when LLM_PROVIDER=openai_compatible")
-        if self.llm_provider == "openai_compatible" and not self.prompts.llm_system:
-            raise ValueError("config/prompts.toml must define a non-empty llm.system prompt")
+        if self.llm_provider == "openai_compatible" and not all((self.prompts.delegate_system, self.prompts.check_system, self.prompts.memory_system)):
+            raise ValueError("config/prompts.toml must define delegate, check, and memory prompts")
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -117,5 +133,4 @@ class Settings:
                 "input_sample_rate": self.assemblyai_sample_rate,
                 "input_encoding": "pcm_s16le",
             },
-            "debug_text_enabled": True,
         }

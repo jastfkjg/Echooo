@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 
-from echooo.models import AudioChunk, ChatMessage, STTEvent, VoiceProfile
+from echooo.models import AudioChunk, STTEvent, VoiceProfile
 
 
 class SpeechToTextProvider(ABC):
@@ -24,18 +24,6 @@ class SpeechToTextProvider(ABC):
 
     @abstractmethod
     async def close(self) -> None: ...
-
-
-class LanguageModelProvider(ABC):
-    """Streams text deltas for one assistant reply."""
-
-    @abstractmethod
-    def stream_reply(
-        self,
-        messages: Sequence[ChatMessage],
-        *,
-        cancel: asyncio.Event,
-    ) -> AsyncIterator[str]: ...
 
 
 class TextToSpeechProvider(ABC):

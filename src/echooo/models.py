@@ -5,17 +5,6 @@ from enum import StrEnum
 from typing import Any
 
 
-class SessionPhase(StrEnum):
-    IDLE = "idle"
-    CONNECTING = "connecting"
-    LISTENING = "listening"
-    THINKING = "thinking"
-    SPEAKING = "speaking"
-    INTERRUPTING = "interrupting"
-    ERROR = "error"
-    CLOSED = "closed"
-
-
 class STTEventType(StrEnum):
     READY = "ready"
     SPEECH_STARTED = "speech_started"
@@ -32,12 +21,6 @@ class STTEvent:
     session_id: str = ""
     error: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class ChatMessage:
-    role: str
-    content: str
 
 
 @dataclass(slots=True)
