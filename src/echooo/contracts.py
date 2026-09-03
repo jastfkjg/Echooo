@@ -74,6 +74,10 @@ class SessionInput(Input):
         return self
 
 
+class SessionRenameInput(Input):
+    title: str = Field(min_length=1, max_length=120)
+
+
 class MessageInput(Input):
     content: str = Field(min_length=1, max_length=6000)
 

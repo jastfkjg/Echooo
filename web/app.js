@@ -1,9 +1,15 @@
 import { Voice } from './voice.js';
+import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
+import {sessionStatus, filterSessions, domainControl, privateContextForm, bindPrivateContext} from './session-ui.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const esc = (value = '') => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const paths = {
+  sun:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5',
+  moon:'M20.5 13A8.5 8.5 0 0 1 11 3.5 8.5 8.5 0 1 0 20.5 13Z',
+  volume:'M11 5 6 9H3v6h3l5 4Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',
+  panel:'M3 4h18v16H3Zm12 0v16',more:'M5 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2M12 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2M19 11a1 1 0 1 0 0 2 1 1 0 1 0 0-2',
   wave:'M3 10v4m5-9v14m5-16v18m5-15v12m4-8v4',
   grid:'M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z',
   chat:'M21 11a8 8 0 0 1-8 8H6l-4 3V11a9 9 0 0 1 19 0Z',
@@ -24,13 +30,18 @@ const paths = {
   folder:'M3 5h6l2 3h10v13H3Z',stop:'M6 6h12v12H6Z',download:'M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4',
 };
 const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] || paths.file}"/></svg>`;
+function themePicker() {
+  const theme=document.documentElement.dataset.theme||'light';
+  return `<div class="theme-switch" role="group" aria-label="Appearance">${[['light','Light','sun'],['dark','Dark','moon']].map(([value,label,symbol])=>`<button type="button" class="theme-choice" data-theme-choice="${value}" aria-label="${label} mode" aria-pressed="${theme===value}" title="${label} mode">${icon(symbol)}<span>${label}</span></button>`).join('')}</div>`;
+}
 const brand = `<a class="brand" href="/" aria-label="Echooo workspace">${icon('wave')}<span>echooo<span class="muted">.</span></span></a>`;
 const dt = t => new Date(t * 1000).toLocaleString('en-US', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 const countLabel = (n, singular, plural=singular+'s') => `${n.toLocaleString('en-US')} ${n===1?singular:plural}`;
 const roleName = {assistant:'Echooo',guest:'Guest',owner:'You',owner_approved:'Owner approved',private_note:'Private note'};
-const statusName = s => ({active:'Active',ended:'Ended',revoked:'Revoked',expired:'Expired'}[s.status] || s.status) + (s.status==='active' && s.expires_at < Date.now()/1000 ? ' · Expired' : '');
+const statusName = s => ({active:'Active',ended:'Ended',revoked:'Revoked',expired:'Expired'}[sessionStatus(s)] || s.status);
 const state = {user:null,config:{},domains:[],sessions:[],proposals:[],memories:[],sources:[],route:[],session:null,guest:false,filter:'',socket:null,voice:null};
 let toastTimer, poll, navigation = 0;
+state.voicePrefs = {muted:false, dictation:false};
 
 async function api(path, method='GET', data) {
   const options = {method, credentials:'same-origin', headers:{}};
@@ -54,8 +65,9 @@ function field(name,label,value='',type='text',extra='') {
 function area(name,label,value='',extra='') {
   return `<div class="form-field"><label for="f-${name}">${label}</label><textarea id="f-${name}" name="${name}" ${extra}>${esc(value)}</textarea></div>`;
 }
-function openDialog(title,body,submit,label='Save') {
+function openDialog(title,body,submit,label='Save',options={}) {
   const modal=$('#modal');
+  modal.className=options.className||'';
   modal.innerHTML=`<form id="dialog-form"><div class="dialog-head"><h2 id="dialog-title">${esc(title)}</h2><button class="icon-btn" type="button" data-close aria-label="Close">${icon('close')}</button></div><div class="dialog-body"><div class="form-error" role="alert"></div>${body}</div><div class="dialog-footer"><button type="button" class="btn subtle" data-close>Cancel</button><button type="submit" class="btn primary">${esc(label)}</button></div></form>`;
   $$('[data-close]',modal).forEach(b=>b.onclick=()=>modal.close());
   $('#dialog-form').onsubmit=async e=>{
@@ -66,7 +78,7 @@ function openDialog(title,body,submit,label='Save') {
     finally {button.disabled=false;}
   };
   modal.showModal();
-  $('input:not([type=checkbox]),textarea,select',modal)?.focus();
+  $(options.focusSelector||'input:not([type=checkbox]),textarea,select',modal)?.focus();
   return modal;
 }
 function empty(title,description,button='',symbol='folder') {
@@ -77,9 +89,9 @@ async function refreshBase() {
 }
 const domainName=id=>state.domains.find(d=>d.id===id)?.name || 'Removed domain';
 function navigate(hash) { if(location.hash==='#'+hash) renderRoute(); else location.hash=hash; }
-function shell(body,crumb='My domains') {
+function shell(body,crumb='My domains',chatHeader='') {
   const pending=state.proposals.filter(p=>p.status==='pending').length;
-  $('#app').innerHTML=`<div class="shell"><aside class="sidebar">${brand}<button class="btn primary" data-action="quick-chat">${icon('chat')}Talk with Echooo</button><a class="navlink ${!state.route[0]?'active':''}" href="#">${icon('grid')}<span>My domains</span></a><a class="navlink ${state.route[0]==='sessions'?'active':''}" href="#sessions">${icon('chat')}<span>Conversations</span><span class="count">${state.sessions.length||''}</span></a><a class="navlink ${state.route[0]==='review'?'active':''}" href="#review">${icon('review')}<span>Review</span>${pending?`<span class="count">${pending}</span>`:''}</a><div class="label">Domains · ${state.domains.length}</div><nav class="domain-nav" aria-label="Domains">${state.domains.map(d=>`<a class="navlink ${state.route[1]===d.id?'active':''}" href="#domain/${d.id}/memories"><i class="domain-dot ${esc(d.color)}"></i><span class="name">${esc(d.name)}</span><span class="count">${d.memory_count}</span></a>`).join('')}</nav><button class="navlink" data-action="new-domain">${icon('plus')}<span>Add domain</span></button><div class="side-bottom"><a class="navlink ${state.route[0]==='settings'?'active':''}" href="#settings">${icon('settings')}<span>Workspace settings</span></a><div class="profile"><span class="avatar">${esc(state.user.name.slice(0,1).toUpperCase())}</span><div><strong>${esc(state.user.name)}</strong><small>Private workspace</small></div></div></div></aside><main class="main" id="main"><header class="topbar"><div class="path"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation">${icon('menu')}</button><span>Personal workspace</span><span>/</span><strong>${esc(crumb)}</strong></div><span class="status">Domain isolation enabled</span></header><div class="workspace">${body}</div></main></div>`;
+  $('#app').innerHTML=`<div class="shell ${chatHeader?'chat-shell':''}"><aside class="sidebar">${brand}<button class="btn primary" data-action="quick-chat">${icon('chat')}Talk with Echooo</button><a class="navlink ${!state.route[0]?'active':''}" href="#">${icon('grid')}<span>My domains</span></a><a class="navlink ${state.route[0]==='sessions'?'active':''}" href="#sessions">${icon('chat')}<span>Conversations</span><span class="count">${state.sessions.length||''}</span></a><a class="navlink ${state.route[0]==='review'?'active':''}" href="#review">${icon('review')}<span>Review</span>${pending?`<span class="count">${pending}</span>`:''}</a><div class="label">Domains · ${state.domains.length}</div><nav class="domain-nav" aria-label="Domains">${state.domains.map(d=>`<a class="navlink ${state.route[1]===d.id?'active':''}" href="#domain/${d.id}/memories"><i class="domain-dot ${esc(d.color)}"></i><span class="name">${esc(d.name)}</span><span class="count">${d.memory_count}</span></a>`).join('')}</nav><button class="navlink" data-action="new-domain">${icon('plus')}<span>Add domain</span></button><div class="side-bottom">${themePicker()}<a class="navlink ${state.route[0]==='settings'?'active':''}" href="#settings">${icon('settings')}<span>Workspace settings</span></a><div class="profile"><span class="avatar">${esc(state.user.name.slice(0,1).toUpperCase())}</span><div><strong>${esc(state.user.name)}</strong><small>Private workspace</small></div></div></div></aside><main class="main" id="main"><header class="topbar">${chatHeader||`<div class="path"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation">${icon('menu')}</button><span>Personal workspace</span><span>/</span><strong>${esc(crumb)}</strong></div><span class="status">Domain isolation enabled</span>`}</header><div class="workspace">${body}</div></main></div>`;
   bindActions();
 }
 const demoBanner=()=>state.config.demo?`<div class="banner">${icon('info')}<span>Local demo: replies use authorized memories. Connect a live model for natural conversations with the same data and permission controls.</span></div>`:'';
@@ -123,20 +135,59 @@ function sourceList() {
   return state.sources.map(s=>`<article class="memory-row"><span class="row-symbol">${icon('file')}</span><div><h3>${esc(s.title)}</h3><p class="excerpt">${esc(s.content.slice(0,180))}${s.content.length>180?'…':''}</p><div class="meta"><span class="tag">Sources · Private</span><span>${s.content.length.toLocaleString('en-US')} characters</span><span>${dt(s.created_at)}</span></div></div><div class="row-actions"><button class="btn" data-action="extract" data-id="${s.id}">Extract memories</button><button class="icon-btn" data-action="delete-source" data-id="${s.id}" aria-label="Delete source">${icon('trash')}</button></div></article>`).join('');
 }
 function renderSessions() {
-  shell(`<div class="heading"><div><p class="eyebrow">Delegated conversations</p><h1>Conversations</h1><p>Each conversation has its own permissions. Review the transcript and proposed memories afterward.</p></div><div class="actions"><button class="btn primary" data-action="quick-chat">${icon('chat')}Talk with Echooo</button><button class="btn" data-action="new-delegate">${icon('plus')}Delegate</button></div></div>${demoBanner()}${state.sessions.length?state.sessions.map(s=>`<a class="session-row" href="#sessions/${s.id}"><div><h3>${esc(s.title)}</h3><div class="meta"><span>${s.mode==='private'?'Private conversation':esc(s.audience)}</span><span>${esc(s.domain_ids.map(domainName).join(' / ')||'General chat')}</span><span>${dt(s.created_at)}</span></div></div><span class="tag ${s.status==='active'?'green':''}">${esc(statusName(s))}</span></a>`).join(''):empty('No conversations yet','Start a private chat immediately, or create a separately authorized delegation.','', 'chat')}`,'Conversations');
+  shell(`<div class="heading"><div><p class="eyebrow">Your workspace</p><h1>Conversations</h1><p>Continue a chat, manage its title, or clear conversations you no longer need.</p></div><div class="actions"><button class="btn primary" data-action="quick-chat">${icon('chat')}Talk with Echooo</button><button class="btn" data-action="new-delegate">${icon('plus')}Delegate</button></div></div>${demoBanner()}<div class="conversation-filters"><div class="form-field"><label for="conversation-search">Search conversations</label><input type="search" id="conversation-search" placeholder="Search by title, domain, or audience…"></div><div class="form-field"><label for="conversation-filter">Show</label><select id="conversation-filter"><option value="all">All conversations</option><option value="private">Private chats</option><option value="delegate">Delegations</option><option value="empty">Empty conversations</option></select></div></div><p class="conversation-count" id="conversation-count" role="status"></p><div id="conversation-list"></div>`,'Conversations');
+  $('#conversation-search').oninput=renderConversationList;
+  $('#conversation-filter').onchange=renderConversationList;
+  renderConversationList();
+}
+function renderConversationList() {
+  const records=filterSessions(state.sessions,$('#conversation-search').value,$('#conversation-filter').value,domainName);
+  $('#conversation-count').textContent=`${records.length} of ${countLabel(state.sessions.length,'conversation')}`;
+  $('#conversation-list').innerHTML=records.length?records.map(s=>`<article class="conversation-list-row"><a class="conversation-link" href="#sessions/${esc(s.id)}"><span class="conversation-symbol">${icon(s.mode==='private'?'chat':'shield')}</span><div><h3>${esc(s.title)}</h3><div class="meta"><span>${s.mode==='private'?'Private chat':esc(s.audience)}</span><span>${esc(s.domain_ids.map(domainName).join(' / ')||'No memory')}</span><span>${s.message_count==null?'':s.message_count===0?'Empty':countLabel(s.message_count,'message')}</span><time>${dt(s.created_at)}</time></div></div></a><span class="tag ${sessionStatus(s)==='active'?'green':''}">${esc(statusName(s))}</span><details class="toolbar-menu conversation-row-menu" name="conversation-actions"><summary class="icon-btn" aria-label="Manage conversation: ${esc(s.title)}" title="Manage conversation">${icon('more')}</summary><div class="toolbar-popover action-menu"><h2>Conversation actions</h2><button data-action="rename-session" data-id="${esc(s.id)}">${icon('edit')}Rename</button><button class="danger" data-action="delete-session" data-id="${esc(s.id)}">${icon('trash')}Delete conversation…</button></div></details></article>`).join(''):empty(state.sessions.length?'No matching conversations':'No conversations yet',state.sessions.length?'Try a different search or filter.':'Start a private chat, or create a separately authorized delegation.','','chat');
+  bindActions($('#conversation-list'));
+}
+function renameSessionDialog(id=state.session?.id) {
+  const s=state.session?.id===id?state.session:state.sessions.find(s=>s.id===id);if(!s)return;
+  openDialog('Rename conversation',field('title','Conversation title',s.title,'text','required maxlength="120"'),async fd=>{
+    const renamed=await api(`/sessions/${id}`,'PATCH',{title:fd.get('title')});
+    state.sessions=state.sessions.map(s=>s.id===id?{...s,title:renamed.title}:s);
+    if(state.session?.id===id){state.session.title=renamed.title;$('#session-title').textContent=renamed.title;$('#session-title').title=renamed.title;}
+    if($('#conversation-list'))renderConversationList();toast('Conversation renamed.');
+  },'Save title');
+}
+function deleteSessionDialog(id=state.session?.id) {
+  const s=state.session?.id===id?state.session:state.sessions.find(s=>s.id===id);if(!s)return;
+  const modal=openDialog('Delete conversation?',`<p class="delete-conversation-title">${esc(s.title)}</p><p class="dialog-help">This permanently deletes the transcript, memory proposals, and review records for this conversation. Active voice and guest access will stop.</p><p class="dialog-help">Confirmed memories and their saved evidence stay in your domains. Other conversations are not affected. This cannot be undone.</p>`,async()=>{
+    await api(`/sessions/${id}`,'DELETE');
+    state.sessions=state.sessions.filter(s=>s.id!==id);
+    if(state.session?.id===id){disconnect();navigate('sessions');}else await renderRoute();
+    toast('Conversation deleted. Confirmed memories were kept.');
+  },'Delete conversation',{focusSelector:'button[data-close]'});
+  $('button[type=submit]',modal).className='btn danger';
 }
 function renderReview() {
   const pending=state.proposals.filter(p=>p.status==='pending');
   shell(`<div class="heading"><div><p class="eyebrow">Memory review</p><h1>Review <span class="muted">${pending.length}</span></h1><p>Check the evidence, refine the wording, and decide what to remember. New memories are private by default.</p></div></div>${pending.length?pending.map(p=>`<article class="review-row"><div class="review-header"><div><span class="tag">${esc(domainName(p.domain_id))}</span><h3>${esc(p.title)}</h3></div><div class="actions"><button class="btn subtle" data-action="reject-proposal" data-id="${p.id}">Dismiss</button><button class="btn primary" data-action="review-proposal" data-id="${p.id}">Review and save ${icon('arrow')}</button></div></div><p>${esc(p.content)}</p><details><summary>View evidence · ${countLabel(p.evidence.length,'item')}</summary>${p.evidence.map(e=>`<div class="evidence"><strong>${esc(e.speaker||'Imported source')}</strong>: ${esc(e.content)}</div>`).join('')}</details><small>${p.session_id?'From a conversation':'Extracted from a source'} · ${dt(p.created_at)} · Not yet used in replies</small></article>`).join(''):empty('No updates to review','Import sources or finish a conversation to see proposed memories here.','', 'check')}<p class="muted"><small>${countLabel(state.proposals.length-pending.length,'update')} processed. Another person&#39;s opinion does not become your decision.</small></p>`,'Review');
 }
 function renderSettings() {
-  shell(`<div class="heading"><div><p class="eyebrow">Workspace</p><h1>Workspace settings</h1><p>View service status and manage your data and sign-in.</p></div></div>${demoBanner()}<section class="settings-section"><div><h3>Model connections</h3><p>STT: ${esc(state.config.providers?.stt)} · LLM: ${esc(state.config.providers?.llm)} · TTS: ${esc(state.config.providers?.tts)}</p><p>Services are configured on the server. API keys stay server-side.</p></div><span class="tag">${state.config.demo?'Local demo':'Configured services'}</span></section><section class="settings-section"><div><h3>Persistent storage</h3><p>${state.config.database==='sqlite'?'Local SQLite':'PostgreSQL · Row-level security'} · Confirmed memories retain versions and provenance.</p></div></section><section class="settings-section"><div><h3>Export my data</h3><p>Includes domains, sources, memories, conversations, and review records. Store the export privately.</p></div><a class="btn" href="/api/export" download>${icon('download')}Export JSON</a></section><section class="settings-section"><div><h3>Signed in as: ${esc(state.user.name)}</h3><p>Signing out invalidates your current credential.</p></div><button class="btn" data-action="logout">${icon('logout')}Sign out</button></section>`,'Workspace settings');
+  shell(`<div class="heading"><div><p class="eyebrow">Workspace</p><h1>Workspace settings</h1><p>Choose your appearance and manage workspace preferences.</p></div></div>${demoBanner()}<section class="settings-section appearance-setting"><div><h3>Appearance</h3><p>Light by default. Your choice is saved in this browser.</p></div>${themePicker()}</section><section class="settings-section"><div><h3>Model connections</h3><p>STT: ${esc(state.config.providers?.stt)} · LLM: ${esc(state.config.providers?.llm)} · TTS: ${esc(state.config.providers?.tts)}</p><p>Services are configured on the server. API keys stay server-side.</p></div><span class="tag">${state.config.demo?'Local demo':'Configured services'}</span></section><section class="settings-section"><div><h3>Persistent storage</h3><p>${state.config.database==='sqlite'?'Local SQLite':'PostgreSQL · Row-level security'} · Confirmed memories retain versions and provenance.</p></div></section><section class="settings-section"><div><h3>Export my data</h3><p>Includes domains, sources, memories, conversations, and review records. Store the export privately.</p></div><a class="btn" href="/api/export" download>${icon('download')}Export JSON</a></section><section class="settings-section"><div><h3>Signed in as: ${esc(state.user.name)}</h3><p>Signing out invalidates your current credential.</p></div><button class="btn" data-action="logout">${icon('logout')}Sign out</button></section>`,'Workspace settings');
 }
 function messageHTML(m) {
-  return `<article class="message ${esc(m.role)}" data-message="${m.id}"><div class="speaker"><strong>${esc(roleName[m.role]||m.role)}</strong><time>${dt(m.created_at)}</time>${m.role==='private_note'?'<span>Only you</span>':''}</div><div class="text">${esc(m.content)}</div>${m.citations?.length?`<div class="citations">Based on ${countLabel(m.citations.length,'authorized memory','authorized memories')}</div>`:''}</article>`;
+  const saveable=!state.guest && state.session?.mode==='private' && state.session.status!=='revoked' && m.role==='owner';
+  return `<article class="message ${esc(m.role)}" data-message="${esc(m.id)}"><div class="speaker"><strong>${esc(roleName[m.role]||m.role)}</strong><time>${dt(m.created_at)}</time>${m.role==='private_note'?'<span>Only you</span>':''}${saveable?`<button class="message-save" data-action="save-chat-memory" data-id="${esc(m.id)}" aria-label="Save this message as a memory">${icon('file')}<span>Save memory</span></button>`:''}</div><div class="text">${esc(m.content)}</div>${m.citations?.length?`<div class="citations">Based on ${countLabel(m.citations.length,'authorized memory','authorized memories')}</div>`:''}</article>`;
 }
 function conversation(s, canSpeak) {
-  return `<section class="conversation" aria-label="Conversation"><div class="conversation-top"><span>${canSpeak?'Talk with Echooo':'Live transcript · Private supervision'}</span><span class="status" id="room-state">${esc(statusName(s))}</span></div><div class="transcript" id="transcript" role="log" aria-label="Transcript" aria-live="polite">${s.messages.length?s.messages.map(messageHTML).join(''):empty('Ready to talk',canSpeak?'Type a message or turn on your microphone.':'Create an invitation and share it with your guest. Their conversation will appear here.','', 'wave')}</div><div class="composer">${s.status==='active'?`<form id="message-form"><textarea id="message-input" aria-label="${canSpeak?'Message':'Private note'}" placeholder="${canSpeak?'Type your message…':'Write a private note. It will not be sent to the guest…'}" maxlength="6000" required></textarea><button class="btn primary" type="submit">${canSpeak?'Send':'Save note'} ${icon('arrow')}</button></form><div class="foot"><span id="partial" class="muted"><small>${canSpeak?(state.guest?'Personal facts come from this authorization. New decisions require owner approval.':s.domain_ids.length?`Using ${esc(s.domain_ids.map(domainName).join(', '))} · ${s.allow_learning?'Memory updates proposed after chat':'Automatic memory updates off'}`:'General chat · No personal memories loaded · Automatic memory updates off'):'Notes are excluded from public replies and memory extraction.'}</small></span>${canSpeak?`<div class="actions"><label><input type="checkbox" id="speak-toggle">Read replies aloud</label><button class="icon-btn" data-action="mic" aria-label="Turn on microphone">${icon('mic')}</button><button class="icon-btn" data-action="interrupt" aria-label="Interrupt reply">${icon('stop')}</button></div>`:''}</div>`:`<p class="muted"><small>This conversation has ended. Start a new authorization to continue.</small></p>`}</div></section>`;
+  const active=s.status==='active';
+  const disclosure=state.guest?'You are speaking with AI. The owner can view this transcript.':!canSpeak?'Private notes are never sent to the guest.':'';
+  return `<section class="conversation" aria-label="Conversation">
+    <div class="transcript" id="transcript" role="log" aria-label="Transcript" aria-live="polite" tabindex="0"><div class="message-column" id="messages">${s.messages.length?s.messages.map(messageHTML).join(''):empty(canSpeak?'Ready to talk':'Follow the conversation',canSpeak?'Start a voice conversation, or write a message below.':'Create an invitation. Your guest’s messages will appear here.','', 'wave')}${!active&&!state.guest?summaryHTML(s):''}</div></div>
+    <button class="btn jump-latest" data-action="latest" hidden>Latest messages ↓</button>
+    <div class="composer"><div class="composer-inner">${active?`
+      ${canSpeak?voiceControls(icon):`<div class="supervision-note">${icon('shield')} Private supervision <span id="room-state">Connecting…</span></div>`}
+      <div id="partial" class="partial-transcript" aria-live="off" hidden></div>
+      <form id="message-form"><textarea id="message-input" rows="1" aria-label="${canSpeak?'Message':'Private note'}" placeholder="${canSpeak?'Or type a message…':'Write a private note…'}" maxlength="6000" required></textarea><button class="btn send-message" type="submit" aria-label="${canSpeak?'Send message':'Save private note'}">${icon('arrow')}<span>${canSpeak?'Send':'Save note'}</span></button></form>
+      ${disclosure?`<div class="composer-caption">${disclosure}</div>`:''}`:`<p class="ended-note">${icon('lock')} This conversation has ${s.status==='expired'?'expired':s.status==='revoked'?'been revoked':'ended'}. ${!state.guest?'<button class="btn" data-action="quick-chat">Start a new conversation</button>':''}</p>`}</div></div>
+  </section>`;
 }
 function inspector(s) {
   if(s.mode==='private')return `<h3>${icon('shield')} Chat context</h3><dl><dt>Active domains</dt><dd>${esc(s.domain_ids.map(domainName).join(', ')||'None · General chat')}</dd><dt>Personal memories</dt><dd>${s.read_ids.length?countLabel(s.read_ids.length,'selected memory','selected memories'):s.domain_ids.length?'No confirmed memories selected yet':'Not accessed'}</dd><dt>Automatic proposals</dt><dd>${s.allow_learning?esc(domainName(s.write_domain_id))+' · Review before saving':'Off'}</dd><dt>Expires at</dt><dd>${dt(s.expires_at)}</dd></dl><hr><p class="dialog-help">${s.domain_ids.length?'Only selected memories are available here.':'Ask general questions or share something in this conversation. Personal memories are not loaded.'}</p><p class="dialog-help">Use Save memory to choose what to keep and where it belongs.</p>`;
@@ -146,11 +197,42 @@ function inspector(s) {
 function renderSession() {
   const s=state.session,active=s.status==='active' && s.expires_at>Date.now()/1000;
   if(!active && s.status==='active')s.status='expired';
-  shell(`<div class="heading"><div><p class="eyebrow">${s.mode==='private'?'Private conversation':'Scoped delegation'}</p><h1 id="session-title">${esc(s.title)}</h1><p>${s.mode==='private'?(s.domain_ids.length?`A private chat using memories from ${esc(s.domain_ids.map(domainName).join(', '))}.`:'General chat. No personal memories are loaded or updated automatically.'):'Your assistant identifies itself as AI. Follow the conversation, review requests, and revoke access at any time.'}</p></div><div class="actions">${s.mode==='private'?`<button class="btn" data-action="choose-domains">${icon('folder')}Choose domains</button><button class="btn" data-action="save-chat-memory">${icon('file')}Save memory</button><button class="btn" data-action="new-delegate">${icon('arrow')}Delegate</button>`:''}${active?`${s.mode==='delegate'?'<button class="btn" data-action="invite">'+icon('link')+'Create invitation</button>':''}<button class="btn" data-action="end-session">End and review</button><button class="icon-btn" data-action="revoke-session" aria-label="Revoke access now">${icon('shield')}</button>`:''}</div></div>${demoBanner()}<div class="room-layout">${conversation(s,s.mode==='private')}<aside class="inspector" id="inspector">${inspector(s)}</aside></div>${!active?summaryHTML(s):''}`,'Conversations');
+  shell(`${domainControl(s,{icon,esc,domainName})}${state.config.demo?'<div class="chat-demo-note">Local demo · Text replies use authorized memories. Microphone requires a live speech service.</div>':''}
+    <div class="room-layout">${conversation(s,s.mode==='private')}</div>
+    <dialog class="context-drawer" id="context-drawer" aria-labelledby="context-title"><div class="context-heading"><h2 id="context-title">${s.mode==='private'?'Chat context':'Authorization & approvals'}</h2><div class="actions"><button class="icon-btn pin-context" data-action="pin-context" aria-label="Pin context beside conversation" title="Pin context beside conversation" aria-pressed="false">${icon('panel')}</button><button class="icon-btn" data-action="close-context" aria-label="Close context">${icon('close')}</button></div></div><div class="inspector" id="inspector">${inspector(s)}</div></dialog>`,'Conversations',sessionHeader(s,{icon,esc,domainName,prefs:state.voicePrefs}));
+  bindSessionChrome();
   bindConversation(s.mode==='private');
   if(active&&s.mode==='private')$('#message-input')?.focus();
   if(active){ connect(s.id,false); poll=setInterval(refreshSession,3500); }
 }
+function bindSessionChrome() {
+  const drawer=$('#context-drawer');
+  if(drawer) {
+    drawer.addEventListener('close',()=>{if(!drawer.open){drawer.classList.remove('pinned');$('.chat-shell')?.classList.remove('context-pinned');$$('[data-action=context]').forEach(b=>b.setAttribute('aria-expanded','false'));const pin=$('[data-action=pin-context]');pin?.setAttribute('aria-pressed','false');pin?.setAttribute('aria-label','Pin context beside conversation');if(pin)pin.title='Pin context beside conversation';$('.context-toggle')?.focus();}});
+    drawer.addEventListener('click',e=>{if(e.target===drawer){const r=drawer.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)drawer.close();}});
+  }
+  $$('.toolbar-menu').forEach(menu=>menu.addEventListener('toggle',()=>{
+    if(menu.open)$$('.toolbar-menu').filter(other=>other!==menu).forEach(other=>other.open=false);
+  }));
+  if($('#dictation-toggle'))$('#dictation-toggle').onchange=e=>{state.voicePrefs.dictation=e.target.checked;state.voice?.setDictation(e.target.checked);};
+  if($('#mute-toggle'))$('#mute-toggle').onchange=e=>{state.voicePrefs.muted=e.target.checked;state.voice?.setMuted(e.target.checked);};
+}
+function openContext() {
+  const drawer=$('#context-drawer');
+  if(!drawer)return;
+  if(drawer.open){drawer.close();return;}
+  drawer.showModal();
+  $$('[data-action=context]').forEach(b=>b.setAttribute('aria-expanded','true'));
+}
+function pinContext() {
+  const drawer=$('#context-drawer');if(!drawer?.open)return;
+  const pinned=!drawer.classList.contains('pinned');
+  drawer.close();drawer.classList.toggle('pinned',pinned);$('.chat-shell').classList.toggle('context-pinned',pinned);
+  if(pinned)drawer.show();else drawer.showModal();
+  const button=$('[data-action=pin-context]');button.setAttribute('aria-pressed',String(pinned));
+  button.setAttribute('aria-label',pinned?'Unpin context':'Pin context beside conversation');button.title=pinned?'Unpin context':'Pin context beside conversation';
+}
+function renderVoice() { updateVoiceUI(state.voice,{icon}); }
 function summaryHTML(s) {
   return `<section class="review-row"><div class="review-header"><div><h2>Conversation review</h2><p>${countLabel(s.summary.checked_replies||0,'checked reply','checked replies')} · ${countLabel(s.proposals.length,'memory proposal')}</p></div><div class="actions">${s.status==='ended'&&s.allow_learning?'<button class="btn" data-action="retry-learning">Extract memories</button>':''}<a class="btn primary" href="#review">Review updates ${icon('arrow')}</a></div></div><details><summary>Participant statements and approved decisions</summary>${(s.summary.statements||[]).map(x=>`<div class="evidence"><strong>${esc(roleName[x.speaker]||x.speaker)}</strong>: ${esc(x.text)}</div>`).join('')||'<p class="muted">No statements recorded.</p>'}</details><details><summary>Checks and authorization log · ${s.audit.length}</summary><ul class="detail-list">${s.audit.map(a=>`<li>${dt(a.created_at)} · ${esc(a.kind)} ${a.detail.kind_result?'· '+esc(a.detail.kind_result):''}</li>`).join('')}</ul></details></section>`;
 }
@@ -160,55 +242,80 @@ async function refreshSession() {
     const sid=state.session.id;
     const s=await api(`/sessions/${sid}`);if(state.session?.id!==sid)return;state.session=s;
     if(s.status!=='active'||s.expires_at<Date.now()/1000){disconnect();renderSession();return;}
-    if($('#session-title'))$('#session-title').textContent=s.title;
-    if($('#inspector')){$('#inspector').innerHTML=inspector(s);bindActions($('#inspector'));}
+    if($('#session-title')){$('#session-title').textContent=s.title;$('#session-title').title=s.title;}
+    if($('#inspector')&&!$('#inspector').contains(document.activeElement)){const html=inspector(s);if($('#inspector').innerHTML!==html){$('#inspector').innerHTML=html;bindActions($('#inspector'));}}
+    const badge=$('.approval-count');if(badge){const n=s.actions.filter(a=>a.status==='pending').length;badge.hidden=!n;badge.textContent=n;$('[aria-controls=context-drawer]').setAttribute('aria-label',n?`Chat context, ${n} requests need approval`:'Chat context');}
     s.messages.forEach(appendMessage);
   }catch(err){disconnect();toast(err.message);}
 }
 function appendMessage(m) {
   if(state.session&&!state.session.messages.some(x=>x.id===m.id))state.session.messages.push(m);
-  const box=$('#transcript');if(!box||$(`[data-message="${m.id}"]`,box))return;
-  $('.empty',box)?.remove();box.insertAdjacentHTML('beforeend',messageHTML(m));box.scrollTop=box.scrollHeight;
+  const box=$('#messages'), transcript=$('#transcript');if(!box||$(`[data-message="${m.id}"]`,box))return;
+  const nearBottom=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<100;
+  $('.empty',box)?.remove();box.insertAdjacentHTML('beforeend',messageHTML(m));bindActions(box.lastElementChild);
+  if(nearBottom)scrollToLatest();else $('[data-action=latest]').hidden=false;
+  if($('#partial')){$('#partial').textContent='';$('#partial').hidden=true;}
+}
+function scrollToLatest() {
+  const transcript=$('#transcript');if(transcript)transcript.scrollTop=transcript.scrollHeight;
+  const jump=$('[data-action=latest]');if(jump)jump.hidden=true;
 }
 function bindConversation(canSpeak) {
+  scrollToLatest();
+  const transcript=$('#transcript');if(transcript)transcript.onscroll=()=>{$('[data-action=latest]').hidden=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<100;};
   const form=$('#message-form');if(!form)return;
   form.onsubmit=async e=>{
     e.preventDefault();const input=$('#message-input'),value=input.value.trim();if(!value)return;
     const button=$('button[type=submit]',form);button.disabled=true;
     try{
       if(!canSpeak){const m=await api(`/sessions/${state.session.id}/notes`,'POST',{content:value});appendMessage(m);}
-      else if(state.socket?.readyState===WebSocket.OPEN)state.socket.send(JSON.stringify({type:'input.text',content:value}));
+      else if(state.socket?.readyState===WebSocket.OPEN){state.voice.thinking=true;state.voice.changed();state.socket.send(JSON.stringify({type:'input.text',content:value}));}
       else{
         const result=await api(`${state.guest?'/guest':''}/sessions/${state.session.id}/messages`,'POST',{content:value});
         appendMessage(result.user);appendMessage(result.assistant);state.voice?.speak(result.assistant.content);
       }
-      input.value='';
+      input.value='';input.style.height='auto';scrollToLatest();
     }catch(err){toast(err.message);}finally{button.disabled=false;input.focus();}
   };
   $('#message-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();form.requestSubmit();}};
-  if($('#speak-toggle'))$('#speak-toggle').onchange=e=>{state.voice.enabled=e.target.checked;if(!e.target.checked)state.voice.stopPlayback();};
+  $('#message-input').oninput=e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,140)+'px';};
 }
 function connect(sid,guest) {
   const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/sessions/${sid}?role=${guest?'guest':'owner'}`);
-  ws.binaryType='arraybuffer';state.socket=ws;const voice=new Voice(ws,toast);state.voice=voice;
-  ws.onmessage=async e=>{
+  ws.binaryType='arraybuffer';state.socket=ws;
+  const voice=new Voice(ws,toast,()=>{if(state.voice===voice)renderVoice();});state.voice=voice;
+  voice.canSpeak=guest||state.session?.mode==='private';
+  Object.assign(voice,state.voicePrefs);
+  ws.onopen=()=>{voice.configureOutput();renderVoice();};
+  ws.onmessage=e=>{
     if(state.socket!==ws)return;
-    if(e.data instanceof ArrayBuffer){await state.voice?.pcm(e.data);return;}
+    if(e.data instanceof ArrayBuffer){voice.pcm(e.data);return;}
     const m=JSON.parse(e.data);
     if(m.type==='message')appendMessage(m.message);
-    if(m.type==='speech.checked')state.voice?.speak(m.content);
-    if(m.type==='playback.stop')state.voice?.stopPlayback();
-    if(m.type==='audio.start')await state.voice?.preparePlayback(m.sample_rate);
-    if(m.type==='audio.ready')await voice.capture(m.sample_rate);
-    if(m.type==='audio.error'){voice.stopMic();toast(m.message);$('[data-action=mic]')?.classList.remove('recording');}
-    if(m.type==='transcript.partial'&&$('#partial'))$('#partial').textContent=m.content;
-    if(m.type==='session.state'&&$('#room-state'))$('#room-state').textContent=({thinking:'Checking reply',listening:'Listening',speaking:'Replying'}[m.state]||m.state)+(m.reply_ms?` · ${(m.reply_ms/1000).toFixed(1)}s`:'');
-    if(m.type==='session.ready'&&$('#room-state'))$('#room-state').textContent='Connected';
-    if(m.type==='error'){toast(m.message);$('[data-action=mic]')?.classList.remove('recording');}
-    if(m.type==='session.closed'){state.voice?.close();toast(m.message);if($('#room-state'))$('#room-state').textContent='Authorization ended';if(state.guest){state.session.status='ended';renderGuest();}else refreshSession();}
+    if(m.type==='speech.checked')voice.speak(m.content);
+    if(m.type==='playback.stop'){voice.thinking=false;voice.stopPlayback();if($('#room-state'))$('#room-state').textContent='Connected';}
+    if(m.type==='audio.start')voice.preparePlayback(m.sample_rate);
+    if(m.type==='audio.end')voice.finishPlayback();
+    if(m.type==='audio.ready')voice.capture(m.sample_rate);
+    if(m.type==='audio.error')voice.fail(m.message,'microphone');
+    if(m.type==='transcript.partial'&&$('#partial')){$('#partial').textContent=m.content;$('#partial').hidden=!m.content;}
+    if(m.type==='transcript.final'&&$('#message-input')){
+      const input=$('#message-input');input.value=(input.value.trim()+' '+m.content).trim().slice(0,6000);input.dispatchEvent(new Event('input'));
+      $('#partial').textContent='';$('#partial').hidden=true;
+    }
+    if(m.type==='session.state'){voice.thinking=m.state==='thinking';voice.changed();if($('#room-state'))$('#room-state').textContent=voice.thinking?'Checking reply':'Connected';}
+    if(m.type==='session.ready'){if($('#room-state'))$('#room-state').textContent='Connected';renderVoice();}
+    if(m.type==='error'){
+      voice.thinking=false;
+      if(m.code==='tts_unavailable'&&voice.enabled)voice.fail(m.message);
+      else if(m.code!=='tts_unavailable')toast(m.message);
+      renderVoice();
+    }
+    if(m.type==='session.closed'){voice.close();toast(m.message);if(state.guest){state.session.status='ended';renderGuest();}else refreshSession();}
   };
-  ws.onclose=()=>{voice.close();if(state.socket===ws&&$('#room-state'))$('#room-state').textContent='Disconnected';};
-  ws.onerror=()=>toast('The live connection is unavailable. You can still send text messages.');
+  ws.onclose=()=>{voice.close();if(state.socket===ws){if($('#room-state'))$('#room-state').textContent='Disconnected';renderVoice();}};
+  ws.onerror=()=>{voice.close();renderVoice();};
+  renderVoice();
 }
 function disconnect() {clearInterval(poll);poll=null;state.voice?.close();state.voice=null;if(state.socket){state.socket.onmessage=null;state.socket.onerror=null;state.socket.onclose=null;state.socket.close();state.socket=null;}}
 
@@ -264,14 +371,15 @@ async function quickChat() {
   startingChat=true;
   try {
     const result=await api('/sessions/quick-chat','POST');
-    navigate(`sessions/${result.id}`);
+    if(state.session?.id!==result.id)navigate(`sessions/${result.id}`);
+    else {toast('Your empty conversation is ready.');$('.shell')?.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');$('#message-input')?.focus();}
   } finally {startingChat=false;}
 }
-function saveChatMemoryDialog() {
+function saveChatMemoryDialog(messageId) {
   const session=state.session,messages=session.messages.filter(m=>m.role==='owner');
   if(!messages.length){toast('Send a message first, then choose what to save.');return;}
   const domains=state.domains.filter(d=>!session.domain_ids.length||session.domain_ids.includes(d.id));
-  const selected=messages[messages.length-1];let createdDomainId=null;
+  const selected=messages.find(m=>m.id===messageId)||messages[messages.length-1];let createdDomainId=null;
   const destination=domains.length?`<div class="form-field"><label for="f-destination">Destination domain</label><select id="f-destination" name="domain_id">${domains.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div>`:field('domain_name','Create a destination domain','','text','required maxlength="60"');
   const modal=openDialog('Save a memory for review',destination+`<div class="form-field"><label for="f-evidence">Your source message</label><select id="f-evidence" name="message_id">${messages.map(m=>`<option value="${m.id}" ${m.id===selected.id?'selected':''}>${esc(m.content.slice(0,80))}</option>`).join('')}</select></div>`+field('title','Memory title',selected.content.slice(0,60),'text','required maxlength="150"')+area('content','Information to remember',selected.content,'required maxlength="12000"')+'<p class="dialog-help">This creates a proposal in the chosen domain. It is not available as a memory until you review it. The active chat does not gain access to that domain.</p>',async fd=>{
     let did=fd.get('domain_id')||createdDomainId;
@@ -281,7 +389,25 @@ function saveChatMemoryDialog() {
   },'Send for review');
   $('#f-evidence',modal).onchange=e=>{const m=messages.find(m=>m.id===e.target.value);$('#f-title',modal).value=m.content.slice(0,60);$('#f-content',modal).value=m.content;};
 }
+async function privateSessionDialog(changingContext=false) {
+  const initial=state.route[0]==='domain'?[state.route[1]]:changingContext?(state.session?.domain_ids||[]):state.domains.filter(d=>d.name==='default').map(d=>d.id);
+  const memories=(await Promise.all(state.domains.map(d=>api(`/domains/${d.id}/memories`)))).flat().filter(m=>!m.expires_at||m.expires_at>Date.now()/1000);
+  const readIds=memories.filter(m=>!changingContext||!initial.includes(m.domain_id)||state.session.read_ids.includes(m.id)).map(m=>m.id);
+  const learning=changingContext?state.session.allow_learning:initial.length>0;
+  const modal=openDialog('Choose conversation domains',privateContextForm(state.domains,memories,initial,learning,{esc,icon}),async fd=>{
+    const domains=fd.getAll('domains'),read=fd.getAll('read_ids');
+    if(domains.length>12)throw new Error('Choose up to 12 domains for one conversation.');
+    if(read.length>100)throw new Error('Choose up to 100 memories under Memory access.');
+    const result=await api('/sessions','POST',{mode:'private',title:'New conversation',domain_ids:domains,read_ids:read,disclose_ids:[],
+      write_domain_id:fd.has('allow_learning')?fd.get('write_domain_id'):null,allow_learning:fd.has('allow_learning'),
+      action_policy:'none',goal:fd.get('goal')||'',duration_minutes:Number(fd.get('duration_minutes'))});
+    toast('Conversation started with your selected domains.');navigate(`sessions/${result.id}`);
+  },'Start conversation',{className:'context-picker-dialog',focusSelector:'input[name=domains],#without-memory'});
+  bindPrivateContext(modal,state.domains,memories,readIds,{esc,domainName});
+  if(changingContext&&state.session.write_domain_id)$('#f-write',modal).value=state.session.write_domain_id;
+}
 async function sessionDialog(mode, changingContext=false) {
+  if(mode==='private')return privateSessionDialog(changingContext);
   if(!state.domains.length){toast(mode==='private'?'You can chat without domains. Add one when you want to use personal memories.':'Create a domain to authorize a delegation.');domainDialog();return;}
   const initial=state.route[0]==='domain'?[state.route[1]]:changingContext?(state.session?.domain_ids||[]):mode==='private'?state.domains.filter(d=>d.name==='default').map(d=>d.id):[];
   const all=(await Promise.all(state.domains.map(d=>api(`/domains/${d.id}/memories`)))).flat();
@@ -351,6 +477,7 @@ function bindActions(root=document) {
   $$('[data-action]',root).forEach(b=>b.onclick=async()=>{
     const action=b.dataset.action,id=b.dataset.id;
     try{
+      const menu=b.closest('.toolbar-menu');if(menu){menu.open=false;$('summary',menu)?.focus();}
       if(action==='menu'){const open=$('.shell').classList.toggle('menu-open');b.setAttribute('aria-expanded',String(open));}
       if(action==='new-domain')domainDialog();
       if(action==='edit-domain')domainDialog(true);
@@ -359,10 +486,16 @@ function bindActions(root=document) {
       if(action==='versions')await versionsDialog(id);
       if(action==='new-source')sourceDialog();
       if(action==='upload')uploadDialog();
-      if(action==='quick-chat'){b.disabled=true;await quickChat();}
+      if(action==='quick-chat'){b.disabled=true;try{await quickChat();}finally{b.disabled=false;}}
+      if(action==='rename-session')renameSessionDialog(id);
+      if(action==='delete-session')deleteSessionDialog(id);
       if(action==='new-private')await sessionDialog('private');
       if(action==='choose-domains')await sessionDialog('private',true);
-      if(action==='save-chat-memory')saveChatMemoryDialog();
+      if(action==='save-chat-memory')saveChatMemoryDialog(id);
+      if(action==='context')openContext();
+      if(action==='pin-context')pinContext();
+      if(action==='close-context')$('#context-drawer')?.close();
+      if(action==='latest')scrollToLatest();
       if(action==='new-delegate')await sessionDialog('delegate');
       if(action==='extract'){
         b.disabled=true;b.textContent='Extracting…';const p=await api(`/sources/${id}/extract`,'POST');toast(`Ready for review: ${countLabel(p.length,'memory proposal')}.`);await renderRoute();
@@ -379,22 +512,33 @@ function bindActions(root=document) {
       if(action==='retry-learning'){b.disabled=true;const p=await api(`/sessions/${state.session.id}/learn`,'POST');toast(`Ready for review: ${countLabel(p.length,'update')}.`);await renderRoute();}
       if(action==='refresh')await renderRoute();
       if(action==='logout'){await api('/auth/logout','POST');disconnect();location.href='/';}
-      if(action==='mic'){
-        if(!state.voice||state.socket?.readyState!==WebSocket.OPEN)throw new Error('Connect to a conversation first.');
-        if((state.guest?state.session.stt:state.config.providers?.stt)==='mock')throw new Error('The local demo uses text input. Configure AssemblyAI to enable speech recognition.');
-        const enabled=await state.voice.toggleMic();b.classList.toggle('recording',enabled);b.setAttribute('aria-label',enabled?'Turn off microphone':'Turn on microphone');
+      if(action==='voice'){
+        if(state.voice?.active){state.voice.end();return;}
+        if(!state.voice||state.socket?.readyState!==WebSocket.OPEN||state.voice.closed){disconnect();connect(state.session.id,state.guest);if(!state.guest)poll=setInterval(refreshSession,3500);toast('Reconnecting. Click Start voice when connected.');return;}
+        if((state.guest?state.session.stt:state.config.providers?.stt)==='mock'){state.voice.fail('Microphone requires a live speech recognition service. You can still type messages.','microphone');return;}
+        await state.voice.start();
       }
-      if(action==='interrupt'){state.voice?.stopPlayback();if(state.socket?.readyState===WebSocket.OPEN)state.socket.send(JSON.stringify({type:'interrupt'}));}
+      if(action==='pause-mic')await state.voice?.pauseMic();
+      if(action==='mute-voice'){state.voicePrefs.muted=!state.voice.muted;state.voice.setMuted(state.voicePrefs.muted);}
+      if(action==='interrupt')state.voice?.interrupt();
+      if(action==='dismiss-audio-error'){state.voice.error=null;state.voice.changed();}
+      if(action==='retry-audio'){
+        const voice=state.voice;if(!voice)return;
+        if(voice.error?.kind==='microphone'){$('[data-action=voice]').click();return;}
+        if(!voice.active||voice.closed)return;
+        try{await voice.unlockPlayback();voice.error=null;voice.configureOutput();voice.send({type:'playback.retry'});voice.changed();}
+        catch{voice.fail('Audio playback is blocked. Check your browser sound permissions.');}
+      }
     }catch(err){toast(err.message);b.disabled=false;if(action==='extract')b.textContent='Extract memories';}
   });
 }
 function authPage(needsSetup) {
-  $('#app').innerHTML=`<main class="auth-page" id="main">${brand}<p class="eyebrow">Personal agent workspace</p><h1>${needsSetup?'Create your private workspace':'Welcome back'}</h1><p>${needsSetup?'Set up your sign-in to start managing domains and memories.':'Sign in to manage memories, conversations, and pending updates.'}</p><form id="auth-form"><div class="form-error" role="alert"></div>${field('name','Username','','text','required minlength="2" maxlength="60" autocomplete="username"')}${field('password','Password','','password',`required maxlength="200" autocomplete="${needsSetup?'new-password':'current-password'}"`)}<button class="btn primary" type="submit">${needsSetup?'Create workspace':'Sign in'} ${icon('arrow')}</button></form><p class="footnote">${needsSetup?'Initial setup creates one owner account for this deployment.':'Sign in to access your data. Invitation links grant access to one conversation only.'}</p></main>`;
+  $('#app').innerHTML=`<div class="auth-appearance">${themePicker()}</div><main class="auth-page" id="main">${brand}<p class="eyebrow">Personal agent workspace</p><h1>${needsSetup?'Create your private workspace':'Welcome back'}</h1><p>${needsSetup?'Set up your sign-in to start managing domains and memories.':'Sign in to manage memories, conversations, and pending updates.'}</p><form id="auth-form"><div class="form-error" role="alert"></div>${field('name','Username','','text','required minlength="2" maxlength="60" autocomplete="username"')}${field('password','Password','','password',`required maxlength="200" autocomplete="${needsSetup?'new-password':'current-password'}"`)}<button class="btn primary" type="submit">${needsSetup?'Create workspace':'Sign in'} ${icon('arrow')}</button></form><p class="footnote">${needsSetup?'Initial setup creates one owner account for this deployment.':'Sign in to access your data. Invitation links grant access to one conversation only.'}</p></main>`;
   $('#auth-form').onsubmit=async e=>{e.preventDefault();const b=$('button',e.target);b.disabled=true;try{const d=await api(needsSetup?'/auth/setup':'/auth/login','POST',Object.fromEntries(new FormData(e.target)));state.user=d.user;await startOwner();}catch(err){$('.form-error',e.target).textContent=err.message;}finally{b.disabled=false;}};
 }
 function renderGuest() {
   const s=state.session;
-  $('#app').innerHTML=`<main class="guest-shell" id="main"><header class="guest-header">${brand}<span class="tag green">Guest conversation</span></header><div class="heading"><div><p class="eyebrow">An authorized conversation</p><h1>${esc(s.title)}</h1><p>You are speaking with an authorized AI assistant. New commitments require owner approval.</p></div></div>${s.demo?'<div class="banner">'+icon('info')+'Local demo: replies are generated from authorized memories.</div>':''}<div class="room-layout">${conversation(s,true)}</div><p class="muted"><small>The owner can view the transcript. This conversation is open only while authorization is valid.</small></p></main>`;
+  $('#app').innerHTML=`<main class="guest-shell guest-chat" id="main"><header class="guest-header">${brand}<div class="guest-title"><h1>${esc(s.title)}</h1><small>Authorized guest conversation</small></div><span class="tag green">AI assistant</span>${themePicker()}</header><div class="room-layout">${conversation(s,true)}</div></main>`;
   bindActions();bindConversation(true);
 }
 async function startGuest(sid) {
@@ -407,13 +551,14 @@ async function startOwner() {
 async function boot() {
   if(location.pathname==='/invite'){
     const token=location.hash.slice(1);history.replaceState(null,'','/invite');
-    $('#app').innerHTML=`<main class="auth-page" id="main">${brand}<p class="eyebrow">Invitation</p><h1>Join an authorized conversation</h1><p>You will talk with the Echooo AI assistant. The owner can view this conversation, and it may produce memory proposals for their review.</p><button class="btn primary" id="join">Join conversation ${icon('arrow')}</button><p class="form-error" role="alert"></p></main>`;
+    $('#app').innerHTML=`<div class="auth-appearance">${themePicker()}</div><main class="auth-page" id="main">${brand}<p class="eyebrow">Invitation</p><h1>Join an authorized conversation</h1><p>You will talk with the Echooo AI assistant. The owner can view this conversation, and it may produce memory proposals for their review.</p><button class="btn primary" id="join">Join conversation ${icon('arrow')}</button><p class="form-error" role="alert"></p></main>`;
     $('#join').onclick=async()=>{const b=$('#join');b.disabled=true;try{const r=await api('/guest/join','POST',{token});history.replaceState(null,'',`/room/${r.session_id}`);await startGuest(r.session_id);}catch(err){$('.form-error').textContent=err.message;b.disabled=false;}};return;
   }
   if(location.pathname.startsWith('/room/')){await startGuest(location.pathname.split('/')[2]);return;}
   try{const auth=await api('/auth');if(!auth.user)authPage(auth.needs_setup);else{state.user=auth.user;await startOwner();}}catch(err){$('#app').innerHTML=empty('Unable to connect to the workspace',err.message);}
 }
-document.addEventListener('click',e=>{const shell=$('.shell.menu-open');if(shell&&!e.target.closest('.sidebar,[data-action=menu]')){shell.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');}});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('.shell')?.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');}});
+document.addEventListener('click',e=>{$$('.toolbar-menu[open]').filter(menu=>!menu.contains(e.target)).forEach(menu=>menu.open=false);const shell=$('.shell.menu-open');if(shell&&!e.target.closest('.sidebar,[data-action=menu]')){shell.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$$('.toolbar-menu[open]').forEach(menu=>{menu.open=false;$('summary',menu)?.focus();});if($('#context-drawer')?.classList.contains('pinned')&&!$('#modal')?.open){$('#context-drawer').close();e.preventDefault();}$('.shell')?.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');}});
 window.addEventListener('pagehide',disconnect);
+window.matchMedia('(max-width:1100px)').addEventListener('change',e=>{if(e.matches&&$('#context-drawer')?.classList.contains('pinned'))pinContext();});
 boot();

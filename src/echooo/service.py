@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections import defaultdict
 
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
 from echooo import database as db
 from echooo.contracts import DomainInput, MemoryInput, SessionInput, ReviewInput, SaveConversationMemory
@@ -193,11 +193,50 @@ class Service:
     def quick_chat(self, owner: str) -> dict:
         with self.store.scope(owner) as r:
             domain = db.ensure_default_domain(r.c, owner)
+            # Serialize default-chat creation across workers. SQLite already holds
+            # a write lock from ensure_default_domain's upsert in this transaction.
+            r.c.execute(select(db.domains.c.id).where(db.domains.c.owner_id == owner,
+                db.domains.c.id == domain["id"]).with_for_update())
             facts = r.list(db.memories, db.memories.c.domain_id == domain["id"])
             facts = [m for m in facts if m["expires_at"] is None or m["expires_at"] > time.time()]
+            latest = r.c.execute(select(db.sessions).where(db.sessions.c.owner_id == owner,
+                db.sessions.c.mode == "private").order_by(db.sessions.c.created_at.desc(),
+                db.sessions.c.id.desc()).limit(1)).mappings().first()
+            if latest:
+                s = dict(latest)
+                same_scope = (s["domain_ids"] == [domain["id"]] and s["write_domain_id"] == domain["id"]
+                    and s["allow_learning"] and s["action_policy"] == "none" and not s["goal"]
+                    and not s["audience"] and not s["voice"] and not s["disclose_ids"]
+                    and set(s["read_ids"]) == {m["id"] for m in facts}
+                    and s["grants"] == {m["id"]: m["version"] for m in facts})
+                if (same_scope and s["status"] == "active" and s["expires_at"] > time.time()
+                    and not r.list(db.messages, db.messages.c.session_id == s["id"])
+                    and not r.list(db.proposals, db.proposals.c.session_id == s["id"])
+                    and not r.list(db.actions, db.actions.c.session_id == s["id"])):
+                    self._active(r, s["id"])
+                    return s
             data = SessionInput(mode="private", domain_ids=[domain["id"]],
                 write_domain_id=domain["id"], allow_learning=True, action_policy="none")
             return self._create_session(r, data, facts=facts)
+
+    def list_sessions(self, owner: str) -> list[dict]:
+        with self.store.scope(owner) as r:
+            counts = dict(r.c.execute(select(db.messages.c.session_id, func.count()).where(
+                db.messages.c.owner_id == owner).group_by(db.messages.c.session_id)).all())
+            return [{**s, "message_count": counts.get(s["id"], 0)} for s in reversed(r.list(db.sessions))]
+
+    def rename_session(self, owner: str, sid: str, title: str) -> dict:
+        with self.store.scope(owner) as r:
+            need(r.get(db.sessions, sid), "Conversation")
+            r.change(db.sessions, sid, title=title)
+            return r.get(db.sessions, sid)
+
+    def delete_session(self, owner: str, sid: str) -> None:
+        with self.store.scope(owner) as r:
+            need(r.get(db.sessions, sid), "Conversation")
+            # Only this conversation and its FK children are removed. Confirmed
+            # memories (including their evidence/provenance) remain in domains.
+            r.remove(db.sessions, sid)
 
     def _create_session(self, r, data: SessionInput, *, facts: list[dict] | None = None) -> dict:
         for domain in data.domain_ids:

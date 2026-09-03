@@ -49,21 +49,36 @@ creates a separately authorized guest conversation without copying private histo
 Requirements: Python 3.11+ and a modern browser with AudioWorklet support. The text demo requires no model credentials.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-# Copy only for initial setup. If .env already exists, update it using the example.
-cp .env.mock.example .env
-python -m echooo
+./start.sh
 ```
+
+The launcher creates `.venv` if needed, installs project and development dependencies,
+and copies `.env.mock.example` only when `.env` is missing. Later runs reuse the
+environment, reinstalling dependencies only when `pyproject.toml` changes or you
+pass `--install`. Existing `.env` settings are preserved. No manual activation is needed.
+
+```bash
+./start.sh --mock             # Use demo providers for this run
+./start.sh --port 8010        # Use localhost:8010 with matching origin/cookie settings
+./start.sh --install          # Refresh dependencies
+./start.sh --help
+```
+
+Stop with **Ctrl+C**. You can also invoke `/path/to/echooo/start.sh` from another
+directory; the script starts from the repository root so data paths stay consistent.
+To choose Python when creating `.venv`, use `PYTHON=python3.12 ./start.sh`.
 
 Open the [local workspace](http://127.0.0.1:8000) and set a username and a nonempty password. Data is saved to `data/echooo.db` by default and survives restarts. Complete initial setup before exposing the service publicly.
 
 If your package mirror is missing a dependency, use the official index for this installation:
 
 ```bash
-python -m pip install --index-url https://pypi.org/simple -e '.[dev]'
+PIP_INDEX_URL=https://pypi.org/simple ./start.sh --install
 ```
+
+Manual setup remains available: create and activate a Python virtual environment,
+install with `python -m pip install -e '.[dev]'`, create `.env` from the example if
+needed, and run `python -m echooo` from the repository root.
 
 Suggested first walkthrough:
 

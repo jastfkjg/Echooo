@@ -67,6 +67,10 @@ class Connection:
         self.cancel = asyncio.Event()
         self.lock = asyncio.Lock()
         self.can_speak = guest or mode == "private"
+        # Legacy clients gate playback locally. New clients explicitly configure it.
+        self.output_enabled = True
+        self.last_reply = None
+        self.dictation = False
 
     async def send(self, event):
         async with self.lock:
@@ -129,8 +133,11 @@ class Connection:
                             raise Problem("Enter between 1 and 6,000 characters.")
                         await self.begin_reply(content.strip())
                     elif kind == "audio.enable" and self.can_speak:
+                        if not isinstance(p.get("dictation", False), bool):
+                            raise Problem("Dictation mode must be a boolean.")
+                        self.dictation = p.get("dictation", False)
                         if self.rooms.settings.stt_provider == "mock":
-                            await self.send({"type": "error", "message": "The local demo uses text input. Configure AssemblyAI to enable the microphone."})
+                            await self.send({"type": "audio.error", "message": "The local demo uses text input. Configure AssemblyAI to enable the microphone."})
                             continue
                         if self.stt is None:
                             self.stt = create_stt(self.rooms.settings)
@@ -144,6 +151,18 @@ class Connection:
                         await self.send({"type": "audio.ready", "sample_rate": self.rooms.settings.assemblyai_sample_rate})
                     elif kind == "audio.disable":
                         await self.close_stt()
+                    elif kind == "audio.mode" and self.can_speak:
+                        if not isinstance(p.get("dictation"), bool):
+                            raise Problem("Dictation mode must be a boolean.")
+                        self.dictation = p["dictation"]
+                    elif kind == "playback.configure" and self.can_speak:
+                        if not isinstance(p.get("enabled"), bool):
+                            raise Problem("Playback enabled must be a boolean.")
+                        self.output_enabled = p["enabled"]
+                    elif kind == "playback.retry" and self.can_speak:
+                        if self.output_enabled and self.last_reply and (not self.reply_task or self.reply_task.done()):
+                            self.cancel = asyncio.Event()
+                            self.reply_task = asyncio.create_task(self.play_reply(self.last_reply))
                     elif kind == "interrupt":
                         await self.interrupt()
                     else:
@@ -179,11 +198,15 @@ class Connection:
             async for event in self.stt.events():
                 self.validate()
                 if event.type == STTEventType.SPEECH_STARTED:
-                    await self.interrupt()
+                    if not self.dictation:
+                        await self.interrupt()
                 elif event.type == STTEventType.PARTIAL:
                     await self.send({"type": "transcript.partial", "content": event.transcript})
                 elif event.type == STTEventType.FINAL and event.transcript:
-                    await self.begin_reply(event.transcript[:6000])
+                    if self.dictation:
+                        await self.send({"type": "transcript.final", "content": event.transcript[:6000]})
+                    else:
+                        await self.begin_reply(event.transcript[:6000])
                 elif event.type in {STTEventType.ERROR, STTEventType.TERMINATED}:
                     await self.send({"type": "audio.error", "message": "Speech recognition is unavailable. You can still type messages."})
                     break
@@ -221,8 +244,24 @@ class Connection:
             self.validate()
             for m in [result["user"], result["assistant"]]:
                 await self.rooms.broadcast(self.sid, {"type": "message", "message": public_message(m)})
-            await self.rooms.broadcast(self.sid, {"type": "session.state", "state": "listening",
+            await self.rooms.broadcast(self.sid, {"type": "session.state", "state": "idle",
                 "reply_ms": round((time.perf_counter() - start) * 1000), "result": result["kind"]})
+            self.last_reply = result["assistant"]["content"]
+            await self.play_reply(self.last_reply)
+        except asyncio.CancelledError:
+            raise
+        except (Problem, AuthError):
+            await self.stop("This authorization has ended.")
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self.send({"type": "error", "message": "The reply could not be completed. Please try again."})
+                await self.send({"type": "session.state", "state": "idle"})
+
+    async def play_reply(self, content):
+        if not self.output_enabled:
+            return
+        try:
+            self.validate()
             if self.rooms.settings.tts_provider == "cosyvoice":
                 tts = create_tts(self.rooms.settings)
                 session = self.rooms.service.active(self.owner, self.sid)
@@ -230,9 +269,9 @@ class Connection:
                     speaker_id=session["voice"].get("speaker_id") or self.rooms.settings.cosyvoice_speaker_id))
                 await self.send({"type": "audio.start", "sample_rate": tts.sample_rate})
                 remainder = b""
-                async for chunk in tts.stream_audio(result["assistant"]["content"], cancel=self.cancel):
+                async for chunk in tts.stream_audio(content, cancel=self.cancel):
                     self.validate()
-                    if self.cancel.is_set():
+                    if self.cancel.is_set() or not self.output_enabled:
                         return
                     data = remainder + chunk.data
                     even = len(data) - len(data) % 2
@@ -243,12 +282,12 @@ class Connection:
                 await self.send({"type": "audio.end"})
             else:
                 self.validate()
-                await self.send({"type": "speech.checked", "content": result["assistant"]["content"]})
+                await self.send({"type": "speech.checked", "content": content})
         except asyncio.CancelledError:
             raise
         except (Problem, AuthError):
             await self.stop("This authorization has ended.")
         except Exception:
             with contextlib.suppress(Exception):
-                await self.send({"type": "error", "message": "Voice output is unavailable. The checked reply remains in the transcript."})
-                await self.send({"type": "session.state", "state": "listening"})
+                await self.send({"type": "error", "code": "tts_unavailable",
+                    "message": "Voice output is unavailable. The checked reply remains in the transcript."})

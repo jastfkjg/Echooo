@@ -2,7 +2,23 @@
 
 ## Local setup and upgrading from the old demo
 
-Run from the source checkout after `python -m pip install -e '.[dev]'`. Web assets and prompts are loaded from the repository. This release is not a standalone wheel that can run without the source tree.
+Run `./start.sh` from the source checkout, or invoke the script by its full path.
+It creates `.venv` when missing, installs project and development dependencies on
+first use or when `pyproject.toml` changes, and creates a demo `.env` only if none
+exists. Subsequent runs reuse the environment. Use `--install` to repair or refresh
+dependencies, and Ctrl+C to stop. Set `PYTHON` to choose the interpreter when creating
+the environment; an existing `.venv` is reused and must contain Python 3.11+.
+
+`./start.sh --mock` temporarily selects demo providers without editing `.env`.
+`./start.sh --port 8010` sets the port, binds to `127.0.0.1`, sets the matching HTTP
+origin, and disables secure-only cookies for local HTTP. These flags affect only
+the current run; without them, environment variables and existing `.env` settings
+apply as usual. The launcher runs one server in the foreground and does not start
+PostgreSQL, live model services, or a browser automatically.
+
+For manual setup, use `python -m pip install -e '.[dev]'` and `python -m echooo`.
+Web assets and prompts are loaded from the repository. This release is not a
+standalone wheel that can run without the source tree.
 
 The new version creates its database tables on first launch, with no seeded domains or personal information. The old demo had no persistent personal database, so its in-memory conversations do not need migration. Compare your existing `.env` with the examples: change the former `TTS_PROVIDER=mock` to `browser`. The generic `/ws` and voice-sample upload endpoints have been removed. Existing `.env` files and keys are not overwritten.
 

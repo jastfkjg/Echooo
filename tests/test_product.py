@@ -398,6 +398,78 @@ def test_audio_transcript_uses_scoped_checked_reply_and_pcm_alignment(client,app
         assert pcm==b'\1\0\2\0'
 
 
+def test_muted_output_skips_synthesis_and_retry_does_not_repeat_llm(client,app,monkeypatch):
+    calls=[]
+    def unexpected_tts(_):
+        calls.append('tts')
+        raise AssertionError('Muted output must not initialize TTS')
+    monkeypatch.setattr('echooo.rooms.create_tts',unexpected_tts)
+    app.state.rooms.settings.tts_provider='cosyvoice'
+    d=domain(client,'Voice controls')
+    s=session(client,d['id'],[],mode='private')
+    with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
+        ws.receive_json()
+        ws.send_json({'type':'playback.configure','enabled':False})
+        ws.send_json({'type':'input.text','content':'Hello'})
+        events=[]
+        while True:
+            e=ws.receive_json();events.append(e)
+            if e['type']=='session.state' and e['state']=='idle':break
+        assert all(e.get('state')!='listening' for e in events)
+        # Ordered request/response ensures the previous synthesis branch has finished.
+        ws.send_json({'type':'playback.configure','enabled':'invalid'})
+        assert ws.receive_json()['type']=='error'
+        assert calls==[]
+        app.state.rooms.settings.tts_provider='browser'
+        ws.send_json({'type':'playback.configure','enabled':True})
+        ws.send_json({'type':'playback.retry'})
+        reply=ws.receive_json()
+        assert reply['type']=='speech.checked'
+        assert reply['content']==next(e['message']['content'] for e in events if e['type']=='message' and e['message']['role']=='assistant')
+    assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
+
+
+def test_dictation_returns_a_draft_without_creating_chat_messages(client,app,monkeypatch):
+    from echooo.models import STTEvent,STTEventType
+    from echooo.providers.stt.mock import MockSTT
+    class InputAudio(MockSTT):
+        async def send_audio(self,pcm16):
+            await self._events.put(STTEvent(type=STTEventType.FINAL,transcript='Draft for review'))
+    monkeypatch.setattr('echooo.rooms.create_stt',lambda _:InputAudio())
+    app.state.rooms.settings.stt_provider='assemblyai'
+    d=domain(client,'Dictation')
+    s=session(client,d['id'],[],mode='private')
+    with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
+        ws.receive_json()
+        ws.send_json({'type':'playback.configure','enabled':False})
+        ws.send_json({'type':'audio.enable','dictation':True})
+        assert ws.receive_json()['type']=='audio.ready'
+        ws.send_bytes(b'\0\0'*1600)
+        assert ws.receive_json()=={'type':'transcript.final','content':'Draft for review'}
+        assert client.get(f"/api/sessions/{s['id']}").json()['messages']==[]
+        ws.send_json({'type':'audio.mode','dictation':False})
+        ws.send_bytes(b'\0\0'*1600)
+        while True:
+            event=ws.receive_json()
+            if event['type']=='session.state' and event['state']=='idle':break
+    assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
+
+
+def test_tts_failure_has_specific_error_and_preserves_text(client,app,monkeypatch):
+    def unavailable(_):raise RuntimeError('Test provider unavailable')
+    monkeypatch.setattr('echooo.rooms.create_tts',unavailable)
+    app.state.rooms.settings.tts_provider='cosyvoice'
+    d=domain(client,'TTS error')
+    s=session(client,d['id'],[],mode='private')
+    with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
+        ws.receive_json();ws.send_json({'type':'input.text','content':'Hello'})
+        while True:
+            event=ws.receive_json()
+            if event['type']=='error':break
+        assert event['code']=='tts_unavailable'
+    assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
+
+
 def test_failed_microphone_can_retry_without_reopening_room(client,app,monkeypatch):
     from echooo.providers.stt.mock import MockSTT
     attempts=[]

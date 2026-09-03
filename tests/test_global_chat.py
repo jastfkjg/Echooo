@@ -1,5 +1,7 @@
 """Global entry, explicit memory destinations, and upgrade preservation."""
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +11,7 @@ from echooo import database as db
 from echooo.app import create_app
 from echooo.config import Settings
 from echooo.auth import hash_password
+from echooo.service import Problem
 
 
 @pytest.fixture
@@ -221,6 +224,142 @@ def test_existing_empty_workspace_gets_default_once_at_startup(tmp_path):
     with store.scope(owner) as r:
         assert r.list(db.domains)==initial
     store.close()
+
+
+def test_quick_chat_reuses_only_latest_compatible_empty_chat(workspace):
+    app,c=workspace
+    first=c.post('/api/sessions/quick-chat').json()
+    again=c.post('/api/sessions/quick-chat').json()
+    assert again['id']==first['id'] and again['expires_at']==first['expires_at']
+    assert len(c.get('/api/sessions').json())==1
+    c.post(f"/api/sessions/{first['id']}/messages",json={'content':'Hello'})
+    second=c.post('/api/sessions/quick-chat').json()
+    assert second['id']!=first['id']
+    assert c.get('/api/sessions').json()[0]['message_count']==0
+    assert c.get('/api/sessions').json()[1]['message_count']==2
+    # Do not reopen an older empty chat when the latest private chat has content.
+    third=chat(c)
+    c.post(f"/api/sessions/{third['id']}/messages",json={'content':'Different chat'})
+    fourth=c.post('/api/sessions/quick-chat').json()
+    assert fourth['id'] not in (first['id'],second['id'],third['id'])
+    # A new knowledge snapshot requires fresh authorization, even if still empty.
+    did=fourth['domain_ids'][0]
+    m=c.post(f'/api/domains/{did}/memories',json={'title':'Preference','content':'Quiet rooms'}).json()
+    fifth=c.post('/api/sessions/quick-chat').json()
+    assert fifth['id']!=fourth['id'] and fifth['read_ids']==[m['id']]
+
+
+@pytest.mark.parametrize('status',['expired','ended','revoked'])
+def test_quick_chat_does_not_revive_inactive_empty_chat(workspace,status):
+    app,c=workspace
+    s=c.post('/api/sessions/quick-chat').json()
+    with app.state.store.scope(s['owner_id']) as r:
+        r.change(db.sessions,s['id'],**({'expires_at':time.time()-1} if status=='expired' else {'status':status}))
+    assert c.post('/api/sessions/quick-chat').json()['id']!=s['id']
+
+
+def test_concurrent_quick_chat_creates_one_empty_chat(workspace):
+    app,c=workspace
+    owner=c.get('/api/domains').json()[0]['owner_id']
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        sessions=list(pool.map(lambda _:app.state.service.quick_chat(owner),range(16)))
+    assert len({s['id'] for s in sessions})==1
+    assert len(c.get('/api/sessions').json())==1
+
+
+def test_session_rename_is_title_only_and_validated(workspace):
+    app,c=workspace
+    s=chat(c)
+    result=c.patch(f"/api/sessions/{s['id']}",json={'title':'  Product planning  '})
+    assert result.status_code==200 and result.json()['title']=='Product planning'
+    assert result.json()['expires_at']==s['expires_at']
+    for body in ({'title':' '},{'title':'x'*121},{'title':'New','domain_ids':[]}):
+        assert c.patch(f"/api/sessions/{s['id']}",json=body).status_code==422
+    c.post(f"/api/sessions/{s['id']}/messages",json={'content':'Hello'})
+    assert c.get(f"/api/sessions/{s['id']}").json()['title']=='Product planning'
+    assert c.patch('/api/sessions/missing',json={'title':'New'}).status_code==404
+
+
+def test_deleting_chat_preserves_confirmed_memories_and_other_chats(workspace):
+    app,c=workspace
+    s=c.post('/api/sessions/quick-chat').json();sid=s['id'];did=s['domain_ids'][0]
+    msg=c.post(f'/api/sessions/{sid}/messages',json={'content':'I prefer quiet rooms'}).json()['user']
+    body={'domain_id':did,'message_id':msg['id'],'title':'Quiet','content':'I prefer quiet rooms'}
+    proposal=c.post(f'/api/sessions/{sid}/memory-proposals',json=body).json()
+    confirmed=c.post(f"/api/proposals/{proposal['id']}/review",json={'decision':'approve','title':'Quiet','content':body['content']}).json()['memory']
+    pending=c.post(f'/api/sessions/{sid}/memory-proposals',json={**body,'title':'Still pending'}).json()
+    other=c.post('/api/sessions/quick-chat').json()
+    assert confirmed['id'] in other['read_ids']
+    with c.websocket_connect(f'/ws/sessions/{sid}?role=owner') as ws:
+        assert ws.receive_json()['type']=='session.ready'
+        assert c.delete(f'/api/sessions/{sid}').status_code==200
+        while ws.receive_json()['type']!='session.closed':
+            pass
+    assert c.get(f'/api/sessions/{sid}').status_code==404
+    assert c.delete(f'/api/sessions/{sid}').status_code==404
+    assert c.get(f"/api/sessions/{other['id']}").status_code==200
+    assert c.post(f"/api/sessions/{other['id']}/messages",json={'content':'What do I prefer?'}).status_code==200
+    with app.state.store.scope(s['owner_id']) as r:
+        assert r.get(db.memories,confirmed['id'])['provenance']
+        assert r.list(db.versions,db.versions.c.memory_id==confirmed['id'])
+        assert not r.get(db.proposals,pending['id'])
+        for table in (db.messages,db.actions,db.audit):
+            assert not r.list(table,table.c.session_id==sid)
+
+
+def test_session_management_requires_owner_and_revokes_guest_credentials(workspace):
+    app,c=workspace
+    default=c.get('/api/domains').json()[0]
+    s=chat(c,mode='delegate',audience='Team',domain_ids=[default['id']]);sid=s['id']
+    token=c.post(f'/api/sessions/{sid}/invite').json()['token']
+    guest=TestClient(app)
+    assert guest.post('/api/guest/join',json={'token':token}).status_code==200
+    who=db.uid()
+    with app.state.store.engine.begin() as conn:
+        conn.execute(insert(db.users).values(id=who,name='other',password=hash_password('p'),created_at=time.time()))
+    outsider=TestClient(app)
+    outsider.cookies.set('echooo_owner',app.state.auth.issue(who,'owner',3600))
+    for client,status in ((guest,401),(outsider,404)):
+        assert client.patch(f'/api/sessions/{sid}',json={'title':'Not yours'}).status_code==status
+        assert client.delete(f'/api/sessions/{sid}').status_code==status
+    assert c.delete(f'/api/sessions/{sid}',headers={'Origin':'https://evil.example'}).status_code==403
+    assert c.get(f'/api/sessions/{sid}').status_code==200
+    assert c.delete(f'/api/sessions/{sid}').status_code==200
+    assert guest.get(f'/api/guest/sessions/{sid}').status_code in (401,403)
+    assert guest.post('/api/guest/join',json={'token':token}).status_code in (401,403)
+    with app.state.store.engine.begin() as conn:
+        assert not conn.execute(db.select(db.tokens).where(db.tokens.c.session_id==sid)).all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('learning',[False,True])
+async def test_deletion_blocks_inflight_generation_and_learning(workspace,learning):
+    app,c=workspace
+    s=c.post('/api/sessions/quick-chat').json()
+    ready,release=asyncio.Event(),asyncio.Event()
+    if learning:
+        c.post(f"/api/sessions/{s['id']}/messages",json={'content':'I prefer concise plans'})
+        app.state.service.stop(s['owner_id'],s['id'],'ended')
+        async def extract(records):
+            ready.set();await release.wait()
+            return [{'title':'Plan','content':'Concise','evidence_ids':[records[0]['id']]}]
+        app.state.service.ai.extract=extract
+        task=asyncio.create_task(app.state.service.learn_session(s['owner_id'],s['id']))
+    else:
+        async def reply(**kwargs):
+            ready.set();await release.wait()
+            return {'kind':'answer','reply':'Too late','citations':[]}
+        app.state.service.ai.reply=reply
+        task=asyncio.create_task(app.state.service.talk(s['owner_id'],s['id'],'Hello',guest=False))
+    await asyncio.wait_for(ready.wait(),2)
+    app.state.service.delete_session(s['owner_id'],s['id'])
+    release.set()
+    with pytest.raises(Problem) as error:
+        await asyncio.wait_for(task,2)
+    assert error.value.status==404
+    with app.state.store.scope(s['owner_id']) as r:
+        assert not r.list(db.messages,db.messages.c.session_id==s['id'])
+        assert not r.list(db.proposals,db.proposals.c.session_id==s['id'])
 
 
 def test_upgrade_preserves_old_sessions_children_and_foreign_keys(tmp_path):

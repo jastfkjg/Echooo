@@ -1,0 +1,86 @@
+/* White-first appearance. Dark mode retains Echooo's original sage palette. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --sidebar: #f7f8f7;
+  --panel: #ffffff;
+  --hover: #edf0ed;
+  --soft: #f0f3f0;
+  --fg: #202421;
+  --muted: #5d655f;
+  --faint: #626b64;
+  --line: #e0e5e1;
+  --control-line: #818c84;
+  --accent: #326749;
+  --on-accent: #ffffff;
+  --primary: #222824;
+  --on-primary: #ffffff;
+  --primary-hover: #38443c;
+  --danger: #b32d2e;
+  --warning: #815810;
+  --dot-blue: #477c9c;
+  --dot-amber: #8d6b25;
+  --dot-violet: #7b64a3;
+  --dot-rose: #a25a73;
+  --dot-slate: #697e87;
+  --dot-sage: #59835b;
+  --overlay: #19231d40;
+  --drawer-overlay: #19231d1a;
+  --popover-shadow: 0 12px 40px #17251b1f;
+  --small-shadow: 0 2px 12px #17251b14;
+  --toast-shadow: 0 8px 30px #17251b1f;
+  --nav-shadow: 20px 0 80px #17251b29;
+  --drawer-shadow: -20px 0 80px #17251b1f;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141715;
+  --sidebar: #111411;
+  --panel: #1a1e1b;
+  --hover: #242a25;
+  --soft: #202620;
+  --fg: #eef1eb;
+  --muted: #a4aea4;
+  --faint: #8c998e;
+  --line: #343c34;
+  --control-line: #657368;
+  --accent: #bfdfae;
+  --on-accent: #182813;
+  --primary: #bfdfae;
+  --on-primary: #182813;
+  --primary-hover: #d3eaca;
+  --danger: #ffac9f;
+  --warning: #e4c68b;
+  --dot-blue: #8ebbd8;
+  --dot-amber: #d8be85;
+  --dot-violet: #b7a2dc;
+  --dot-rose: #d8a0b0;
+  --dot-slate: #a1b0b4;
+  --dot-sage: #bfdfae;
+  --overlay: #070a08bb;
+  --drawer-overlay: #070a0855;
+  --popover-shadow: 0 12px 40px #0005;
+  --small-shadow: 0 2px 12px #0003;
+  --toast-shadow: 0 8px 30px #0004;
+  --nav-shadow: 20px 0 80px #0008;
+  --drawer-shadow: -20px 0 80px #0005;
+}
+
+.theme-switch { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--sidebar); }
+.theme-choice { display: inline-flex; justify-content: center; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; color: var(--muted); font-size: 13px; border: 1px solid transparent; }
+.theme-choice svg { width: 16px; height: 16px; }
+.theme-choice[aria-pressed="true"] { color: var(--fg); background: var(--panel); border-color: var(--control-line); }
+.theme-choice[aria-pressed="true"]:hover { background: var(--panel); }
+.side-bottom .theme-switch { display: flex; margin: 10px 4px 16px; }
+.side-bottom .theme-choice { flex: 1; padding: 8px; }
+.appearance-setting .theme-switch { flex-shrink: 0; }
+.auth-appearance { display: flex; justify-content: flex-end; padding: 16px 20px 0; }
+.auth-appearance + .auth-page { margin-top: 3svh; }
+.guest-header .theme-choice { padding: 8px; }
+.guest-header .theme-choice span { display: none; }
+@media (max-width: 800px) {
+  .theme-choice { min-height: 44px; }
+  .guest-chat .guest-header { flex-wrap: wrap; gap: 12px; }
+  .guest-header .guest-title { flex: 1; }
+  .guest-header .theme-switch { margin-left: auto; }
+}

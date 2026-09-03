@@ -15,7 +15,7 @@ from echooo import database as db
 from echooo.auth import Auth, AuthError
 from echooo.config import ROOT, Settings
 from echooo.contracts import (Credentials, DomainInput, MemoryInput, SourceInput,
-    SessionInput, MessageInput, ReviewInput, DecisionInput, InviteInput, SaveConversationMemory)
+    SessionInput, SessionRenameInput, MessageInput, ReviewInput, DecisionInput, InviteInput, SaveConversationMemory)
 from echooo.ingestion import MAX_UPLOAD, extract_file
 from echooo.intelligence import Intelligence
 from echooo.rooms import Rooms, public_message
@@ -227,8 +227,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
 
     @app.get("/api/sessions")
     async def list_sessions(request: Request):
-        with store.scope(owner(request)) as r:
-            return list(reversed(r.list(db.sessions)))
+        return service.list_sessions(owner(request))
 
     @app.post("/api/sessions", status_code=201)
     async def new_session(request: Request, data: SessionInput):
@@ -241,6 +240,18 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     @app.get("/api/sessions/{sid}")
     async def session(request: Request, sid: str):
         return service.view_session(owner(request), sid)
+
+    @app.patch("/api/sessions/{sid}")
+    async def rename_session(request: Request, sid: str, data: SessionRenameInput):
+        return service.rename_session(owner(request), sid, data.title)
+
+    @app.delete("/api/sessions/{sid}")
+    async def delete_session(request: Request, sid: str):
+        who = owner(request)
+        service.delete_session(who, sid)
+        auth.revoke_room(who, sid)
+        await rooms.invalidate()
+        return {"ok": True}
 
     @app.post("/api/sessions/{sid}/invite")
     async def invite(request: Request, sid: str):
