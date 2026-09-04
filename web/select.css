@@ -1,0 +1,27 @@
+/* All dropdown choices share the workspace palette; no OS option popup. */
+.select-control { position: relative; width: 100%; min-width: 0; }
+.select-control .select-native { position: absolute; width: 1px; min-width: 0; height: 1px; min-height: 0; padding: 0; margin: 0; border: 0; opacity: 0; pointer-events: none; clip-path: inset(50%); }
+.select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; padding: 10px 13px; border: 1px solid var(--control-line); border-radius: 8px; background: var(--sidebar); color: var(--fg); text-align: left; font: inherit; cursor: pointer; transition: background .15s, border-color .15s; }
+.select-value { min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.select-trigger > svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--muted); transition: transform .15s; }
+.select-trigger:hover:not(:disabled) { background: var(--soft); border-color: var(--accent); }
+.select-trigger[aria-expanded=true] { border-color: var(--accent); }
+.select-trigger[aria-expanded=true] > svg { transform: rotate(180deg); }
+.select-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.select-trigger:disabled { opacity: .5; cursor: not-allowed; }
+.select-trigger[aria-invalid=true] { border-color: var(--danger); }
+.select-error { display: block; color: var(--danger); font-size: 12px; margin-top: 6px; }
+.select-error:empty { display: none; }
+.select-menu { position: fixed; inset: auto; margin: 0; padding: 5px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--fg); box-shadow: var(--popover-shadow); z-index: 1000; animation: choice-in .12s ease-out; }
+.select-option { display: flex; align-items: center; gap: 16px; min-height: 44px; padding: 10px 12px; border-radius: 7px; font-size: 14px; line-height: 1.5; cursor: pointer; }
+.select-option > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.select-option > svg { width: 17px; height: 17px; flex-shrink: 0; color: var(--accent); visibility: hidden; }
+.select-option[aria-selected=true] { font-weight: 550; }
+.select-option[aria-selected=true] > svg { visibility: visible; }
+.select-option.is-active { background: var(--soft); }
+.select-option[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
+.conversation-filters .select-control { min-width: 200px; }
+.learning-destination .select-control { width: 55%; }
+@keyframes choice-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 480px) { .select-trigger { font-size: 16px; } }
+@media (prefers-reduced-motion: reduce) { .select-trigger, .select-trigger > svg { transition: none; } .select-menu { animation: none; } }

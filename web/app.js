@@ -1,6 +1,7 @@
 import { Voice } from './voice.js';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
-import {sessionStatus, filterSessions, domainControl, privateContextForm, bindPrivateContext} from './session-ui.js';
+import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js';
+import {enhanceSelects} from './select.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -79,6 +80,7 @@ function openDialog(title,body,submit,label='Save',options={}) {
   };
   modal.showModal();
   $(options.focusSelector||'input:not([type=checkbox]),textarea,select',modal)?.focus();
+  enhanceSelects(modal);
   return modal;
 }
 function empty(title,description,button='',symbol='folder') {
@@ -197,7 +199,7 @@ function inspector(s) {
 function renderSession() {
   const s=state.session,active=s.status==='active' && s.expires_at>Date.now()/1000;
   if(!active && s.status==='active')s.status='expired';
-  shell(`${domainControl(s,{icon,esc,domainName})}${state.config.demo?'<div class="chat-demo-note">Local demo · Text replies use authorized memories. Microphone requires a live speech service.</div>':''}
+  shell(`${state.config.demo?'<div class="chat-demo-note">Local demo · Text replies use authorized memories. Microphone requires a live speech service.</div>':''}
     <div class="room-layout">${conversation(s,s.mode==='private')}</div>
     <dialog class="context-drawer" id="context-drawer" aria-labelledby="context-title"><div class="context-heading"><h2 id="context-title">${s.mode==='private'?'Chat context':'Authorization & approvals'}</h2><div class="actions"><button class="icon-btn pin-context" data-action="pin-context" aria-label="Pin context beside conversation" title="Pin context beside conversation" aria-pressed="false">${icon('panel')}</button><button class="icon-btn" data-action="close-context" aria-label="Close context">${icon('close')}</button></div></div><div class="inspector" id="inspector">${inspector(s)}</div></dialog>`,'Conversations',sessionHeader(s,{icon,esc,domainName,prefs:state.voicePrefs}));
   bindSessionChrome();
@@ -474,6 +476,7 @@ function decisionDialog(aid) {
   },'Confirm and send');
 }
 function bindActions(root=document) {
+  enhanceSelects(root);
   $$('[data-action]',root).forEach(b=>b.onclick=async()=>{
     const action=b.dataset.action,id=b.dataset.id;
     try{

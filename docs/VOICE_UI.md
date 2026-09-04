@@ -20,9 +20,12 @@ the conversation itself is not a nested card.
 - Audio packets queued before interruption cannot restart playback. Microphone
   permission requests completed after cancellation immediately release tracks.
 
-The prominent Domains control sits in its own row below the conversation header.
-It shows domain names and an explicit Change domains action (View access for a
-delegation). The private scope picker puts domain choices first, including Chat
+The compact Domains control sits after the title and before Context in the
+conversation header: Domains · default, or the first domain +N. Its accessible
+name includes every domain; clicking opens the full scope picker (authorization
+for delegations). Small screens wrap it within the header, without clipping the
+default name. Ordinary private chats omit the redundant mode subtitle; delegated
+chats keep their mode label. The private scope picker puts domain choices first, including Chat
 without memory; memory access, suggestions, and advanced settings expand on
 demand. It retains unchecked memories across domain changes. Its footer stays
 visible while the content scrolls on small screens.
@@ -33,6 +36,14 @@ silently change an existing conversation's knowledge scope. More actions contain
 delegation, ending/review, renaming, deletion, and memory proposal creation.
 Individual owner messages expose Save memory on hover or keyboard focus; touch
 devices retain a compact accessible icon. Destination and review rules still apply.
+
+All single-choice dropdowns use the same light/dark menu (`web/select.js` and
+`web/select.css`), including list filters, domain colors, memory forms, permissions,
+and review decisions. The original select stays as the form data source, so
+change handlers, disabled options, and dynamic domain lists keep their behavior.
+Menus use the popover top layer inside dialogs to avoid clipping. Keyboard support
+includes arrows, Home/End, type-ahead, Enter/Space to choose, Escape to cancel only
+the menu, and Tab to continue. Clicking outside or scrolling dismisses the menu.
 
 ## Conversation management
 

@@ -5,18 +5,17 @@
 .chat-shell .topbar { height: 80px; flex-shrink: 0; padding: 0 28px; gap: 16px; }
 .chat-shell .workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; max-width: none; padding: 0; margin: 0; animation: none; }
 .chat-shell .sidebar { height: 100dvh; overflow-y: auto; }
-.session-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.session-identity { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .session-identity > div { min-width: 0; }
 .session-identity h1 { font-size: 15px; font-weight: 550; letter-spacing: 0; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-kind { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
-.conversation-scope { flex-shrink: 0; padding: 10px 28px; border-bottom: 1px solid var(--line); }
-.domain-control { display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%; min-height: 44px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; text-align: left; }
+.domain-control { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; width: fit-content; max-width: min(360px, 45%); min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; text-align: left; transition: background .15s, border-color .15s; }
 .domain-control > svg { color: var(--accent); flex-shrink: 0; }
-.domain-control > strong { font-weight: 550; }
-.domain-control:hover { border-color: var(--accent); }
-.scope-names { min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
-.scope-action { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: 12px; color: var(--accent); }
-.scope-action svg { width: 14px; height: 14px; }
+.domain-control > strong { font-weight: 550; flex-shrink: 0; }
+.domain-control:hover { border-color: var(--accent); background: var(--soft); }
+.scope-names { min-width: 0; overflow-wrap: anywhere; color: var(--muted); max-height: 3em; overflow: auto; }
+.scope-separator { color: var(--muted); }
+.domain-control > .scope-chevron { width: 16px; height: 16px; color: var(--muted); margin-left: auto; }
 .scope-extra { white-space: nowrap; }
 .session-tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .context-toggle { border-color: transparent; color: var(--muted); }
@@ -131,7 +130,9 @@
   .session-tools .invite-button span { display: none; }
 }
 @media (max-width: 800px) {
-  .chat-shell .topbar { height: 76px; padding: 0 12px; gap: 8px; }
+  .chat-shell .topbar { height: auto; min-height: 76px; padding: 10px 12px; gap: 6px 8px; flex-wrap: wrap; }
+  .session-identity { flex-basis: calc(100% - 240px); }
+  .domain-control { order: 3; max-width: 100%; margin-left: 4px; }
   .session-tools { gap: 2px; }
   .context-toggle { padding: 10px; }
   .context-toggle > span:not(.approval-count) { display: none; }
@@ -162,7 +163,7 @@
   .toolbar-popover { position: fixed; top: 72px; right: 12px; }
 }
 @media (max-height: 500px) {
-  .chat-shell .topbar { height: 60px; }
+  .chat-shell .topbar { min-height: 60px; }
   #voice-hint, .composer-caption { display: none; }
   .voice-bar { padding: 0 0 8px; flex-wrap: nowrap; }
   .voice-buttons { width: auto; }
@@ -234,12 +235,6 @@ dialog.context-picker-dialog { width: min(660px, calc(100vw - 32px)); max-width:
 .advanced-options label small { font-weight: 400; margin-left: 4px; }
 .picker-note { display: flex; align-items: flex-start; gap: 10px; font-size: 12px; color: var(--muted); line-height: 1.6; margin: 12px 0 0; }
 .picker-note svg { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; }
-@media (max-width: 800px) {
-  .conversation-scope { padding: 8px 16px; }
-  .domain-control { width: 100%; gap: 8px; padding: 8px 10px; flex-wrap: wrap; }
-  .scope-names { flex: 1; }
-  .scope-action { font-size: 12px; gap: 4px; margin-left: auto; }
-}
 @media (max-width: 480px) {
   .session-kind { font-size: 11px; }
   .domain-control > strong { font-size: 12px; }
@@ -258,5 +253,5 @@ dialog.context-picker-dialog { width: min(660px, calc(100vw - 32px)); max-width:
   .learning-section .learning-destination { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .domain-option, .message-save { transition: none; }
+  .domain-option, .message-save, .domain-control { transition: none; }
 }

@@ -19,3 +19,11 @@ Applies across the workspace, conversations, dialogs, sign-in, and guest pages.
   states. Sign-in, invitation, and guest views also expose appearance controls.
 - Preserve restrained button/menu interaction feedback and reduced-motion support;
   do not add sweeping page animations or decorations to the conversation canvas.
+- Keep conversation Domains beside the title and before Context; show the first
+  name plus the remaining count. Wrap within the header on small screens. Do not
+  restore a separate settings strip or a redundant private-chat subtitle.
+- All option menus use the shared select-only combobox, themed panel, subtle
+  shadow, selected checkmark, and 44px rows. Use full readable option text,
+  viewport-aware placement, and top-layer menus inside scrolling dialogs.
+- Preserve keyboard selection, form values, disabled states, and dynamic choices.
+  Escape cancels the menu without closing its parent dialog; Tab continues focus.

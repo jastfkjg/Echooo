@@ -1,3 +1,5 @@
+import {domainControl} from './session-ui.js';
+
 // Presentational helpers keep the conversation surface separate from workspace pages.
 export function voiceControls(icon) {
   return `<div class="voice-bar" id="voice-bar">
@@ -8,7 +10,8 @@ export function voiceControls(icon) {
 
 export function sessionHeader(s, {icon, esc, domainName, prefs}) {
   const active=s.status==='active', privateChat=s.mode==='private', pending=s.actions.filter(a=>a.status==='pending').length;
-  return `<div class="session-identity"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation" aria-expanded="false">${icon('menu')}</button><div><h1 id="session-title" title="${esc(s.title)}">${esc(s.title)}</h1><span class="session-kind">${privateChat?'Private conversation':'Delegated conversation'}</span></div></div>
+  return `<div class="session-identity"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation" aria-expanded="false">${icon('menu')}</button><div><h1 id="session-title" title="${esc(s.title)}">${esc(s.title)}</h1>${privateChat?'':'<span class="session-kind">Delegated conversation</span>'}</div></div>
+    ${domainControl(s,{icon,esc,domainName})}
     <div class="session-tools">${!privateChat&&active?`<button class="btn invite-button" data-action="invite">${icon('link')}<span>Invite guest</span></button><button class="btn danger revoke-button" data-action="revoke-session">${icon('shield')}<span>Revoke access</span></button>`:''}
       <button class="btn context-toggle" data-action="context" aria-label="Chat context" aria-expanded="false" aria-controls="context-drawer">${icon('panel')}<span>Context</span><span class="approval-count" ${pending?'':'hidden'}>${pending}</span></button>
       <details class="toolbar-menu"><summary class="icon-btn" aria-label="Conversation settings" title="Conversation settings">${icon('settings')}</summary><div class="toolbar-popover"><h2>Conversation settings</h2>${privateChat?`<button data-action="choose-domains">${icon('folder')}Choose domains</button><p>Changing domains starts a new conversation.</p>`:''}${privateChat&&active?`<hr><label><input type="checkbox" id="dictation-toggle" ${prefs.dictation?'checked':''}><span>Dictation only<small>Transcribe into the input. Send when ready.</small></span></label><label><input type="checkbox" id="mute-toggle" ${prefs.muted?'checked':''}><span>Mute replies<small>Keep voice input, read the replies.</small></span></label>`:''}<hr><p>${icon('shield')} Only authorized memories are available here.</p></div></details>

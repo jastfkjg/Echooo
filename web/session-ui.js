@@ -9,7 +9,7 @@ export function filterSessions(sessions, query, filter, domainName) {
 
 export function domainControl(s, {icon, esc, domainName}) {
   const names=s.domain_ids.map(domainName), privateChat=s.mode==='private';
-  return `<div class="conversation-scope"><button class="domain-control" data-action="${privateChat?'choose-domains':'context'}" aria-haspopup="dialog" aria-label="${privateChat?'Change domains':'View authorized domains'}: ${esc(names.join(', ')||'No memory')}">${icon('folder')}<strong>Domains</strong><span class="scope-names">${esc(names.slice(0,2).join(' · ')||'No memory')}${names.length>2?` <span class="scope-extra">+${names.length-2}</span>`:''}</span><span class="scope-action">${privateChat?'Change domains':'View access'} ${icon('arrow')}</span></button></div>`;
+  return `<button class="domain-control" data-action="${privateChat?'choose-domains':'context'}" aria-haspopup="dialog" aria-label="${privateChat?'Change domains':'View authorized domains'}: ${esc(names.join(', ')||'No memory')}">${icon('folder')}<strong>Domains</strong><span class="scope-separator" aria-hidden="true">·</span><span class="scope-names">${esc(names[0]||'No memory')}</span>${names.length>1?`<span class="scope-extra">+${names.length-1}</span>`:''}<svg class="scope-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>`;
 }
 
 export function privateContextForm(domains, memories, initial, learning, {esc, icon}) {

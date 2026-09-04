@@ -41,13 +41,24 @@ test('Expired status replaces Active without changing stored status',()=>{
 test('Domain entry names the action and exposes all names accessibly',()=>{
   const html=domainControl({...chats[0],domain_ids:['a','b','c']},helpers);
   assert.match(html,/Change domains: default, Product &amp; design, Research/);
-  assert.match(html,/aria-haspopup="dialog"/);assert.match(html,/>Domains</);assert.match(html,/>\+1</);
+  assert.match(html,/aria-haspopup="dialog"/);assert.match(html,/>Domains</);assert.match(html,/>\+2</);
+  assert.match(html,/<span class="scope-names">default<\/span>/);
+  assert.doesNotMatch(html,/conversation-scope|scope-action|Change domains<|View access</);
   assert.match(domainControl(chats[1],helpers),/data-action="context"/);
 });
 test('Header has management actions and no tiny scope chip',()=>{
   const html=sessionHeader({...chats[0],actions:[]},helpers);
   assert.match(html,/data-action="rename-session"/);assert.match(html,/data-action="delete-session"/);
   assert.doesNotMatch(html,/scope-label/);
+  assert.doesNotMatch(html,/Private conversation|session-kind/);
+  assert.ok(html.indexOf('id="session-title"') < html.indexOf('class="domain-control"'));
+  assert.ok(html.indexOf('class="domain-control"') < html.indexOf('class="session-tools"'));
+  assert.match(sessionHeader({...chats[1],actions:[]},helpers),/Delegated conversation/);
+});
+test('No-memory scope remains explicit without an overflow count',()=>{
+  const html=domainControl({...chats[0],domain_ids:[]},helpers);
+  assert.match(html,/>No memory</);
+  assert.doesNotMatch(html,/scope-extra/);
 });
 test('Private picker escapes user text and collapses permission details',()=>{
   const html=privateContextForm([{id:'a',name:'<script>',description:'"quoted"',color:'sage'}],[],['a'],true,helpers);
