@@ -85,7 +85,7 @@ sessions = owned_table("sessions", Column("title", String, nullable=False),
     Column("grants", JSON, nullable=False),
     Column("write_domain_id", String, ForeignKey("domains.id", ondelete="CASCADE"), nullable=True),
     Column("allow_learning", Integer, nullable=False), Column("action_policy", String, nullable=False),
-    Column("status", String, nullable=False), Column("expires_at", Float, nullable=False),
+    Column("status", String, nullable=False), Column("expires_at", Float, nullable=True),
     Column("summary", JSON, nullable=False), Column("voice", JSON, nullable=False))
 
 

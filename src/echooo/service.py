@@ -209,7 +209,7 @@ class Service:
                     and not s["audience"] and not s["voice"] and not s["disclose_ids"]
                     and set(s["read_ids"]) == {m["id"] for m in facts}
                     and s["grants"] == {m["id"]: m["version"] for m in facts})
-                if (same_scope and s["status"] == "active" and s["expires_at"] > time.time()
+                if (same_scope and s["status"] == "active"
                     and not r.list(db.messages, db.messages.c.session_id == s["id"])
                     and not r.list(db.proposals, db.proposals.c.session_id == s["id"])
                     and not r.list(db.actions, db.actions.c.session_id == s["id"])):
@@ -255,7 +255,8 @@ class Service:
         values["read_ids"] = [m["id"] for m in facts]
         if data.mode == "private":
             values["disclose_ids"] = []
-        s = r.add(db.sessions, **values, status="active", expires_at=time.time() + data.duration_minutes * 60,
+        expires_at = time.time() + data.duration_minutes * 60 if data.mode == "delegate" else None
+        s = r.add(db.sessions, **values, status="active", expires_at=expires_at,
             grants={m["id"]: m["version"] for m in facts}, summary={})
         r.log("session.created", session_id=s["id"], domain_ids=data.domain_ids,
             disclose_count=len(s["disclose_ids"]), action_policy=data.action_policy)
@@ -268,7 +269,8 @@ class Service:
 
     def _active(self, r, sid: str) -> dict:
         s = need(r.get(db.sessions, sid), "Conversation")
-        if s["status"] != "active" or s["expires_at"] <= time.time():
+        if s["status"] != "active" or (s["mode"] == "delegate" and
+            (s["expires_at"] is None or s["expires_at"] <= time.time())):
             raise Problem("This conversation has ended, expired, or been revoked.", 410)
         for domain in s["domain_ids"]:
             need(r.get(db.domains, domain), "Domain")

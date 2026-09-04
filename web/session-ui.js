@@ -1,5 +1,5 @@
 // Pure presentation helpers shared by the workspace and its UI regression tests.
-export const sessionStatus = (s, now=Date.now()/1000) => s.status==='active' && s.expires_at<=now?'expired':s.status;
+export const sessionStatus = (s, now=Date.now()/1000) => s.status==='active' && s.mode!=='private' && (s.expires_at==null || s.expires_at<=now)?'expired':s.status;
 
 export function filterSessions(sessions, query, filter, domainName) {
   const needle=query.trim().toLocaleLowerCase();
@@ -20,7 +20,7 @@ export function privateContextForm(domains, memories, initial, learning, {esc, i
     </fieldset>
     <details class="picker-section" id="memory-access"><summary><span>Memory access</span><span id="memory-selection-count">No memories selected</span></summary><p class="dialog-help">Only checked memories can be read in this chat.</p><div id="private-fact-picker"></div></details>
     <details class="learning-section picker-section"><summary><span>Memory suggestions</span><span id="learning-summary">${learning?'On · review required':'Off'}</span></summary><label class="check"><input type="checkbox" name="allow_learning" ${learning?'checked':''}><span><strong>Suggest memories after the chat</strong><small>You review every suggestion before it is saved.</small></span></label><div class="form-field learning-destination"><label for="f-write">Send suggestions to</label><select name="write_domain_id" id="f-write"></select></div></details>
-    <details class="picker-section advanced-options"><summary><span>Advanced settings</span><span>Duration & goal</span></summary><div class="form-field"><label for="f-duration">Memory access duration</label><select name="duration_minutes" id="f-duration"><option value="30">30 minutes</option><option value="60" selected>1 hour</option><option value="180">3 hours</option><option value="1440">24 hours</option></select></div><div class="form-field"><label for="f-goal">Conversation goal <small>Optional · do not include secrets</small></label><textarea id="f-goal" name="goal" rows="2" maxlength="2000" placeholder="What would you like to work on?"></textarea></div></details>
+    <details class="picker-section advanced-options"><summary><span>Advanced settings</span><span>Conversation goal</span></summary><div class="form-field"><label for="f-goal">Conversation goal <small>Optional · do not include secrets</small></label><textarea id="f-goal" name="goal" rows="2" maxlength="2000" placeholder="What would you like to work on?"></textarea></div></details>
     <p class="picker-note">${icon('info')}<span>Starts a new chat with these permissions. Your current conversation stays in history.</span></p>`;
 }
 

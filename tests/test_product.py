@@ -226,9 +226,17 @@ def test_revocation_expiry_fact_changes_and_domain_deletion(client,app):
     assert guest.post(f"/api/guest/sessions/{s['id']}/messages",json={'content':'进度'}).status_code==410
     assert client.get(f"/api/sessions/{s['id']}").json()['status']=='revoked'
     private=session(client,d['id'],[],mode='private')
+    assert private['expires_at'] is None
     assert client.post(f"/api/sessions/{private['id']}/invite").status_code==400
     with app.state.store.scope(s['owner_id']) as r:r.change(db.sessions,private['id'],expires_at=time.time()-1)
-    assert client.post(f"/api/sessions/{private['id']}/messages",json={'content':'你好'}).status_code==410
+    assert client.post(f"/api/sessions/{private['id']}/messages",json={'content':'你好'}).status_code==200
+    delegated=session(client,d['id'],[])
+    visitor,_=join(client,app,delegated['id'])
+    assert delegated['expires_at']>time.time()
+    with app.state.store.scope(s['owner_id']) as r:
+        r.change(db.sessions,delegated['id'],expires_at=time.time()-1)
+    assert visitor.post(f"/api/guest/sessions/{delegated['id']}/messages",json={'content':'你好'}).status_code==410
+    assert client.post(f"/api/sessions/{delegated['id']}/invite").status_code==410
     assert client.delete(f"/api/domains/{d['id']}").status_code==200
     exported=client.get('/api/export').json()
     assert [d['name'] for d in exported['domains']] == ['default']

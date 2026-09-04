@@ -15,7 +15,7 @@ The interface and project documentation use English by default. Your domain name
 - Invite one participant to speak with the AI assistant. The owner can follow the transcript, keep private notes, approve new commitments, and end or revoke access.
 - Use text or a microphone. Public replies are checked before reaching the browser or speech synthesis, and can be interrupted.
 - Review attributed statements, approval records, and proposed memories after a conversation. Edit, reject, or save proposals as new or replacement memories in the **authorized destination domain**.
-- Export workspace data and delete domains, sources, and dependent records. Revocation, knowledge changes, and expiry invalidate affected conversations.
+- Export workspace data and delete domains, sources, and dependent records. Private chats do not expire with time; delegated conversations retain an authorization deadline. Revocation, knowledge changes, and selected-memory expiry still invalidate affected conversations.
 
 **Current scope: a working personal assistant MVP.** A delegation supports one guest with owner supervision. Meeting platforms, telephony, calendars, email, and payment tools are not connected yet. Approval authorizes the exact wording sent to the guest; it does not execute external transactions. The guest interface clearly identifies the assistant as AI.
 

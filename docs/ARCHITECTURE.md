@@ -34,7 +34,7 @@ flowchart TD
 
 Private information selected for read but not disclose never enters the public reply model. This release does not implement a separate internal decision agent that reasons over a private reservation price. Read permission alone does not expose that price to the public model. An audience is an owner-defined authorization label, not a verified organization identity. Invitations are bearer credentials and should be delivered to the intended person.
 
-Domains, selected memories, audience, expiry, destination domain, and action policy are fixed when a conversation is created. The authorization snapshots memory versions. Editing a selected memory or domain revokes active conversations using it. Expiry, deletion, and revocation also stop replies and playback. Changing domains starts a new conversation with an empty transcript; the previous chat remains in history. A private chat cannot be converted into a delegation.
+Domains, selected memories, audience, destination domain, and action policy are fixed when a conversation is created. Delegations also have a fixed authorization expiry; private chats have no time-based expiry (`expires_at = null`) and retain their transcript for later continuation. Startup migration clears legacy private-chat deadlines without reopening ended or revoked conversations. The authorization snapshots memory versions. Editing a selected memory or domain revokes active conversations using it. Delegation expiry, selected-memory expiry, deletion, and revocation also stop replies and playback. Changing domains starts a new conversation with an empty transcript; the previous chat remains in history. A private chat cannot be converted into a delegation.
 
 ## Code responsibilities
 

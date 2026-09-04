@@ -1,4 +1,4 @@
-"""Small, data-preserving upgrade for optional private-chat memory destinations.
+"""Data-preserving upgrades for private-chat destinations and lifetime.
 
 Run on application startup before requests are served. SQLite rebuilds only the
 sessions table inside one write transaction, preserving rows, indexes, triggers,
@@ -10,29 +10,32 @@ from sqlalchemy import inspect, text
 
 
 def allow_unscoped_private_chats(engine):
+    nullable_columns = {"write_domain_id": "VARCHAR", "expires_at": "FLOAT"}
     if engine.dialect.name == 'postgresql':
         with engine.begin() as c:
             c.execute(text('SELECT pg_advisory_xact_lock(76823917)'))
-            column = next(x for x in inspect(c).get_columns('sessions') if x['name'] == 'write_domain_id')
-            if not column['nullable']:
-                c.execute(text('ALTER TABLE sessions ALTER COLUMN write_domain_id DROP NOT NULL'))
+            for column in inspect(c).get_columns('sessions'):
+                if column['name'] in nullable_columns and not column['nullable']:
+                    c.execute(text(f"ALTER TABLE sessions ALTER COLUMN {column['name']} DROP NOT NULL"))
+            c.execute(text("UPDATE sessions SET expires_at = NULL WHERE mode = 'private' AND expires_at IS NOT NULL"))
         return
-    with engine.connect() as c:
-        if not next(row[3] for row in c.exec_driver_sql('PRAGMA table_info(sessions)') if row[1] == 'write_domain_id'):
-            return
     connection = engine.raw_connection()
     try:
         cursor = connection.cursor()
         cursor.execute('PRAGMA foreign_keys=OFF')
         cursor.execute('BEGIN IMMEDIATE')
         columns = cursor.execute('PRAGMA table_info(sessions)').fetchall()
-        if not next(row[3] for row in columns if row[1] == 'write_domain_id'):
+        required = [row[1] for row in columns if row[1] in nullable_columns and row[3]]
+        if not required:
+            cursor.execute("UPDATE sessions SET expires_at = NULL WHERE mode = 'private' AND expires_at IS NOT NULL")
             connection.commit()
             return
         original = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone()[0]
-        upgraded, count = re.subn(r'(\bwrite_domain_id\s+VARCHAR)\s+NOT NULL', r'\1', original, count=1, flags=re.I)
-        if count != 1:
-            raise RuntimeError('Unexpected sessions schema; no migration was applied')
+        upgraded = original
+        for name in required:
+            upgraded, count = re.subn(rf'(\b{name}\s+{nullable_columns[name]})\s+NOT NULL', r'\1', upgraded, count=1, flags=re.I)
+            if count != 1:
+                raise RuntimeError('Unexpected sessions schema; no migration was applied')
         upgraded, count = re.subn(r'^CREATE TABLE\s+["`\[]?sessions["`\]]?', 'CREATE TABLE sessions_global_chat', upgraded, count=1, flags=re.I)
         if count != 1:
             raise RuntimeError('Unexpected sessions table name; no migration was applied')
@@ -44,6 +47,7 @@ def allow_unscoped_private_chats(engine):
         cursor.execute('ALTER TABLE sessions_global_chat RENAME TO sessions')
         for (sql,) in objects:
             cursor.execute(sql)
+        cursor.execute("UPDATE sessions SET expires_at = NULL WHERE mode = 'private' AND expires_at IS NOT NULL")
         if cursor.execute('PRAGMA foreign_key_check').fetchone():
             raise RuntimeError('Foreign key validation failed; migration rolled back')
         connection.commit()

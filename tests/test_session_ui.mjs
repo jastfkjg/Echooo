@@ -14,8 +14,8 @@ test('Private composer omits redundant footnotes; guest privacy disclosures rema
   const source=await readFile(new URL('../web/app.js',import.meta.url),'utf8');
   const renderSource=source.match(/function conversation\(s, canSpeak\) \{[\s\S]+?\n\}/)[0];
   const state={guest:false};
-  const render=vm.runInNewContext(`${renderSource}; conversation`,{state,icon:()=>'',voiceControls:()=>'',empty:()=>''});
-  const s={status:'active',messages:[]};
+  const render=vm.runInNewContext(`${renderSource}; conversation`,{state,sessionStatus,icon:()=>'',voiceControls:()=>'',empty:()=>''});
+  const s={status:'active',mode:'private',messages:[]};
   const privateHTML=render(s,true);
   assert.doesNotMatch(privateHTML,/composer-caption|Memories are only saved|Enter to send|Shift \+ Enter/);
   assert.match(privateHTML,/aria-label="Message"/);
@@ -32,11 +32,60 @@ test('Conversation filters support title, domain, audience, and empty chats',()=
   assert.deepEqual(filterSessions(chats,'','empty',helpers.domainName).map(s=>s.id),['1']);
   assert.equal(filterSessions(chats,'missing','all',helpers.domainName).length,0);
 });
-test('Expired status replaces Active without changing stored status',()=>{
-  assert.equal(sessionStatus(chats[0],200),'expired');
+test('Only delegated conversations expire; ended and revoked chats stay closed',()=>{
+  assert.equal(sessionStatus(chats[0],200),'active');
+  assert.equal(sessionStatus({...chats[0],expires_at:null},300),'active');
   assert.equal(sessionStatus(chats[0],199),'active');
+  assert.equal(sessionStatus({...chats[1],status:'active'},200),'expired');
+  assert.equal(sessionStatus({...chats[1],status:'active'},199),'active');
+  assert.equal(sessionStatus({...chats[1],status:'active',expires_at:null},199),'expired');
   assert.equal(sessionStatus(chats[1],300),'ended');
+  assert.equal(sessionStatus({...chats[0],status:'revoked'},300),'revoked');
   assert.equal(chats[0].status,'active');
+});
+
+test('Empty conversation states match availability and never show review',async()=>{
+  const source=await readFile(new URL('../web/app.js',import.meta.url),'utf8');
+  const renderSource=source.match(/function conversation\(s, canSpeak\) \{[\s\S]+?\n\}/)[0];
+  const state={guest:false};
+  const render=vm.runInNewContext(`${renderSource}; conversation`,{
+    state,sessionStatus,icon:()=>'',voiceControls:()=>'',
+    empty:(title,description)=>`<h2>${title}</h2><p>${description}</p>`,
+    summaryHTML:()=>'<section>Conversation review</section>',messageHTML:m=>m.content,
+  });
+  const base={...chats[0],messages:[]};
+  const active=render(base,true);
+  assert.match(active,/Ready to talk/);assert.match(active,/id="message-form"/);
+  assert.doesNotMatch(active,/Conversation review|has expired|ended-note/);
+  for(const status of ['ended','revoked']){
+    const html=render({...base,status},true);
+    assert.match(html,/No messages were sent/);
+    assert.doesNotMatch(html,/Ready to talk|Start a voice conversation|Conversation review|id="message-form"/);
+  }
+  const expired={...base,mode:'delegate'};
+  for(const guest of [false,true]){
+    state.guest=guest;
+    const html=render(expired,guest);
+    assert.match(html,/Authorization expired/);
+    assert.doesNotMatch(html,/Ready to talk|Follow the conversation|Create an invitation|Conversation review|id="message-form"/);
+  }
+  state.guest=false;
+  assert.match(render({...base,status:'ended',messages:[{content:'Existing message'}]},true),/Existing message[\s\S]*Conversation review/);
+});
+
+test('Refreshing a private chat with an old deadline keeps the composer connected',async()=>{
+  const source=await readFile(new URL('../web/app.js',import.meta.url),'utf8');
+  const refreshSource=source.match(/async function refreshSession\(\) \{[\s\S]+?\n\}/)[0];
+  const state={session:{...chats[0],messages:[]},guest:false};
+  let disconnected=false,rendered=false;
+  const refresh=vm.runInNewContext(`${refreshSource}; refreshSession`,{
+    state,sessionStatus,api:async()=>({...state.session}),$:()=>null,
+    disconnect:()=>{disconnected=true;},renderSession:()=>{rendered=true;},
+    appendMessage:()=>{},toast:message=>assert.fail(message),
+  });
+  await refresh();assert.equal(disconnected,false);assert.equal(rendered,false);
+  state.session.mode='delegate';
+  await refresh();assert.equal(disconnected,true);assert.equal(rendered,true);
 });
 test('Domain entry names the action and exposes all names accessibly',()=>{
   const html=domainControl({...chats[0],domain_ids:['a','b','c']},helpers);
@@ -68,6 +117,7 @@ test('Private picker escapes user text and collapses permission details',()=>{
   assert.match(html,/Chat without memory/);assert.match(html,/id="memory-access"/);
   assert.match(html,/class="picker-section advanced-options"/);assert.doesNotMatch(html,/<details[^>]+ open/);
   assert.match(html,/review every suggestion/);
+  assert.doesNotMatch(html,/duration_minutes|Memory access duration|Duration &amp; goal/);
 });
 
 test('Picker preserves unchecked memories and learning preference through scope changes',()=>{

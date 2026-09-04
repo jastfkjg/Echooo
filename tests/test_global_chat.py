@@ -112,6 +112,9 @@ def test_scoped_chat_cannot_save_to_unselected_domain(workspace):
 def test_global_private_chat_uses_voice_room_without_a_domain(workspace):
     app,c=workspace
     s=chat(c)
+    # Old private chats remain usable through the same validation as live voice.
+    with app.state.store.scope(s['owner_id']) as r:
+        r.change(db.sessions,s['id'],expires_at=time.time()-1)
     with c.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
         assert ws.receive_json()['type']=='session.ready'
         ws.send_json({'type':'input.text','content':'Hello'})
@@ -249,13 +252,35 @@ def test_quick_chat_reuses_only_latest_compatible_empty_chat(workspace):
     assert fifth['id']!=fourth['id'] and fifth['read_ids']==[m['id']]
 
 
-@pytest.mark.parametrize('status',['expired','ended','revoked'])
+@pytest.mark.parametrize('status',['ended','revoked'])
 def test_quick_chat_does_not_revive_inactive_empty_chat(workspace,status):
     app,c=workspace
     s=c.post('/api/sessions/quick-chat').json()
     with app.state.store.scope(s['owner_id']) as r:
-        r.change(db.sessions,s['id'],**({'expires_at':time.time()-1} if status=='expired' else {'status':status}))
+        r.change(db.sessions,s['id'],status=status)
     assert c.post('/api/sessions/quick-chat').json()['id']!=s['id']
+
+
+def test_private_chat_continues_after_legacy_deadline_with_history(workspace):
+    app,c=workspace
+    s=c.post('/api/sessions/quick-chat').json()
+    assert s['expires_at'] is None
+    with app.state.store.scope(s['owner_id']) as r:
+        r.change(db.sessions,s['id'],expires_at=time.time()-86400)
+    assert c.post('/api/sessions/quick-chat').json()['id']==s['id']
+    first=c.post(f"/api/sessions/{s['id']}/messages",json={'content':'Remember our discussion here.'})
+    assert first.status_code==200
+    seen=[]
+    async def reply(**kwargs):
+        seen.append(kwargs)
+        return {'kind':'answer','reply':'Continuing our chat.','citations':[]}
+    app.state.service.ai.reply=reply
+    assert c.post(f"/api/sessions/{s['id']}/messages",json={'content':'Continue please.'}).status_code==200
+    assert any(m['content']=='Remember our discussion here.' for m in seen[0]['history'])
+    view=c.get(f"/api/sessions/{s['id']}").json()
+    assert view['status']=='active' and len(view['messages'])==4
+    assert c.post(f"/api/sessions/{s['id']}/end").status_code==200
+    assert c.post(f"/api/sessions/{s['id']}/messages",json={'content':'After ending'}).status_code==410
 
 
 def test_concurrent_quick_chat_creates_one_empty_chat(workspace):
@@ -362,29 +387,43 @@ async def test_deletion_blocks_inflight_generation_and_learning(workspace,learni
         assert not r.list(db.proposals,db.proposals.c.session_id==s['id'])
 
 
-def test_upgrade_preserves_old_sessions_children_and_foreign_keys(tmp_path):
+@pytest.mark.parametrize('destination_required',[True,False])
+def test_upgrade_preserves_old_sessions_children_and_foreign_keys(tmp_path,destination_required):
     url=f'sqlite:///{tmp_path}/legacy.db'
     engine=create_engine(url)
     # Reproduce the former NOT NULL constraint without mutating global metadata.
     legacy=db.metadata.tables['sessions'].to_metadata(db.MetaData())
     for table in db.metadata.sorted_tables:
         if table.name!='sessions':table.to_metadata(legacy.metadata)
-    legacy.c.write_domain_id.nullable=False
+    legacy.c.write_domain_id.nullable=not destination_required
+    legacy.c.expires_at.nullable=False
     legacy.metadata.create_all(engine)
     owner,did,sid,mid=db.uid(),db.uid(),db.uid(),db.uid()
     with engine.begin() as c:
         c.execute(insert(db.users).values(id=owner,name='old-owner',password=hash_password('p'),created_at=time.time()))
         c.execute(insert(db.domains).values(id=did,owner_id=owner,name='Existing domain',description='',color='sage',created_at=time.time()))
-        c.execute(insert(db.sessions).values(id=sid,owner_id=owner,title='Existing chat',mode='private',audience='',goal='',domain_ids=[did],read_ids=[],disclose_ids=[],grants={},write_domain_id=did,allow_learning=1,action_policy='none',status='active',expires_at=time.time()+3600,summary={},voice={},created_at=time.time()))
+        values=dict(owner_id=owner,title='Existing chat',audience='',goal='',domain_ids=[did],read_ids=[],disclose_ids=[],grants={},write_domain_id=did,allow_learning=1,action_policy='none',expires_at=time.time()-3600,summary={},voice={},created_at=time.time())
+        c.execute(insert(db.sessions).values(**values,id=sid,mode='private',status='active'))
+        delegate_id=db.uid()
+        c.execute(insert(db.sessions).values(**values,id=delegate_id,mode='delegate',status='active'))
+        closed_ids={status:db.uid() for status in ('ended','revoked')}
+        for status,closed_id in closed_ids.items():
+            c.execute(insert(db.sessions).values(**values,id=closed_id,mode='private',status=status))
         c.execute(insert(db.messages).values(id=mid,owner_id=owner,session_id=sid,role='owner',content='KEEP_THIS_MESSAGE',citations=[],delivery='received',created_at=time.time()))
     engine.dispose()
     store=db.Store(url)
     with store.scope(owner) as r:
         assert r.get(db.sessions,sid)['write_domain_id']==did
+        assert r.get(db.sessions,sid)['expires_at'] is None
+        assert r.get(db.sessions,sid)['status']=='active'
+        assert r.get(db.sessions,delegate_id)['expires_at']==values['expires_at']
+        for status,closed_id in closed_ids.items():
+            assert r.get(db.sessions,closed_id)['status']==status
         assert r.get(db.messages,mid)['content']=='KEEP_THIS_MESSAGE'
         assert list(r.c.exec_driver_sql('PRAGMA foreign_key_check'))==[]
         assert r.c.exec_driver_sql('PRAGMA foreign_keys').scalar()==1
         assert not next(row[3] for row in r.c.exec_driver_sql('PRAGMA table_info(sessions)') if row[1]=='write_domain_id')
+        assert not next(row[3] for row in r.c.exec_driver_sql('PRAGMA table_info(sessions)') if row[1]=='expires_at')
         r.remove(db.sessions,sid)
         assert r.get(db.messages,mid) is None
     store.close()

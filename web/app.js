@@ -180,26 +180,31 @@ function messageHTML(m) {
   return `<article class="message ${esc(m.role)}" data-message="${esc(m.id)}"><div class="speaker"><strong>${esc(roleName[m.role]||m.role)}</strong><time>${dt(m.created_at)}</time>${m.role==='private_note'?'<span>Only you</span>':''}${saveable?`<button class="message-save" data-action="save-chat-memory" data-id="${esc(m.id)}" aria-label="Save this message as a memory">${icon('file')}<span>Save memory</span></button>`:''}</div><div class="text">${esc(m.content)}</div>${m.citations?.length?`<div class="citations">Based on ${countLabel(m.citations.length,'authorized memory','authorized memories')}</div>`:''}</article>`;
 }
 function conversation(s, canSpeak) {
-  const active=s.status==='active';
+  const status=sessionStatus(s),active=status==='active';
+  const emptyTitle=active?(canSpeak?'Ready to talk':'Follow the conversation'):
+    status==='expired'?'Authorization expired':status==='revoked'?'Conversation revoked':'Conversation ended';
+  const emptyDescription=active?(canSpeak?'Start a voice conversation, or write a message below.':'Create an invitation. Your guest’s messages will appear here.'):
+    'No messages were sent in this conversation.';
   const disclosure=state.guest?'You are speaking with AI. The owner can view this transcript.':!canSpeak?'Private notes are never sent to the guest.':'';
   return `<section class="conversation" aria-label="Conversation">
-    <div class="transcript" id="transcript" role="log" aria-label="Transcript" aria-live="polite" tabindex="0"><div class="message-column" id="messages">${s.messages.length?s.messages.map(messageHTML).join(''):empty(canSpeak?'Ready to talk':'Follow the conversation',canSpeak?'Start a voice conversation, or write a message below.':'Create an invitation. Your guest’s messages will appear here.','', 'wave')}${!active&&!state.guest?summaryHTML(s):''}</div></div>
+    <div class="transcript" id="transcript" role="log" aria-label="Transcript" aria-live="polite" tabindex="0"><div class="message-column" id="messages">${s.messages.length?s.messages.map(messageHTML).join(''):empty(emptyTitle,emptyDescription,'',active?'wave':'lock')}${!active&&!state.guest&&s.messages.length?summaryHTML(s):''}</div></div>
     <button class="btn jump-latest" data-action="latest" hidden>Latest messages ↓</button>
     <div class="composer"><div class="composer-inner">${active?`
       ${canSpeak?voiceControls(icon,state.voicePrefs):`<div class="supervision-note">${icon('shield')} Private supervision <span id="room-state">Connecting…</span></div>`}
       <div id="partial" class="partial-transcript" aria-live="off" hidden></div>
       <form id="message-form"><textarea id="message-input" rows="1" aria-label="${canSpeak?'Message':'Private note'}" placeholder="${canSpeak?'Or type a message…':'Write a private note…'}" maxlength="6000" required></textarea><button class="btn send-message" type="submit" aria-label="${canSpeak?'Send message':'Save private note'}">${icon('arrow')}<span>${canSpeak?'Send':'Save note'}</span></button></form>
-      ${disclosure?`<div class="composer-caption">${disclosure}</div>`:''}`:`<p class="ended-note">${icon('lock')} This conversation has ${s.status==='expired'?'expired':s.status==='revoked'?'been revoked':'ended'}. ${!state.guest?'<button class="btn" data-action="quick-chat">Start a new conversation</button>':''}</p>`}</div></div>
+      ${disclosure?`<div class="composer-caption">${disclosure}</div>`:''}`:`<p class="ended-note">${icon('lock')} ${status==='expired'?'This conversation’s authorization has expired.':status==='revoked'?'This conversation has been revoked.':'This conversation has ended.'} ${!state.guest?'<button class="btn" data-action="quick-chat">Start a new conversation</button>':''}</p>`}</div></div>
   </section>`;
 }
 function inspector(s) {
-  if(s.mode==='private')return `<h3>${icon('shield')} Chat context</h3><dl><dt>Active domains</dt><dd>${esc(s.domain_ids.map(domainName).join(', ')||'None · General chat')}</dd><dt>Personal memories</dt><dd>${s.read_ids.length?countLabel(s.read_ids.length,'selected memory','selected memories'):s.domain_ids.length?'No confirmed memories selected yet':'Not accessed'}</dd><dt>Automatic proposals</dt><dd>${s.allow_learning?esc(domainName(s.write_domain_id))+' · Review before saving':'Off'}</dd><dt>Expires at</dt><dd>${dt(s.expires_at)}</dd></dl><hr><p class="dialog-help">${s.domain_ids.length?'Only selected memories are available here.':'Ask general questions or share something in this conversation. Personal memories are not loaded.'}</p><p class="dialog-help">Use Save memory to choose what to keep and where it belongs.</p>`;
+  if(s.mode==='private')return `<h3>${icon('shield')} Chat context</h3><dl><dt>Active domains</dt><dd>${esc(s.domain_ids.map(domainName).join(', ')||'None · General chat')}</dd><dt>Personal memories</dt><dd>${s.read_ids.length?countLabel(s.read_ids.length,'selected memory','selected memories'):s.domain_ids.length?'No confirmed memories selected yet':'Not accessed'}</dd><dt>Automatic proposals</dt><dd>${s.allow_learning?esc(domainName(s.write_domain_id))+' · Review before saving':'Off'}</dd></dl><hr><p class="dialog-help">Private chats do not expire. Return anytime to continue an active conversation.</p><p class="dialog-help">${s.domain_ids.length?'Only selected memories are available here.':'Ask general questions or share something in this conversation. Personal memories are not loaded.'}</p><p class="dialog-help">Use Save memory to choose what to keep and where it belongs.</p>`;
   const pending=s.actions.filter(a=>a.status==='pending');
   return `<h3>${icon('shield')} Authorization</h3><dl><dt>Audience</dt><dd>${esc(s.audience||'Private')}</dd><dt>Readable domains</dt><dd>${esc(s.domain_ids.map(domainName).join(', '))}</dd><dt>Authorized memories</dt><dd>${s.read_ids.length} readable · ${s.disclose_ids.length} disclosable</dd><dt>Save memories to</dt><dd>${s.allow_learning?esc(domainName(s.write_domain_id))+' · Save after review':'Do not extract memories'}</dd><dt>Action permissions</dt><dd>${s.action_policy==='ask'?'New commitments require owner approval':'Information only'}</dd><dt>Expires at</dt><dd>${dt(s.expires_at)}</dd></dl>${s.goal?`<hr><h3>Conversation goal</h3><p class="muted pre">${esc(s.goal)}</p>`:''}<hr><h3>Needs your approval ${pending.length?`· ${pending.length}`:''}</h3>${pending.length?pending.map(a=>`<div class="approval"><small>Guest request</small><p>${esc(a.request)}</p><button class="btn primary" data-action="decide" data-id="${a.id}" ${s.status!=='active'?'disabled':''}>Review request</button></div>`).join(''):'<small>No requests need your decision right now.</small>'}`;
 }
 function renderSession() {
-  const s=state.session,active=s.status==='active' && s.expires_at>Date.now()/1000;
-  if(!active && s.status==='active')s.status='expired';
+  const s=state.session;
+  s.status=sessionStatus(s);
+  const active=s.status==='active';
   shell(`${state.config.demo?'<div class="chat-demo-note">Local demo · Text replies use authorized memories. Microphone requires a live speech service.</div>':''}
     <div class="room-layout">${conversation(s,s.mode==='private')}</div>
     <dialog class="context-drawer" id="context-drawer" aria-labelledby="context-title"><div class="context-heading"><h2 id="context-title">${s.mode==='private'?'Chat context':'Authorization & approvals'}</h2><div class="actions"><button class="icon-btn pin-context" data-action="pin-context" aria-label="Pin context beside conversation" title="Pin context beside conversation" aria-pressed="false">${icon('panel')}</button><button class="icon-btn" data-action="close-context" aria-label="Close context">${icon('close')}</button></div></div><div class="inspector" id="inspector">${inspector(s)}</div></dialog>`,'Conversations',sessionHeader(s,{icon,esc,domainName,prefs:state.voicePrefs}));
@@ -242,7 +247,7 @@ async function refreshSession() {
   try{
     const sid=state.session.id;
     const s=await api(`/sessions/${sid}`);if(state.session?.id!==sid)return;state.session=s;
-    if(s.status!=='active'||s.expires_at<Date.now()/1000){disconnect();renderSession();return;}
+    if(sessionStatus(s)!=='active'){disconnect();renderSession();return;}
     if($('#session-title')){$('#session-title').textContent=s.title;$('#session-title').title=s.title;}
     if($('#inspector')&&!$('#inspector').contains(document.activeElement)){const html=inspector(s);if($('#inspector').innerHTML!==html){$('#inspector').innerHTML=html;bindActions($('#inspector'));}}
     const badge=$('.approval-count');if(badge){const n=s.actions.filter(a=>a.status==='pending').length;badge.hidden=!n;badge.textContent=n;$('[aria-controls=context-drawer]').setAttribute('aria-label',n?`Chat context, ${n} requests need approval`:'Chat context');}
@@ -402,7 +407,7 @@ async function privateSessionDialog(changingContext=false) {
     if(read.length>100)throw new Error('Choose up to 100 memories under Memory access.');
     const result=await api('/sessions','POST',{mode:'private',title:'New conversation',domain_ids:domains,read_ids:read,disclose_ids:[],
       write_domain_id:fd.has('allow_learning')?fd.get('write_domain_id'):null,allow_learning:fd.has('allow_learning'),
-      action_policy:'none',goal:fd.get('goal')||'',duration_minutes:Number(fd.get('duration_minutes'))});
+      action_policy:'none',goal:fd.get('goal')||''});
     toast('Conversation started with your selected domains.');navigate(`sessions/${result.id}`);
   },'Start conversation',{className:'context-picker-dialog',focusSelector:'input[name=domains],#without-memory'});
   bindPrivateContext(modal,state.domains,memories,readIds,{esc,domainName});

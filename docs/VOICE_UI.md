@@ -57,12 +57,20 @@ the menu, and Tab to continue. Clicking outside or scrolling dismisses the menu.
   filtering private/delegated/empty conversations; renaming; and confirmed deletion.
   Expired sessions display Expired, not Active · Expired.
 - Talk with Echooo reuses the latest private conversation only when it is empty,
-  active, unexpired, and has the same default knowledge snapshot and permissions.
-  Otherwise it starts a fresh default conversation. It never revives expired or
-  revoked authorization, reopens an older empty conversation, or imports another
+  active, and has the same default knowledge snapshot and permissions.
+  Otherwise it starts a fresh default conversation. It never revives ended or
+  revoked conversations, reopens an older empty conversation, or imports another
   domain's history. Reusing the already open chat preserves its local draft and
   does not restart audio. Server-side transaction locking prevents duplicate empty
   chats from concurrent quick-chat requests.
+- Private chats have no time-based expiry; their history remains available for
+  continuing an active chat. Existing private chats lose their former deadline on
+  startup without changing messages, ended/revoked status, or knowledge grants.
+  Selected-memory expiry/version checks and revocation still apply. Delegations
+  retain a mandatory authorization deadline, including for invitations and voice.
+- Empty conversations never display a conversation review. Only active empty chats
+  invite the user to speak; ended, revoked, and expired conversations explain their
+  actual state and show that no messages were sent.
 - `PATCH /api/sessions/{id}` changes only the validated title. `DELETE` removes that
   owner's conversation, messages, proposals, actions, and conversation audit rows;
   it also revokes guest credentials and closes active connections. Pending replies

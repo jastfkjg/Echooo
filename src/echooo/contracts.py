@@ -51,6 +51,7 @@ class SessionInput(Input):
     write_domain_id: str | None = None
     allow_learning: bool = True
     action_policy: Literal["ask", "none"] = "ask"
+    # Only delegated conversations expire. Accepted but ignored for private chats.
     duration_minutes: int = Field(default=60, ge=5, le=1440)
     voice: dict = Field(default_factory=dict)
 
