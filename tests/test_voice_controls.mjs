@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {Voice} from '../web/voice.js';
-import {updateVoiceUI} from '../web/chat-ui.js';
+import {updateVoiceUI, voiceControls} from '../web/chat-ui.js';
+import {bindVoiceOptions, syncVoiceOptions} from '../web/voice-options.js';
 
 class AudioContextMock {
   state='suspended';
@@ -34,6 +35,62 @@ function setup(getUserMedia) {
   const voice=new Voice(socket,()=>{});
   return {voice,socket,stream,track,synth};
 }
+
+function optionsRoot() {
+  const nodes=new Map();
+  const root={querySelector(key){
+    if(!nodes.has(key))nodes.set(key,{listeners:{},addEventListener(type,fn){this.listeners[type]=fn;}});
+    return nodes.get(key);
+  }};
+  return root;
+}
+test('Voice options sit beside the start action with radio modes and a sound preference',()=>{
+  const html=voiceControls(()=>'',{dictation:true,muted:true});
+  assert.ok(html.indexOf('data-action="voice"')<html.indexOf('id="voice-options-trigger"'));
+  assert.match(html,/Start dictation/);assert.match(html,/popover="auto"/);
+  assert.match(html,/id="voice-mode-dictation" checked/);
+  assert.match(html,/id="voice-replies-toggle"  disabled/);
+  assert.doesNotMatch(html,/choose-domains|Conversation settings/);
+});
+test('Voice preferences can be changed before a connection without starting audio',()=>{
+  const root=optionsRoot(),prefs={dictation:false,muted:false};
+  bindVoiceOptions({root,prefs,getVoice:()=>null});
+  root.querySelector('#voice-mode-dictation').onchange();
+  assert.equal(prefs.dictation,true);
+  assert.equal(root.querySelector('#voice-replies-toggle').disabled,true);
+  assert.equal(root.querySelector('[data-action=voice] span').textContent,'Start dictation');
+  root.querySelector('#voice-mode-chat').onchange();
+  root.querySelector('#voice-replies-toggle').onchange({target:{checked:false}});
+  assert.equal(prefs.muted,true);assert.equal(root.querySelector('#voice-hint').textContent,'Replies are muted.');
+});
+test('Mode changes preserve sound preferences and do not request microphone access',()=>{
+  let captures=0;
+  const {voice}=setup(async()=>{captures++;throw new Error('Unexpected microphone request');});
+  const root=optionsRoot(),prefs={dictation:false,muted:false};
+  voice.onChange=()=>syncVoiceOptions(voice,root);
+  bindVoiceOptions({root,prefs,getVoice:()=>voice});
+  root.querySelector('#voice-replies-toggle').onchange({target:{checked:false}});
+  root.querySelector('#voice-mode-dictation').onchange();
+  assert.equal(root.querySelector('#voice-replies-toggle').disabled,true);
+  root.querySelector('#voice-mode-chat').onchange();
+  assert.equal(root.querySelector('#voice-replies-toggle').disabled,false);
+  assert.equal(root.querySelector('#voice-replies-toggle').checked,false);
+  assert.equal(voice.muted,true);assert.equal(prefs.muted,true);
+  assert.equal(voice.active,false);assert.equal(voice.enabled,false);assert.equal(captures,0);
+  voice.close();
+});
+test('Quick mute and live mode changes synchronize the voice-options controls',async()=>{
+  const {voice}=setup(),root=optionsRoot();
+  await voice.start();await voice.capture();
+  voice.setMuted(true);syncVoiceOptions(voice,root);
+  assert.equal(root.querySelector('#voice-replies-toggle').checked,false);
+  voice.setDictation(true);syncVoiceOptions(voice,root);
+  assert.equal(root.querySelector('#voice-mode-dictation').checked,true);
+  assert.equal(root.querySelector('#voice-mode-chat').checked,false);
+  assert.equal(root.querySelector('#voice-replies-toggle').disabled,true);
+  assert.equal(voice.micReady,true);assert.equal(voice.enabled,false);
+  voice.close();
+});
 
 test('Start voice enables input and replies; Listening waits for capture readiness',async()=>{
   const {voice,socket,track}=setup();

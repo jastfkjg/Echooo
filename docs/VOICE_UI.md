@@ -10,7 +10,7 @@ the conversation itself is not a nested card.
   playback, and leaves the text conversation open.
 - **Pause microphone**, **Mute replies**, and **Interrupt reply** are distinct
   actions. Muting does not disable recording; interrupting does not end voice.
-- **Dictation only**, under Conversation settings, transcribes into the existing
+- **Dictation only**, under Voice options beside Start voice, transcribes into the existing
   draft. It does not generate a message or reply until the user sends the draft.
 - Voice status comes from capture readiness, reply processing, and actual
   playback start/drain events. A server becoming idle does not imply recording.
@@ -30,7 +30,13 @@ without memory; memory access, suggestions, and advanced settings expand on
 demand. It retains unchecked memories across domain changes. Its footer stays
 visible while the content scrolls on small screens.
 
-Conversation settings still contains domain selection and voice preferences.
+There is no separate Conversation settings menu. Domains is the single scope
+entry point; Context shows authorization details. Voice options lives beside
+Start voice, with Voice conversation / Dictation only and Read replies aloud.
+The sound preference is preserved but disabled during dictation; the live mute
+button stays synchronized with it. Changing preferences never starts capture.
+The themed popover stays in the top layer, dismisses on Escape/outside click,
+and closes when keyboard focus leaves or the viewport resizes.
 Changing domains creates a new conversation with fresh authorization; it does not
 silently change an existing conversation's knowledge scope. More actions contains
 delegation, ending/review, renaming, deletion, and memory proposal creation.

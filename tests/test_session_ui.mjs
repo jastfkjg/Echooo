@@ -51,6 +51,8 @@ test('Header has management actions and no tiny scope chip',()=>{
   assert.match(html,/data-action="rename-session"/);assert.match(html,/data-action="delete-session"/);
   assert.doesNotMatch(html,/scope-label/);
   assert.doesNotMatch(html,/Private conversation|session-kind/);
+  assert.doesNotMatch(html,/Conversation settings|dictation-toggle|mute-toggle/);
+  assert.equal((html.match(/data-action="choose-domains"/g)||[]).length,1);
   assert.ok(html.indexOf('id="session-title"') < html.indexOf('class="domain-control"'));
   assert.ok(html.indexOf('class="domain-control"') < html.indexOf('class="session-tools"'));
   assert.match(sessionHeader({...chats[1],actions:[]},helpers),/Delegated conversation/);

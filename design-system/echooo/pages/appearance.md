@@ -27,3 +27,6 @@ Applies across the workspace, conversations, dialogs, sign-in, and guest pages.
   viewport-aware placement, and top-layer menus inside scrolling dialogs.
 - Preserve keyboard selection, form values, disabled states, and dynamic choices.
   Escape cancels the menu without closing its parent dialog; Tab continues focus.
+- Do not restore a separate Conversation settings icon. Keep Domains, Context,
+  and More in the private-chat header. Voice options belongs beside Start voice,
+  expands on demand, and never consumes another persistent settings row.

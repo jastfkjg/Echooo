@@ -2,6 +2,7 @@ import { Voice } from './voice.js';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js';
 import {enhanceSelects} from './select.js';
+import {bindVoiceOptions} from './voice-options.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -185,7 +186,7 @@ function conversation(s, canSpeak) {
     <div class="transcript" id="transcript" role="log" aria-label="Transcript" aria-live="polite" tabindex="0"><div class="message-column" id="messages">${s.messages.length?s.messages.map(messageHTML).join(''):empty(canSpeak?'Ready to talk':'Follow the conversation',canSpeak?'Start a voice conversation, or write a message below.':'Create an invitation. Your guest’s messages will appear here.','', 'wave')}${!active&&!state.guest?summaryHTML(s):''}</div></div>
     <button class="btn jump-latest" data-action="latest" hidden>Latest messages ↓</button>
     <div class="composer"><div class="composer-inner">${active?`
-      ${canSpeak?voiceControls(icon):`<div class="supervision-note">${icon('shield')} Private supervision <span id="room-state">Connecting…</span></div>`}
+      ${canSpeak?voiceControls(icon,state.voicePrefs):`<div class="supervision-note">${icon('shield')} Private supervision <span id="room-state">Connecting…</span></div>`}
       <div id="partial" class="partial-transcript" aria-live="off" hidden></div>
       <form id="message-form"><textarea id="message-input" rows="1" aria-label="${canSpeak?'Message':'Private note'}" placeholder="${canSpeak?'Or type a message…':'Write a private note…'}" maxlength="6000" required></textarea><button class="btn send-message" type="submit" aria-label="${canSpeak?'Send message':'Save private note'}">${icon('arrow')}<span>${canSpeak?'Send':'Save note'}</span></button></form>
       ${disclosure?`<div class="composer-caption">${disclosure}</div>`:''}`:`<p class="ended-note">${icon('lock')} This conversation has ${s.status==='expired'?'expired':s.status==='revoked'?'been revoked':'ended'}. ${!state.guest?'<button class="btn" data-action="quick-chat">Start a new conversation</button>':''}</p>`}</div></div>
@@ -216,8 +217,6 @@ function bindSessionChrome() {
   $$('.toolbar-menu').forEach(menu=>menu.addEventListener('toggle',()=>{
     if(menu.open)$$('.toolbar-menu').filter(other=>other!==menu).forEach(other=>other.open=false);
   }));
-  if($('#dictation-toggle'))$('#dictation-toggle').onchange=e=>{state.voicePrefs.dictation=e.target.checked;state.voice?.setDictation(e.target.checked);};
-  if($('#mute-toggle'))$('#mute-toggle').onchange=e=>{state.voicePrefs.muted=e.target.checked;state.voice?.setMuted(e.target.checked);};
 }
 function openContext() {
   const drawer=$('#context-drawer');
@@ -263,6 +262,7 @@ function scrollToLatest() {
   const jump=$('[data-action=latest]');if(jump)jump.hidden=true;
 }
 function bindConversation(canSpeak) {
+  if(canSpeak)bindVoiceOptions({prefs:state.voicePrefs,getVoice:()=>state.voice});
   scrollToLatest();
   const transcript=$('#transcript');if(transcript)transcript.onscroll=()=>{$('[data-action=latest]').hidden=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<100;};
   const form=$('#message-form');if(!form)return;
@@ -560,6 +560,7 @@ async function boot() {
   if(location.pathname.startsWith('/room/')){await startGuest(location.pathname.split('/')[2]);return;}
   try{const auth=await api('/auth');if(!auth.user)authPage(auth.needs_setup);else{state.user=auth.user;await startOwner();}}catch(err){$('#app').innerHTML=empty('Unable to connect to the workspace',err.message);}
 }
+window.addEventListener('resize',()=>{const panel=$('#voice-options-panel');if(panel?.matches(':popover-open'))panel.hidePopover();});
 document.addEventListener('click',e=>{$$('.toolbar-menu[open]').filter(menu=>!menu.contains(e.target)).forEach(menu=>menu.open=false);const shell=$('.shell.menu-open');if(shell&&!e.target.closest('.sidebar,[data-action=menu]')){shell.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){$$('.toolbar-menu[open]').forEach(menu=>{menu.open=false;$('summary',menu)?.focus();});if($('#context-drawer')?.classList.contains('pinned')&&!$('#modal')?.open){$('#context-drawer').close();e.preventDefault();}$('.shell')?.classList.remove('menu-open');$('[data-action=menu]')?.setAttribute('aria-expanded','false');}});
 window.addEventListener('pagehide',disconnect);
