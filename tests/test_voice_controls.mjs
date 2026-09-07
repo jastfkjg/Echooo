@@ -52,6 +52,26 @@ test('Voice options sit beside the start action with radio modes and a sound pre
   assert.match(html,/id="voice-replies-toggle"  disabled/);
   assert.doesNotMatch(html,/choose-domains|Conversation settings/);
 });
+test('DashScope reply voices appear in the existing voice options menu',()=>{
+  const html=voiceControls(()=>'',{dictation:false,muted:false,voice:'longanhuan',voices:[
+    {id:'longanyang',name:'龙安洋',description:'阳光自然男声'},
+    {id:'longanhuan',name:'龙安欢',description:'欢脱元气女声'},
+  ],customVoiceManagement:true});
+  assert.match(html,/id="reply-voice"/);
+  assert.match(html,/value="longanhuan" selected/);
+  assert.match(html,/龙安欢 · 欢脱元气女声/);
+  assert.match(html,/next spoken reply/);
+  assert.match(html,/id="manage-custom-voices"/);
+  assert.match(html,/Clone from a recording/);
+});
+test('Changing reply voice persists it without starting audio',async()=>{
+  const root=optionsRoot(),saved=[],prefs={dictation:false,muted:false,voice:'longanyang',voices:[
+    {id:'longanyang'},{id:'longanhuan'},
+  ]};
+  bindVoiceOptions({root,prefs,getVoice:()=>null,onVoiceChange:async voice=>saved.push(voice)});
+  await root.querySelector('#reply-voice').onchange({target:{value:'longanhuan'}});
+  assert.equal(prefs.voice,'longanhuan');assert.deepEqual(saved,['longanhuan']);
+});
 test('Voice preferences can be changed before a connection without starting audio',()=>{
   const root=optionsRoot(),prefs={dictation:false,muted:false};
   bindVoiceOptions({root,prefs,getVoice:()=>null});

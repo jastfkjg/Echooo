@@ -231,6 +231,27 @@ class Service:
             r.change(db.sessions, sid, title=title)
             return r.get(db.sessions, sid)
 
+    def update_session_voice(self, owner: str, sid: str, dashscope_voice: str) -> dict:
+        with self.store.scope(owner) as r:
+            session = need(r.get(db.sessions, sid), "Conversation")
+            voice = {**session["voice"], "dashscope_voice": dashscope_voice}
+            r.change(db.sessions, sid, voice=voice)
+            r.log("session.voice_updated", session_id=sid, voice_provider="dashscope")
+            return r.get(db.sessions, sid)
+
+    def reset_session_voices(self, owner: str, removed_voice: str, default_voice: str) -> int:
+        changed = 0
+        with self.store.scope(owner) as r:
+            for session in r.list(db.sessions):
+                if session["voice"].get("dashscope_voice") != removed_voice:
+                    continue
+                r.change(db.sessions, session["id"], voice={
+                    **session["voice"], "dashscope_voice": default_voice,
+                })
+                r.log("session.voice_reset", session_id=session["id"], voice_provider="dashscope")
+                changed += 1
+        return changed
+
     def delete_session(self, owner: str, sid: str) -> None:
         with self.store.scope(owner) as r:
             need(r.get(db.sessions, sid), "Conversation")

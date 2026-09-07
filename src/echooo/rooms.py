@@ -65,6 +65,7 @@ class Connection:
         self.stt_task = None
         self.reply_task = None
         self.cancel = asyncio.Event()
+        self.playback_cancel = asyncio.Event()
         self.lock = asyncio.Lock()
         self.can_speak = guest or mode == "private"
         # Legacy clients gate playback locally. New clients explicitly configure it.
@@ -159,6 +160,8 @@ class Connection:
                         if not isinstance(p.get("enabled"), bool):
                             raise Problem("Playback enabled must be a boolean.")
                         self.output_enabled = p["enabled"]
+                        if not self.output_enabled:
+                            self.playback_cancel.set()
                     elif kind == "playback.retry" and self.can_speak:
                         if self.output_enabled and self.last_reply and (not self.reply_task or self.reply_task.done()):
                             self.cancel = asyncio.Event()
@@ -260,25 +263,33 @@ class Connection:
     async def play_reply(self, content):
         if not self.output_enabled:
             return
+        self.playback_cancel = asyncio.Event()
+        playback_cancel = self.playback_cancel
         try:
             self.validate()
-            if self.rooms.settings.tts_provider == "cosyvoice":
+            if self.rooms.settings.tts_provider in {"cosyvoice", "dashscope"}:
                 tts = create_tts(self.rooms.settings)
                 session = self.rooms.service.active(self.owner, self.sid)
-                tts.configure_voice(VoiceProfile(mode="sft",
-                    speaker_id=session["voice"].get("speaker_id") or self.rooms.settings.cosyvoice_speaker_id))
+                if self.rooms.settings.tts_provider == "dashscope":
+                    speaker_id = session["voice"].get("dashscope_voice") or self.rooms.settings.dashscope_tts_voice
+                else:
+                    speaker_id = session["voice"].get("speaker_id") or self.rooms.settings.cosyvoice_speaker_id
+                tts.configure_voice(VoiceProfile(mode="sft", speaker_id=speaker_id))
                 await self.send({"type": "audio.start", "sample_rate": tts.sample_rate})
                 remainder = b""
-                async for chunk in tts.stream_audio(content, cancel=self.cancel):
-                    self.validate()
-                    if self.cancel.is_set() or not self.output_enabled:
-                        return
-                    data = remainder + chunk.data
-                    even = len(data) - len(data) % 2
-                    remainder = data[even:]
-                    if even:
-                        async with self.lock:
-                            await self.ws.send_bytes(data[:even])
+                async with contextlib.aclosing(tts.stream_audio(content, cancel=playback_cancel)) as audio:
+                    async for chunk in audio:
+                        self.validate()
+                        if self.cancel.is_set() or playback_cancel.is_set() or not self.output_enabled:
+                            return
+                        data = remainder + chunk.data
+                        even = len(data) - len(data) % 2
+                        remainder = data[even:]
+                        if even:
+                            async with self.lock:
+                                await self.ws.send_bytes(data[:even])
+                if self.cancel.is_set() or playback_cancel.is_set() or not self.output_enabled:
+                    return
                 await self.send({"type": "audio.end"})
             else:
                 self.validate()

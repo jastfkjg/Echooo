@@ -17,9 +17,12 @@ def create_stt(settings: Settings) -> SpeechToTextProvider:
 
 
 def create_tts(settings: Settings) -> TextToSpeechProvider:
+    if settings.tts_provider == "dashscope":
+        from echooo.providers.tts.dashscope import DashScopeTTS
+
+        return DashScopeTTS(settings)
     if settings.tts_provider == "cosyvoice":
         from echooo.providers.tts.cosyvoice import CosyVoiceTTS
 
         return CosyVoiceTTS(settings)
     raise ValueError(f"Unknown TTS_PROVIDER: {settings.tts_provider}")
-

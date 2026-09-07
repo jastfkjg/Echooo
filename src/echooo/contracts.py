@@ -79,6 +79,10 @@ class SessionRenameInput(Input):
     title: str = Field(min_length=1, max_length=120)
 
 
+class SessionVoiceInput(Input):
+    dashscope_voice: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.-]+$")
+
+
 class MessageInput(Input):
     content: str = Field(min_length=1, max_length=6000)
 

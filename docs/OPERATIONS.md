@@ -36,10 +36,26 @@ Data is stored at `DATABASE_URL`. Relative SQLite paths are resolved from the wo
 | `LLM_PROVIDER` | mock or openai_compatible |
 | `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | Trusted chat/completions service; credentials remain server-side |
 | `LLM_TIMEOUT_SECONDS` | HTTP timeout, default 60 seconds; public replies normally require both draft and checker calls |
-| `TTS_PROVIDER` | browser or cosyvoice; recording and playback require explicit user action |
+| `TTS_PROVIDER` | browser, cosyvoice or dashscope; recording and playback require explicit user action |
 | `COSYVOICE_*` | Trusted private service address, output sample rate, timeout, and preset speaker |
+| `DASHSCOPE_API_KEY` | Required for dashscope; region/workspace-matched DashScope key, server-side only |
+| `DASHSCOPE_VOICE_API_KEY` | Optional separate server-side key for voice cloning/list/delete; defaults to `DASHSCOPE_API_KEY` |
+| `DASHSCOPE_TTS_URL` | WSS endpoint; defaults to the shared Beijing endpoint; supports workspace-specific Beijing/Singapore endpoints |
+| `DASHSCOPE_TTS_MODEL` / `DASHSCOPE_TTS_VOICE` | Default cosyvoice-v3-flash / longanyang; voice must match model and region |
+| `DASHSCOPE_TTS_CUSTOM_VOICES` | Optional comma-separated, pre-created DashScope custom voice IDs exposed in the web voice picker |
+| `DASHSCOPE_TTS_CUSTOMIZATION_URL` | Optional HTTPS override for the DashScope voice cloning/list/delete endpoint; derived from `DASHSCOPE_TTS_URL` by default |
+| `DASHSCOPE_UPLOAD_URL` | DashScope temporary-file upload credential endpoint used for browser voice samples |
+| `DASHSCOPE_TTS_SAMPLE_RATE` | Mono PCM16 output; default 24000; supported rates: 8000, 16000, 22050, 24000, 44100, 48000 |
+| `DASHSCOPE_TTS_TIMEOUT_SECONDS` | Positive finite setup/receive-idle timeout, default 60 seconds; connection handshake capped at 15 seconds |
 
 Browser input is fixed at 16 kHz mono PCM16 in 100 ms frames. This release rejects other STT input sample rates. CosyVoice output rate must match the checkpoint. Preset mode requires a compatible SFT checkpoint; do not assume every checkpoint provides preset voices. Speaker IDs are literal provider values and should not be translated.
+
+DashScope setup and endpoint examples are in the README. Cloud synthesis uses the configured
+default voice or the session's `voice.dashscope_voice`, independently of self-hosted
+`voice.speaker_id`. Restart after configuration changes; `./start.sh --mock` overrides TTS
+to browser speech. Each checked reply owns one cloud connection, which is closed on
+completion, mute, interruption, disconnection or authorization revocation. Failed calls
+are not automatically retried; the explicit Retry audio action reuses the last checked text.
 
 Upload limits: 5 MB per file; 100,000 extracted characters; up to 100 PDF pages. Encrypted PDFs and image-only scans are unsupported. DOCX uncompressed content is limited to 20 MB. Only extracted text is stored, not the original binary file. Conversations may select up to 12 domains and 100 memories, last up to 100 turns, and be authorized for 5 minutes to 24 hours. Extraction has a proposal-count limit; it does not guarantee exhaustive coverage of long sources. Important facts can be entered manually.
 

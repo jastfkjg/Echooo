@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, UploadFile, File
+from fastapi import FastAPI, Request, WebSocket, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError
@@ -15,11 +15,15 @@ from echooo import database as db
 from echooo.auth import Auth, AuthError
 from echooo.config import ROOT, Settings
 from echooo.contracts import (Credentials, DomainInput, MemoryInput, SourceInput,
-    SessionInput, SessionRenameInput, MessageInput, ReviewInput, DecisionInput, InviteInput, SaveConversationMemory)
+    SessionInput, SessionRenameInput, SessionVoiceInput, MessageInput, ReviewInput,
+    DecisionInput, InviteInput, SaveConversationMemory)
 from echooo.ingestion import MAX_UPLOAD, extract_file
 from echooo.intelligence import Intelligence
 from echooo.rooms import Rooms, public_message
 from echooo.service import Service, Problem, need
+from echooo.providers.tts.dashscope_voices import (
+    MAX_VOICE_SAMPLE, DashScopeVoiceError, DashScopeVoiceManager,
+)
 
 
 def create_app(settings: Settings | None = None, store: db.Store | None = None) -> FastAPI:
@@ -29,6 +33,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     auth = Auth(store)
     service = Service(store, Intelligence(settings))
     rooms = Rooms(service, auth, settings)
+    voice_manager = DashScopeVoiceManager(settings) if settings.tts_provider == "dashscope" else None
 
     @asynccontextmanager
     async def lifespan(app):
@@ -40,6 +45,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
 
     app = FastAPI(title="Echooo · Scoped personal representative", version="0.2.0", lifespan=lifespan)
     app.state.store, app.state.auth, app.state.service, app.state.rooms = store, auth, service, rooms
+    app.state.voice_manager = voice_manager
     app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 
     def same_origin(origin: str | None, base: str) -> bool:
@@ -129,6 +135,78 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         owner(request)
         return {**settings.public_dict(), "demo": settings.llm_provider == "mock",
             "database": "postgresql" if store.postgres else "sqlite", "version": "0.2.0"}
+
+    def merge_voice_catalogue(custom: list[dict]) -> list[dict]:
+        options = settings.dashscope_voice_options()
+        known = {str(option["id"]) for option in options}
+        options.extend(voice for voice in custom
+            if voice["id"] not in known and voice.get("status") == "OK")
+        return options
+
+    def voice_payload(custom: list[dict], **extra) -> dict:
+        return {"model": settings.dashscope_tts_model,
+            "default_voice": settings.dashscope_tts_voice,
+            "voices": merge_voice_catalogue(custom), "custom_voices": custom, **extra}
+
+    async def voice_catalogue() -> list[dict]:
+        manager = app.state.voice_manager
+        if settings.tts_provider != "dashscope" or manager is None:
+            raise Problem("Custom voice management is unavailable for the configured TTS provider.", 409)
+        try:
+            custom = await manager.list_voices()
+        except DashScopeVoiceError as exc:
+            raise Problem(str(exc), 503) from exc
+        return merge_voice_catalogue(custom)
+
+    @app.get("/api/tts/voices")
+    async def list_tts_voices(request: Request):
+        owner(request)
+        try:
+            await voice_catalogue()
+            manager = app.state.voice_manager
+            return voice_payload(manager.cached_voices if manager else [],
+                management_available=True)
+        except Problem as exc:
+            return voice_payload([], management_available=False, management_error=exc.message)
+
+    @app.post("/api/tts/voices/clone", status_code=201)
+    async def clone_tts_voice(request: Request,
+        prefix: str = Form(...), language: str = Form("zh"),
+        enable_preprocess: bool = Form(False), file: UploadFile = File(...)):
+        owner(request)
+        manager = app.state.voice_manager
+        if settings.tts_provider != "dashscope" or manager is None:
+            raise Problem("Custom voice management is unavailable for the configured TTS provider.", 409)
+        try:
+            data = await file.read(MAX_VOICE_SAMPLE + 1)
+            voice = await manager.create_voice(prefix=prefix.strip(), language=language,
+                filename=Path(file.filename or "sample").name, data=data,
+                enable_preprocess=enable_preprocess)
+            return voice_payload(manager.cached_voices, voice=voice)
+        except ValueError as exc:
+            raise Problem(str(exc), 422) from exc
+        except DashScopeVoiceError as exc:
+            raise Problem(str(exc), 503) from exc
+        finally:
+            await file.close()
+
+    @app.delete("/api/tts/voices/{voice_id}")
+    async def delete_tts_voice(request: Request, voice_id: str):
+        who = owner(request)
+        manager = app.state.voice_manager
+        if settings.tts_provider != "dashscope" or manager is None:
+            raise Problem("Custom voice management is unavailable for the configured TTS provider.", 409)
+        if voice_id in {option["id"] for option in settings.dashscope_voice_options()
+            if not option.get("custom")}:
+            raise Problem("Built-in voices cannot be deleted.", 409)
+        try:
+            await manager.delete_voice(voice_id)
+            reset = service.reset_session_voices(who, voice_id, settings.dashscope_tts_voice)
+            return voice_payload(manager.cached_voices, ok=True, reset_sessions=reset)
+        except ValueError as exc:
+            raise Problem(str(exc), 404) from exc
+        except DashScopeVoiceError as exc:
+            raise Problem(str(exc), 503) from exc
 
     @app.get("/api/domains")
     async def list_domains(request: Request):
@@ -244,6 +322,17 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     @app.patch("/api/sessions/{sid}")
     async def rename_session(request: Request, sid: str, data: SessionRenameInput):
         return service.rename_session(owner(request), sid, data.title)
+
+    @app.patch("/api/sessions/{sid}/voice")
+    async def update_session_voice(request: Request, sid: str, data: SessionVoiceInput):
+        who = owner(request)
+        if settings.tts_provider != "dashscope":
+            raise Problem("Cloud voice selection is unavailable for the configured TTS provider.", 409)
+        if data.dashscope_voice not in settings.dashscope_voice_ids():
+            manager = app.state.voice_manager
+            if manager is None or data.dashscope_voice not in manager.known_voice_ids:
+                raise Problem("Choose a voice available for the configured model and region.", 422)
+        return service.update_session_voice(who, sid, data.dashscope_voice)
 
     @app.delete("/api/sessions/{sid}")
     async def delete_session(request: Request, sid: str):

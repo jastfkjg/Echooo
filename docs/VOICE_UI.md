@@ -33,6 +33,16 @@ visible while the content scrolls on small screens.
 There is no separate Conversation settings menu. Domains is the single scope
 entry point; Context shows authorization details. Voice options lives beside
 Start voice, with Voice conversation / Dictation only and Read replies aloud.
+When DashScope is configured, it also shows the server-provided reply voices. The
+owner's choice is saved on the conversation and applies to the next spoken reply;
+API keys and unapproved voice IDs are never sent to the browser.
+Manage custom voices queries Alibaba Cloud for cloned voices bound to the configured
+TTS model. Owners can upload a WAV, MP3, or M4A sample, create a cloned voice, select
+it immediately, and permanently delete it after confirmation. Echooo validates the
+10 MB limit and WAV encoding/duration before forwarding the sample through Alibaba's
+48-hour temporary OSS flow; it never stores the sample or API key in the browser or
+database. Deleting a custom voice resets conversations that reference it to the
+server default. Built-in voices cannot be deleted.
 The sound preference is preserved but disabled during dictation; the live mute
 button stays synchronized with it. Changing preferences never starts capture.
 The themed popover stays in the top layer, dismisses on Escape/outside click,

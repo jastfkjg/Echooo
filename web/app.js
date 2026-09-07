@@ -204,6 +204,9 @@ function inspector(s) {
 function renderSession() {
   const s=state.session;
   s.status=sessionStatus(s);
+  state.voicePrefs.voices=state.config.tts?.voices||[];
+  state.voicePrefs.voice=s.voice?.dashscope_voice||state.config.tts?.default_voice||'';
+  state.voicePrefs.customVoiceManagement=!!state.config.tts?.custom_voice_management;
   const active=s.status==='active';
   shell(`${state.config.demo?'<div class="chat-demo-note">Local demo · Text replies use authorized memories. Microphone requires a live speech service.</div>':''}
     <div class="room-layout">${conversation(s,s.mode==='private')}</div>
@@ -267,7 +270,13 @@ function scrollToLatest() {
   const jump=$('[data-action=latest]');if(jump)jump.hidden=true;
 }
 function bindConversation(canSpeak) {
-  if(canSpeak)bindVoiceOptions({prefs:state.voicePrefs,getVoice:()=>state.voice});
+  if(canSpeak)bindVoiceOptions({prefs:state.voicePrefs,getVoice:()=>state.voice,notify:toast,onVoiceChange:async dashscope_voice=>{
+    if(state.guest)return;
+    const session=await api(`/sessions/${state.session.id}/voice`,'PATCH',{dashscope_voice});
+    state.session.voice=session.voice;
+    if(state.voice)state.voice.voice=dashscope_voice;
+    toast('Reply voice updated. It will apply to the next spoken reply.');
+  },onManageVoices:customVoiceDialog});
   scrollToLatest();
   const transcript=$('#transcript');if(transcript)transcript.onscroll=()=>{$('[data-action=latest]').hidden=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<100;};
   const form=$('#message-form');if(!form)return;
@@ -286,6 +295,68 @@ function bindConversation(canSpeak) {
   };
   $('#message-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();form.requestSubmit();}};
   $('#message-input').oninput=e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,140)+'px';};
+}
+
+function applyVoiceCatalogue(catalogue, selected=state.voicePrefs.voice) {
+  if(!state.config.tts)return;
+  state.config.tts.voices=catalogue.voices||[];
+  state.voicePrefs.voices=state.config.tts.voices;
+  state.voicePrefs.voice=selected||catalogue.default_voice||state.config.tts.default_voice;
+  const select=$('#reply-voice');
+  if(!select)return;
+  select.replaceChildren(...state.voicePrefs.voices.map(voice=>{
+    const option=document.createElement('option');
+    option.value=voice.id;option.textContent=`${voice.name} · ${voice.description}`;
+    option.selected=voice.id===state.voicePrefs.voice;
+    return option;
+  }));
+  select.dispatchEvent(new Event('input',{bubbles:true}));
+}
+
+async function customVoiceDialog() {
+  const catalogue=await api('/tts/voices');
+  applyVoiceCatalogue(catalogue);
+  const voices=catalogue.custom_voices||catalogue.voices.filter(voice=>voice.managed);
+  const list=voices.length?`<div class="custom-voice-list">${voices.map(voice=>`<div class="custom-voice-row"><div><strong>${esc(voice.name)}</strong><small>${esc(voice.description)} · ${esc(voice.status||'OK')}</small></div><button type="button" class="icon-btn danger" data-delete-voice="${esc(voice.id)}" aria-label="Delete ${esc(voice.name)}" title="Delete custom voice">${icon('trash')}</button></div>`).join('')}</div>`:'<div class="custom-voice-empty">No custom voices have been created for this model.</div>';
+  const warning=catalogue.management_error?`<div class="custom-voice-warning" role="status">${esc(catalogue.management_error)} Existing preset voices remain available. Check the voice-management endpoint/key before creating a voice.</div>`:'';
+  const body=`<p class="dialog-help">Custom voices are tied to <span class="mono">${esc(catalogue.model)}</span>. Once created, they appear in Reply voice for every conversation.</p>${warning}
+    <h3 class="custom-voice-section">Your custom voices</h3>${list}
+    <h3 class="custom-voice-section">Clone a new voice</h3>
+    <div class="custom-voice-sample"><p>Use one clear speaker with no music or overlap. A quiet 10–20 second recording works best; accepted range is 5–60 seconds and up to 10 MB.</p></div>
+    <div class="two-col">${field('prefix','Voice name','','text','required maxlength="10" pattern="[A-Za-z0-9]+" placeholder="e.g. myvoice"')}
+      <div class="form-field"><label for="f-language">Recording language</label><select id="f-language" name="language"><option value="zh">Chinese</option><option value="en">English</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="de">German</option><option value="fr">French</option><option value="ru">Russian</option></select></div></div>
+    ${field('file','Voice sample','','file','required accept=".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4"')}
+    <label class="check"><input type="checkbox" name="enable_preprocess" value="true"><span><strong>Improve a noisy recording</strong><small>Alibaba Cloud will reduce noise and enhance the sample. Leave off for clean recordings.</small></span></label>
+    <p class="dialog-help">The sample is sent to Alibaba Cloud temporary storage for cloning and is not saved in Echooo. Alibaba automatically removes the temporary object after 48 hours.</p>`;
+  const modal=openDialog('Custom voices',body,async fd=>{
+    const file=fd.get('file');
+    if(!file?.size)throw new Error('Choose a voice sample.');
+    if(file.size>10*1024*1024)throw new Error('The voice sample must be 10 MB or smaller.');
+    const result=await api('/tts/voices/clone','POST',fd);
+    const created=result.voice.id;
+    if(result.voice.status!=='OK'){
+      applyVoiceCatalogue(result);
+      toast('Custom voice created and is being reviewed. It will become selectable after Alibaba Cloud marks it ready.');
+      return;
+    }
+    applyVoiceCatalogue(result,created);
+    try{
+      const session=await api(`/sessions/${state.session.id}/voice`,'PATCH',{dashscope_voice:created});
+      state.session.voice=session.voice;if(state.voice)state.voice.voice=created;
+      toast('Custom voice created and selected for the next spoken reply.');
+    }catch(error){toast(`Custom voice created. Select it from Reply voice when ready. ${error.message}`);}
+  },'Create voice',{className:'custom-voice-dialog'});
+  $$('[data-delete-voice]',modal).forEach(button=>button.onclick=()=>{
+    const voiceId=button.dataset.deleteVoice;
+    modal.close();
+    openDialog('Delete custom voice?',`<p class="dialog-help">Delete <span class="mono">${esc(voiceId)}</span> from Alibaba Cloud? Conversations using it will return to the default voice. This cannot be undone.</p>`,async()=>{
+      const result=await api(`/tts/voices/${encodeURIComponent(voiceId)}`,'DELETE');
+      const selected=state.voicePrefs.voice===voiceId?result.default_voice:state.voicePrefs.voice;
+      applyVoiceCatalogue(result,selected);
+      if(state.session?.voice?.dashscope_voice===voiceId){state.session.voice.dashscope_voice=result.default_voice;if(state.voice)state.voice.voice=result.default_voice;}
+      toast(`Custom voice deleted${result.reset_sessions?` · ${result.reset_sessions} conversation${result.reset_sessions===1?'':'s'} reset`:''}.`);
+    },'Delete voice');
+  });
 }
 function connect(sid,guest) {
   const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/sessions/${sid}?role=${guest?'guest':'owner'}`);
@@ -554,7 +625,11 @@ async function startGuest(sid) {
   try{state.session=await api(`/guest/sessions/${sid}`);renderGuest();connect(sid,true);}catch(err){$('#app').innerHTML=`<main class="auth-page" id="main">${brand}<h1>Invitation expired or conversation ended</h1><p>${esc(err.message)}</p><p>Ask the owner for a new authorization.</p></main>`;}
 }
 async function startOwner() {
-  state.config=await api('/config');await renderRoute();window.addEventListener('hashchange',renderRoute);
+  state.config=await api('/config');
+  if(state.config.tts?.custom_voice_management){
+    try{applyVoiceCatalogue(await api('/tts/voices'));}catch{/* Presets remain usable; management shows the retry error on demand. */}
+  }
+  await renderRoute();window.addEventListener('hashchange',renderRoute);
 }
 async function boot() {
   if(location.pathname==='/invite'){

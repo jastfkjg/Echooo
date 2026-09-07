@@ -1,15 +1,53 @@
 from __future__ import annotations
 
 import os
+import math
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_FILE = ROOT / "config" / "prompts.toml"
+
+
+# Compact, conversation-oriented subsets of the official catalogues. Operators
+# can expose additional base/enrolled voice IDs with DASHSCOPE_TTS_CUSTOM_VOICES.
+DASHSCOPE_VOICE_CATALOGUES = {
+    "qwen-audio-3.0-tts-plus": (
+        ("longanlingxin", "龙安灵心", "知心温暖女声"),
+        ("longanlufeng", "龙安鲁风", "明亮开朗男声"),
+    ),
+    "qwen-audio-3.0-tts-flash": (
+        ("longanfengyue", "龙安风悦", "自然亲切女声"),
+        ("longanyuanfei", "龙安元妃", "高傲妃子女声"),
+        ("longanlingxi", "龙安灵希", "可爱甜美女声"),
+        ("loongeva_v3.6", "Eva", "高智感美式英语女声"),
+        ("loongjohn", "John", "沉稳亲切美式英语男声"),
+    ),
+    "cosyvoice-v3-flash": (
+        ("longanyang", "龙安洋", "阳光自然男声 · 普通话 / English"),
+        ("longanhuan", "龙安欢", "欢脱元气女声 · 普通话 / English"),
+        ("longanwen_v3", "龙安温", "优雅知性女声 · 普通话 / English"),
+        ("longanlang_v3", "龙安朗", "清爽利落男声 · 普通话 / English"),
+        ("longyingtao_v3", "龙应桃", "温柔淡定女声 · 普通话 / English"),
+        ("longyichen_v3", "龙逸尘", "洒脱活力男声 · 普通话 / English"),
+        ("longlaobo_v3", "龙老伯", "沧桑沉稳男声 · 普通话 / English"),
+        ("longanyue_v3", "龙安粤", "欢脱粤语男声 · 粤语 / English"),
+        ("loongandy_v3", "Andy", "美式英语男声"),
+        ("loongindah_v3", "Indah", "印尼语女声"),
+        ("longhuhu_v3", "龙呼呼", "天真烂漫童声 · 普通话 / English"),
+        ("longjiqi_v3", "龙机器", "呆萌机器人声 · 普通话 / English"),
+    ),
+}
+
+
+def _csv(name: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(value.strip() for value in os.getenv(name, "").split(",") if value.strip()))
 
 
 def _int(name: str, default: int) -> int:
@@ -98,6 +136,19 @@ class Settings:
         default_factory=lambda: _float("COSYVOICE_TIMEOUT_SECONDS", 60)
     )
     cosyvoice_speaker_id: str = field(default_factory=lambda: os.getenv("COSYVOICE_SPEAKER_ID", "中文女"))
+    dashscope_api_key: str = field(default_factory=lambda: os.getenv("DASHSCOPE_API_KEY", ""))
+    dashscope_voice_api_key: str = field(default_factory=lambda: os.getenv("DASHSCOPE_VOICE_API_KEY", ""))
+    dashscope_tts_url: str = field(default_factory=lambda: os.getenv(
+        "DASHSCOPE_TTS_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/inference"))
+    dashscope_tts_customization_url: str = field(default_factory=lambda: os.getenv(
+        "DASHSCOPE_TTS_CUSTOMIZATION_URL", ""))
+    dashscope_upload_url: str = field(default_factory=lambda: os.getenv(
+        "DASHSCOPE_UPLOAD_URL", "https://dashscope.aliyuncs.com/api/v1/uploads"))
+    dashscope_tts_model: str = field(default_factory=lambda: os.getenv("DASHSCOPE_TTS_MODEL", "cosyvoice-v3-flash"))
+    dashscope_tts_voice: str = field(default_factory=lambda: os.getenv("DASHSCOPE_TTS_VOICE", "longanyang"))
+    dashscope_tts_custom_voices: tuple[str, ...] = field(default_factory=lambda: _csv("DASHSCOPE_TTS_CUSTOM_VOICES"))
+    dashscope_tts_sample_rate: int = field(default_factory=lambda: _int("DASHSCOPE_TTS_SAMPLE_RATE", 24000))
+    dashscope_tts_timeout_seconds: float = field(default_factory=lambda: _float("DASHSCOPE_TTS_TIMEOUT_SECONDS", 60))
     prompts: PromptSettings = field(default_factory=PromptSettings.load)
 
     @classmethod
@@ -110,20 +161,41 @@ class Settings:
             self.tts_provider = "browser"  # Compatibility with the former local demo .env.
         for value, choices, label in ((self.stt_provider, {"mock", "assemblyai"}, "STT"),
             (self.llm_provider, {"mock", "openai_compatible"}, "LLM"),
-            (self.tts_provider, {"browser", "cosyvoice"}, "TTS")):
+            (self.tts_provider, {"browser", "cosyvoice", "dashscope"}, "TTS")):
             if value not in choices:
                 raise ValueError(f"Unsupported {label} provider: {value}")
         if self.assemblyai_sample_rate != 16000:
             raise ValueError("This browser capture release requires ASSEMBLYAI_SAMPLE_RATE=16000")
         if self.stt_provider == "assemblyai" and not self.assemblyai_api_key:
             raise ValueError("ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai")
+        if self.tts_provider == "dashscope":
+            for name, value in (("DASHSCOPE_API_KEY", self.dashscope_api_key),
+                ("DASHSCOPE_TTS_MODEL", self.dashscope_tts_model),
+                ("DASHSCOPE_TTS_VOICE", self.dashscope_tts_voice)):
+                if not value.strip():
+                    raise ValueError(f"{name} is required when TTS_PROVIDER=dashscope")
+            url = urlsplit(self.dashscope_tts_url)
+            if url.scheme != "wss" or not url.hostname or url.username or url.password or url.query or url.fragment:
+                raise ValueError("DASHSCOPE_TTS_URL must be a wss:// endpoint without credentials, query or fragment")
+            for name, endpoint in (("DASHSCOPE_TTS_CUSTOMIZATION_URL", self.dashscope_customization_url()),
+                ("DASHSCOPE_UPLOAD_URL", self.dashscope_upload_url)):
+                parsed = urlsplit(endpoint)
+                if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise ValueError(f"{name} must be an https:// endpoint without credentials, query or fragment")
+            if self.dashscope_tts_sample_rate not in {8000, 16000, 22050, 24000, 44100, 48000}:
+                raise ValueError("Unsupported DASHSCOPE_TTS_SAMPLE_RATE")
+            if not math.isfinite(self.dashscope_tts_timeout_seconds) or self.dashscope_tts_timeout_seconds <= 0:
+                raise ValueError("DASHSCOPE_TTS_TIMEOUT_SECONDS must be finite and greater than zero")
+            for voice in (self.dashscope_tts_voice, *self.dashscope_tts_custom_voices):
+                if not re.fullmatch(r"[A-Za-z0-9_.-]{1,256}", voice):
+                    raise ValueError("DashScope voice IDs may contain only letters, numbers, dot, underscore and hyphen")
         if self.llm_provider == "openai_compatible" and not self.llm_model:
             raise ValueError("LLM_MODEL is required when LLM_PROVIDER=openai_compatible")
         if self.llm_provider == "openai_compatible" and not all((self.prompts.delegate_system, self.prompts.check_system, self.prompts.memory_system)):
             raise ValueError("config/prompts.toml must define delegate, check, and memory prompts")
 
     def public_dict(self) -> dict[str, object]:
-        return {
+        public = {
             "providers": {
                 "stt": self.stt_provider,
                 "llm": self.llm_provider,
@@ -134,3 +206,36 @@ class Settings:
                 "input_encoding": "pcm_s16le",
             },
         }
+        if self.tts_provider == "dashscope":
+            public["tts"] = {
+                "model": self.dashscope_tts_model,
+                "default_voice": self.dashscope_tts_voice,
+                "voices": self.dashscope_voice_options(),
+                "custom_voice_management": True,
+            }
+        return public
+
+    def dashscope_voice_options(self) -> list[dict[str, object]]:
+        presets = DASHSCOPE_VOICE_CATALOGUES.get(self.dashscope_tts_model, ())
+        options = [{"id": voice_id, "name": name, "description": description, "custom": False}
+            for voice_id, name, description in presets]
+        known = {option["id"] for option in options}
+        if self.dashscope_tts_voice not in known:
+            options.insert(0, {"id": self.dashscope_tts_voice, "name": self.dashscope_tts_voice,
+                "description": "服务器默认音色", "custom": True})
+            known.add(self.dashscope_tts_voice)
+        for voice_id in self.dashscope_tts_custom_voices:
+            if voice_id not in known:
+                options.append({"id": voice_id, "name": voice_id,
+                    "description": "自定义音色", "custom": True})
+                known.add(voice_id)
+        return options
+
+    def dashscope_voice_ids(self) -> set[str]:
+        return {str(option["id"]) for option in self.dashscope_voice_options()}
+
+    def dashscope_customization_url(self) -> str:
+        if self.dashscope_tts_customization_url.strip():
+            return self.dashscope_tts_customization_url.strip()
+        endpoint = urlsplit(self.dashscope_tts_url)
+        return f"https://{endpoint.netloc}/api/v1/services/audio/tts/customization"

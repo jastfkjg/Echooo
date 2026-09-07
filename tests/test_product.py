@@ -364,7 +364,8 @@ def test_rotating_credential_during_generation_prevents_persistence(client,app):
     assert 'REVOKED_REPLY' not in client.get(f"/api/sessions/{s['id']}").text
 
 
-def test_audio_transcript_uses_scoped_checked_reply_and_pcm_alignment(client,app,monkeypatch):
+@pytest.mark.parametrize('tts_provider', ['cosyvoice', 'dashscope'])
+def test_audio_transcript_uses_scoped_checked_reply_and_pcm_alignment(client,app,monkeypatch,tts_provider):
     from echooo.models import STTEvent,STTEventType,AudioChunk
     from echooo.providers.stt.mock import MockSTT
     class InputAudio(MockSTT):
@@ -381,7 +382,7 @@ def test_audio_transcript_uses_scoped_checked_reply_and_pcm_alignment(client,app
     monkeypatch.setattr('echooo.rooms.create_stt',lambda _:InputAudio())
     monkeypatch.setattr('echooo.rooms.create_tts',lambda _:OutputAudio())
     app.state.rooms.settings.stt_provider='assemblyai'
-    app.state.rooms.settings.tts_provider='cosyvoice'
+    app.state.rooms.settings.tts_provider=tts_provider
     d=domain(client,'真实协议边界')
     m=memory(client,d['id'],'进度','已完成原型')
     secret=memory(client,d['id'],'其他','NOT_FOR_AUDIO','private')
@@ -406,13 +407,14 @@ def test_audio_transcript_uses_scoped_checked_reply_and_pcm_alignment(client,app
         assert pcm==b'\1\0\2\0'
 
 
-def test_muted_output_skips_synthesis_and_retry_does_not_repeat_llm(client,app,monkeypatch):
+@pytest.mark.parametrize('tts_provider', ['cosyvoice', 'dashscope'])
+def test_muted_output_skips_synthesis_and_retry_does_not_repeat_llm(client,app,monkeypatch,tts_provider):
     calls=[]
     def unexpected_tts(_):
         calls.append('tts')
         raise AssertionError('Muted output must not initialize TTS')
     monkeypatch.setattr('echooo.rooms.create_tts',unexpected_tts)
-    app.state.rooms.settings.tts_provider='cosyvoice'
+    app.state.rooms.settings.tts_provider=tts_provider
     d=domain(client,'Voice controls')
     s=session(client,d['id'],[],mode='private')
     with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
@@ -463,10 +465,11 @@ def test_dictation_returns_a_draft_without_creating_chat_messages(client,app,mon
     assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
 
 
-def test_tts_failure_has_specific_error_and_preserves_text(client,app,monkeypatch):
+@pytest.mark.parametrize('tts_provider', ['cosyvoice', 'dashscope'])
+def test_tts_failure_has_specific_error_and_preserves_text(client,app,monkeypatch,tts_provider):
     def unavailable(_):raise RuntimeError('Test provider unavailable')
     monkeypatch.setattr('echooo.rooms.create_tts',unavailable)
-    app.state.rooms.settings.tts_provider='cosyvoice'
+    app.state.rooms.settings.tts_provider=tts_provider
     d=domain(client,'TTS error')
     s=session(client,d['id'],[],mode='private')
     with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
@@ -476,6 +479,171 @@ def test_tts_failure_has_specific_error_and_preserves_text(client,app,monkeypatc
             if event['type']=='error':break
         assert event['code']=='tts_unavailable'
     assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
+
+
+@pytest.mark.parametrize('override', [None, 'longanhuan'])
+def test_dashscope_uses_cloud_voice_and_retry_reuses_checked_text(client,app,monkeypatch,override):
+    from echooo.models import AudioChunk
+    voices=[]; texts=[]
+    class OutputAudio:
+        sample_rate=24000
+        def configure_voice(self,profile):voices.append(profile.speaker_id)
+        async def stream_audio(self,text,*,cancel):
+            texts.append(text)
+            yield AudioChunk(b'\1\0',24000)
+    monkeypatch.setattr('echooo.rooms.create_tts',lambda _:OutputAudio())
+    app.state.rooms.settings.tts_provider='dashscope'
+    app.state.rooms.settings.dashscope_tts_voice='longanyang'
+    d=domain(client,'Cloud voice')
+    voice={'speaker_id':'中文女'}
+    if override:voice['dashscope_voice']=override
+    s=session(client,d['id'],[],mode='private',voice=voice)
+    with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
+        ws.receive_json()
+        ws.send_json({'type':'input.text','content':'Hello'})
+        for attempt in range(2):
+            pcm=b''
+            while True:
+                packet=ws.receive()
+                if packet.get('bytes') is not None:pcm+=packet['bytes']
+                else:
+                    event=json.loads(packet['text'])
+                    assert event['type'] not in {'error','speech.checked'}
+                    if event['type']=='audio.end':break
+            assert pcm==b'\1\0'
+            if attempt==0:ws.send_json({'type':'playback.retry'})
+    assert voices==[override or 'longanyang']*2
+    assert len(texts)==2 and texts[0]==texts[1]
+    assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
+
+
+def test_owner_can_select_an_allowed_dashscope_voice(client,app):
+    app.state.rooms.settings.tts_provider='dashscope'
+    app.state.rooms.settings.dashscope_api_key='test-key'
+    d=domain(client,'Voice choice')
+    s=session(client,d['id'],[],mode='private')
+    changed=client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':'longanlufeng'})
+    assert changed.status_code==200
+    assert changed.json()['voice']['dashscope_voice']=='longanlufeng'
+    assert client.get(f"/api/sessions/{s['id']}").json()['voice']['dashscope_voice']=='longanlufeng'
+    assert client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':'unknown'}).status_code==422
+
+
+def test_cloud_voice_selection_is_provider_scoped_and_owner_only(client,app):
+    d=domain(client,'Voice scope')
+    s=session(client,d['id'],[],mode='private')
+    assert client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':'longanyang'}).status_code==409
+    outsider=TestClient(app)
+    assert outsider.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':'longanyang'}).status_code==401
+
+
+def test_owner_can_list_create_select_and_delete_custom_voice(client,app):
+    custom_id='cosyvoice-v3-flash-mine-123'
+    class VoiceManager:
+        known_voice_ids=set()
+        voices=[]
+        cached_voices=[]
+        async def list_voices(self):
+            self.known_voice_ids={voice['id'] for voice in self.voices}
+            self.cached_voices=list(self.voices)
+            return list(self.voices)
+        async def create_voice(self,**kwargs):
+            assert kwargs['prefix']=='mine' and kwargs['language']=='zh'
+            assert kwargs['filename']=='voice.wav' and kwargs['data']==b'voice sample'
+            voice={'id':custom_id,'name':custom_id,'description':'Custom voice','custom':True,
+                'managed':True,'status':'OK','target_model':'cosyvoice-v3-flash','created_at':''}
+            self.voices=[voice];self.known_voice_ids={custom_id}
+            self.cached_voices=[voice]
+            return voice
+        async def delete_voice(self,voice_id):
+            assert voice_id==custom_id
+            self.voices=[];self.known_voice_ids.clear()
+            self.cached_voices=[]
+    manager=VoiceManager()
+    app.state.voice_manager=manager
+    app.state.rooms.settings.tts_provider='dashscope'
+    app.state.rooms.settings.dashscope_api_key='test-key'
+    app.state.rooms.settings.dashscope_tts_model='cosyvoice-v3-flash'
+    app.state.rooms.settings.dashscope_tts_voice='longanyang'
+    assert client.get('/api/tts/voices').json()['voices'][0]['id']=='longanyang'
+    created=client.post('/api/tts/voices/clone',data={'prefix':'mine','language':'zh'},
+        files={'file':('voice.wav',b'voice sample','audio/wav')})
+    assert created.status_code==201 and created.json()['voice']['id']==custom_id
+    d=domain(client,'Custom voice')
+    s=session(client,d['id'],[],mode='private')
+    assert client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':custom_id}).status_code==200
+    deleted=client.delete(f'/api/tts/voices/{custom_id}')
+    assert deleted.status_code==200 and deleted.json()['reset_sessions']==1
+    assert client.get(f"/api/sessions/{s['id']}").json()['voice']['dashscope_voice']=='longanyang'
+    assert client.delete('/api/tts/voices/longanyang').status_code==409
+
+
+def test_custom_voice_management_is_owner_only(client,app):
+    app.state.rooms.settings.tts_provider='dashscope'
+    app.state.voice_manager=object()
+    outsider=TestClient(app)
+    assert outsider.get('/api/tts/voices').status_code==401
+    assert outsider.post('/api/tts/voices/clone',data={'prefix':'mine','language':'zh'},
+        files={'file':('voice.wav',b'voice sample','audio/wav')}).status_code==401
+    assert outsider.delete('/api/tts/voices/custom-voice').status_code==401
+
+
+def test_voice_list_failure_keeps_presets_available(client,app):
+    from echooo.providers.tts.dashscope_voices import DashScopeVoiceError
+    class Unavailable:
+        known_voice_ids=set()
+        cached_voices=[]
+        async def list_voices(self):
+            raise DashScopeVoiceError('Voice management is temporarily unavailable.')
+    app.state.rooms.settings.tts_provider='dashscope'
+    app.state.voice_manager=Unavailable()
+    result=client.get('/api/tts/voices')
+    assert result.status_code==200
+    assert result.json()['management_available'] is False
+    assert result.json()['management_error']=='Voice management is temporarily unavailable.'
+    assert result.json()['voices']
+
+
+@pytest.mark.parametrize('action', ['mute', 'interrupt', 'end', 'revoke', 'disconnect'])
+def test_cloud_synthesis_is_closed_when_playback_ends(client,app,monkeypatch,action):
+    import threading
+    from echooo.models import AudioChunk
+    started=threading.Event();closed=threading.Event()
+    class StalledAudio:
+        sample_rate=24000
+        def configure_voice(self,profile):pass
+        async def stream_audio(self,text,*,cancel):
+            started.set()
+            try:
+                await cancel.wait()
+                # A late frame after mute must not be forwarded.
+                yield AudioChunk(b'\1\0',24000)
+            finally:
+                closed.set()
+    monkeypatch.setattr('echooo.rooms.create_tts',lambda _:StalledAudio())
+    app.state.rooms.settings.tts_provider='dashscope'
+    d=domain(client,'Cancel cloud speech')
+    s=session(client,d['id'],[],mode='private')
+    with client.websocket_connect(f"/ws/sessions/{s['id']}?role=owner") as ws:
+        ws.receive_json()
+        ws.send_json({'type':'input.text','content':'Hello'})
+        while ws.receive_json()['type']!='audio.start':pass
+        assert started.wait(2)
+        if action=='mute':
+            ws.send_json({'type':'playback.configure','enabled':False})
+            assert closed.wait(2)
+            ws.send_json({'type':'playback.configure','enabled':'invalid'})
+            assert ws.receive_json()['type']=='error'  # No late audio or audio.end.
+        elif action=='interrupt':
+            ws.send_json({'type':'interrupt'})
+            assert ws.receive_json()['type']=='playback.stop'
+        elif action in {'end','revoke'}:
+            assert client.post(f"/api/sessions/{s['id']}/{action}").status_code==200
+            assert ws.receive_json()['type']=='playback.stop'
+            assert ws.receive_json()['type']=='session.closed'
+        else:
+            ws.close()
+        assert closed.wait(2)
 
 
 def test_failed_microphone_can_retry_without_reopening_room(client,app,monkeypatch):
