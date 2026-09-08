@@ -54,12 +54,12 @@ test('Voice options sit beside the start action with radio modes and a sound pre
 });
 test('DashScope reply voices appear in the existing voice options menu',()=>{
   const html=voiceControls(()=>'',{dictation:false,muted:false,voice:'longanhuan',voices:[
-    {id:'longanyang',name:'龙安洋',description:'阳光自然男声'},
-    {id:'longanhuan',name:'龙安欢',description:'欢脱元气女声'},
+    {id:'longanyang',name:'Yang',description:'Sunny, natural male voice'},
+    {id:'longanhuan',name:'Huan',description:'Energetic female voice'},
   ],customVoiceManagement:true});
   assert.match(html,/id="reply-voice"/);
   assert.match(html,/value="longanhuan" selected/);
-  assert.match(html,/龙安欢 · 欢脱元气女声/);
+  assert.match(html,/Huan · Energetic female voice/);
   assert.match(html,/next spoken reply/);
   assert.match(html,/id="manage-custom-voices"/);
   assert.match(html,/Clone from a recording/);

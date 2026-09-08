@@ -153,6 +153,13 @@ and light use. Configure long-lived OSS for production or high-concurrency deplo
 The DashScope workspace must expose the `voice-enrollment` service. If the TTS inference key
 does not have that model, configure a same-account management key with
 `DASHSCOPE_VOICE_API_KEY` and, when needed, override `DASHSCOPE_TTS_CUSTOMIZATION_URL`.
+For a Beijing shared-domain management key, use:
+
+```env
+DASHSCOPE_VOICE_API_KEY=sk-your-model-studio-key
+DASHSCOPE_TTS_CUSTOMIZATION_URL=https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization
+DASHSCOPE_UPLOAD_URL=https://dashscope.aliyuncs.com/api/v1/uploads
+```
 
 To expose a voice created outside Echooo without querying it first, add its `voice_id`
 to the comma-separated `DASHSCOPE_TTS_CUSTOM_VOICES` setting and restart Echooo. It will

@@ -683,7 +683,7 @@ def test_interrupt_cancels_unfinished_model_output(client,app):
     assert [m['content'] for m in view['messages'] if m['role']=='assistant']==['第二轮已响应']
 
 
-async def test_llm_sse_transport_preserves_structured_response(monkeypatch):
+async def test_llm_transport_preserves_structured_response(monkeypatch):
     import httpx
     ai=Intelligence(Settings(llm_provider='openai_compatible',llm_base_url='https://llm.example/v1'))
     captured=[]
@@ -691,14 +691,12 @@ async def test_llm_sse_transport_preserves_structured_response(monkeypatch):
         payload=json.loads(request.content);captured.append(payload)
         assert request.url.path=='/v1/chat/completions'
         answer=json.dumps({'kind':'answer','reply':'已完成原型','citations':['f']},ensure_ascii=False)
-        parts=[answer[:20],answer[20:]]
-        sse=''.join('data: '+json.dumps({'choices':[{'delta':{'content':part}}]},ensure_ascii=False)+'\n\n' for part in parts)+'data: [DONE]\n\n'
-        return httpx.Response(200,text=sse,headers={'content-type':'text/event-stream'})
+        return httpx.Response(200,json={'choices':[{'message':{'content':answer},'finish_reason':'stop'}]})
     original=httpx.AsyncClient
     monkeypatch.setattr('echooo.intelligence.httpx.AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handle),**kwargs))
     result=await ai.json_call('Return structured JSON',{'facts':[{'id':'f','content':'已完成原型'}]})
     assert result['reply']=='已完成原型'
-    assert captured[0]['stream'] is True
+    assert captured[0]['stream'] is False
 
 
 def test_store_reopen_preserves_auth_and_domains(tmp_path):

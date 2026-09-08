@@ -73,7 +73,27 @@ class DashScopeVoiceManager:
             payload = response.json()
         except ValueError as exc:
             raise DashScopeVoiceError(f"Alibaba Cloud returned an invalid response while {operation}.") from exc
-        if response.is_error or payload.get("code"):
+        code = str(payload.get("code") or "")
+        message = str(payload.get("message") or "").lower()
+        if response.status_code == 401 or code == "InvalidApiKey":
+            raise DashScopeVoiceError(
+                "Alibaba Cloud rejected the voice-management API key. Configure "
+                "DASHSCOPE_VOICE_API_KEY with a Model Studio API key for this region."
+            )
+        if response.status_code == 403:
+            raise DashScopeVoiceError(
+                "The configured Alibaba Cloud key does not have permission to manage custom voices."
+            )
+        if response.status_code == 404 and "model not exist" in message:
+            raise DashScopeVoiceError(
+                "The voice-enrollment service is unavailable at the configured customization endpoint. "
+                "Check DASHSCOPE_TTS_CUSTOMIZATION_URL and enable voice cloning for this workspace."
+            )
+        if response.status_code == 404:
+            raise DashScopeVoiceError(
+                "The configured Alibaba Cloud customization endpoint was not found."
+            )
+        if response.is_error or code:
             raise DashScopeVoiceError(
                 f"Alibaba Cloud could not complete voice {operation}; check the model, region, quota, and recording."
             )
@@ -98,8 +118,17 @@ class DashScopeVoiceManager:
         except (httpx.HTTPError, OSError) as exc:
             raise DashScopeVoiceError(f"Could not connect to Alibaba Cloud while {operation}.") from exc
 
-    @staticmethod
-    def _option(item: dict) -> dict | None:
+    def _display_name(self, voice_id: str) -> str:
+        model_prefix = self.settings.dashscope_tts_model + "-"
+        if not voice_id.startswith(model_prefix):
+            return voice_id
+        enrolled = voice_id[len(model_prefix):]
+        name, separator, unique_id = enrolled.partition("-")
+        if separator and unique_id and VOICE_PREFIX.fullmatch(name):
+            return name
+        return voice_id
+
+    def _option(self, item: dict) -> dict | None:
         voice_id = str(item.get("voice_id") or item.get("voice") or "").strip()
         if not VOICE_ID.fullmatch(voice_id):
             return None
@@ -112,7 +141,7 @@ class DashScopeVoiceManager:
             detail += f" · {created[:10]}"
         return {
             "id": voice_id,
-            "name": voice_id,
+            "name": self._display_name(voice_id),
             "description": detail,
             "custom": True,
             "managed": True,
@@ -167,9 +196,25 @@ class DashScopeVoiceManager:
                     params={"action": "getPolicy", "model": "voice-enrollment"},
                 )
                 try:
-                    policy = policy_response.json().get("data", {})
+                    policy_payload = policy_response.json()
+                    policy = policy_payload.get("data", {})
                 except ValueError as exc:
                     raise DashScopeVoiceError("Alibaba Cloud returned an invalid upload policy.") from exc
+                code = str(policy_payload.get("code") or "")
+                if policy_response.status_code == 401 or code == "InvalidApiKey":
+                    raise DashScopeVoiceError(
+                        "Alibaba Cloud rejected the key used for temporary file upload. "
+                        "Set DASHSCOPE_VOICE_API_KEY to a Model Studio API key accepted by "
+                        "DASHSCOPE_UPLOAD_URL."
+                    )
+                if policy_response.status_code == 403:
+                    raise DashScopeVoiceError(
+                        "The configured Alibaba Cloud key cannot upload temporary voice samples."
+                    )
+                if policy_response.status_code == 404:
+                    raise DashScopeVoiceError(
+                        "The configured DASHSCOPE_UPLOAD_URL does not provide the temporary upload API."
+                    )
                 required = ("policy", "signature", "upload_dir", "upload_host",
                     "oss_access_key_id", "x_oss_object_acl", "x_oss_forbid_overwrite")
                 if policy_response.is_error or not all(policy.get(key) for key in required):
@@ -222,7 +267,7 @@ class DashScopeVoiceManager:
         if not VOICE_ID.fullmatch(voice_id):
             raise DashScopeVoiceError("Alibaba Cloud created the voice but returned an invalid voice ID.")
         fallback = {
-            "id": voice_id, "name": voice_id, "description": "Custom voice",
+            "id": voice_id, "name": prefix, "description": "Custom voice",
             "custom": True, "managed": True, "status": "DEPLOYING", "target_model": self.settings.dashscope_tts_model,
             "created_at": "",
         }

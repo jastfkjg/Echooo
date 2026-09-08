@@ -325,7 +325,10 @@ async function customVoiceDialog() {
     <div class="custom-voice-sample"><p>Use one clear speaker with no music or overlap. A quiet 10–20 second recording works best; accepted range is 5–60 seconds and up to 10 MB.</p></div>
     <div class="two-col">${field('prefix','Voice name','','text','required maxlength="10" pattern="[A-Za-z0-9]+" placeholder="e.g. myvoice"')}
       <div class="form-field"><label for="f-language">Recording language</label><select id="f-language" name="language"><option value="zh">Chinese</option><option value="en">English</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="de">German</option><option value="fr">French</option><option value="ru">Russian</option></select></div></div>
-    ${field('file','Voice sample','','file','required accept=".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4"')}
+    <div class="form-field"><label for="f-file">Voice sample</label><div class="file-picker">
+      <input class="file-picker-input" id="f-file" name="file" type="file" required accept=".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4" aria-describedby="voice-file-name">
+      <label class="btn file-picker-button" for="f-file">Choose audio file</label><span class="file-picker-name" id="voice-file-name" aria-live="polite">No file chosen</span>
+    </div></div>
     <label class="check"><input type="checkbox" name="enable_preprocess" value="true"><span><strong>Improve a noisy recording</strong><small>Alibaba Cloud will reduce noise and enhance the sample. Leave off for clean recordings.</small></span></label>
     <p class="dialog-help">The sample is sent to Alibaba Cloud temporary storage for cloning and is not saved in Echooo. Alibaba automatically removes the temporary object after 48 hours.</p>`;
   const modal=openDialog('Custom voices',body,async fd=>{
@@ -346,6 +349,13 @@ async function customVoiceDialog() {
       toast('Custom voice created and selected for the next spoken reply.');
     }catch(error){toast(`Custom voice created. Select it from Reply voice when ready. ${error.message}`);}
   },'Create voice',{className:'custom-voice-dialog'});
+  const fileInput=$('#f-file',modal),fileName=$('#voice-file-name',modal);
+  fileInput.onchange=()=>{fileName.textContent=fileInput.files?.[0]?.name||'No file chosen';};
+  if(catalogue.management_available===false){
+    const submit=$('button[type=submit]',modal);
+    submit.disabled=true;
+    submit.title='Configure Alibaba Cloud voice management before creating a voice.';
+  }
   $$('[data-delete-voice]',modal).forEach(button=>button.onclick=()=>{
     const voiceId=button.dataset.deleteVoice;
     modal.close();

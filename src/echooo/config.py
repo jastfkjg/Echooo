@@ -19,29 +19,29 @@ PROMPTS_FILE = ROOT / "config" / "prompts.toml"
 # can expose additional base/enrolled voice IDs with DASHSCOPE_TTS_CUSTOM_VOICES.
 DASHSCOPE_VOICE_CATALOGUES = {
     "qwen-audio-3.0-tts-plus": (
-        ("longanlingxin", "龙安灵心", "知心温暖女声"),
-        ("longanlufeng", "龙安鲁风", "明亮开朗男声"),
+        ("longanlingxin", "Lingxin", "Warm, thoughtful female voice"),
+        ("longanlufeng", "Lufeng", "Bright, upbeat male voice"),
     ),
     "qwen-audio-3.0-tts-flash": (
-        ("longanfengyue", "龙安风悦", "自然亲切女声"),
-        ("longanyuanfei", "龙安元妃", "高傲妃子女声"),
-        ("longanlingxi", "龙安灵希", "可爱甜美女声"),
-        ("loongeva_v3.6", "Eva", "高智感美式英语女声"),
-        ("loongjohn", "John", "沉稳亲切美式英语男声"),
+        ("longanfengyue", "Fengyue", "Natural, friendly female voice"),
+        ("longanyuanfei", "Yuanfei", "Regal female voice"),
+        ("longanlingxi", "Lingxi", "Sweet, playful female voice"),
+        ("loongeva_v3.6", "Eva", "Polished American English female voice"),
+        ("loongjohn", "John", "Calm American English male voice"),
     ),
     "cosyvoice-v3-flash": (
-        ("longanyang", "龙安洋", "阳光自然男声 · 普通话 / English"),
-        ("longanhuan", "龙安欢", "欢脱元气女声 · 普通话 / English"),
-        ("longanwen_v3", "龙安温", "优雅知性女声 · 普通话 / English"),
-        ("longanlang_v3", "龙安朗", "清爽利落男声 · 普通话 / English"),
-        ("longyingtao_v3", "龙应桃", "温柔淡定女声 · 普通话 / English"),
-        ("longyichen_v3", "龙逸尘", "洒脱活力男声 · 普通话 / English"),
-        ("longlaobo_v3", "龙老伯", "沧桑沉稳男声 · 普通话 / English"),
-        ("longanyue_v3", "龙安粤", "欢脱粤语男声 · 粤语 / English"),
-        ("loongandy_v3", "Andy", "美式英语男声"),
-        ("loongindah_v3", "Indah", "印尼语女声"),
-        ("longhuhu_v3", "龙呼呼", "天真烂漫童声 · 普通话 / English"),
-        ("longjiqi_v3", "龙机器", "呆萌机器人声 · 普通话 / English"),
+        ("longanyang", "Yang", "Sunny, natural male voice · Mandarin / English"),
+        ("longanhuan", "Huan", "Energetic female voice · Mandarin / English"),
+        ("longanwen_v3", "Wen", "Elegant female voice · Mandarin / English"),
+        ("longanlang_v3", "Lang", "Crisp male voice · Mandarin / English"),
+        ("longyingtao_v3", "Yingtao", "Gentle female voice · Mandarin / English"),
+        ("longyichen_v3", "Yichen", "Lively male voice · Mandarin / English"),
+        ("longlaobo_v3", "Laobo", "Mature male voice · Mandarin / English"),
+        ("longanyue_v3", "Yue", "Energetic Cantonese male voice · Cantonese / English"),
+        ("loongandy_v3", "Andy", "American English male voice"),
+        ("loongindah_v3", "Indah", "Indonesian female voice"),
+        ("longhuhu_v3", "Huhu", "Playful child voice · Mandarin / English"),
+        ("longjiqi_v3", "Robot", "Playful robot voice · Mandarin / English"),
     ),
 }
 
@@ -222,12 +222,12 @@ class Settings:
         known = {option["id"] for option in options}
         if self.dashscope_tts_voice not in known:
             options.insert(0, {"id": self.dashscope_tts_voice, "name": self.dashscope_tts_voice,
-                "description": "服务器默认音色", "custom": True})
+                "description": "Server default voice", "custom": True})
             known.add(self.dashscope_tts_voice)
         for voice_id in self.dashscope_tts_custom_voices:
             if voice_id not in known:
                 options.append({"id": voice_id, "name": voice_id,
-                    "description": "自定义音色", "custom": True})
+                    "description": "Custom voice", "custom": True})
                 known.add(voice_id)
         return options
 

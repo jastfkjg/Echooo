@@ -15,6 +15,7 @@ def settings(**changes):
     return Settings(**{
         "stt_provider": "mock", "llm_provider": "mock", "tts_provider": "dashscope",
         "dashscope_api_key": "test-key", "dashscope_tts_model": "qwen-audio-3.0-tts-plus",
+        "dashscope_voice_api_key": "",
         "dashscope_tts_voice": "longanlingxin",
         "dashscope_tts_url": "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
         "dashscope_tts_timeout_seconds": 1, **changes,
@@ -47,6 +48,7 @@ async def test_lists_only_voices_bound_to_configured_model():
     manager = DashScopeVoiceManager(settings(), transport=httpx.MockTransport(handler))
     voices = await manager.list_voices()
     assert [voice["id"] for voice in voices] == ["qwen-audio-3.0-tts-plus-mine-123"]
+    assert voices[0]["name"] == "mine"
     assert voices[0]["managed"] is True
     assert manager.known_voice_ids == {"qwen-audio-3.0-tts-plus-mine-123"}
 
@@ -85,6 +87,7 @@ async def test_uploads_sample_then_creates_voice_with_oss_resolution_header():
     voice = await manager.create_voice(prefix="mine", language="zh", filename="sample.wav",
         data=wav(), enable_preprocess=True)
     assert voice["id"] in manager.known_voice_ids
+    assert voice["name"] == "mine"
     assert voice["status"] == "OK"
     assert len(requests) == 4
 
@@ -112,3 +115,21 @@ async def test_rejects_untrusted_upload_destination():
     manager = DashScopeVoiceManager(settings(), transport=httpx.MockTransport(handler))
     with pytest.raises(RuntimeError, match="invalid upload destination"):
         await manager.create_voice(prefix="mine", language="zh", filename="sample.wav", data=wav())
+
+
+async def test_upload_key_failure_explains_the_required_configuration():
+    async def handler(request):
+        return httpx.Response(401, json={"code": "InvalidApiKey", "message": "rejected"})
+
+    manager = DashScopeVoiceManager(settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="DASHSCOPE_VOICE_API_KEY"):
+        await manager.create_voice(prefix="mine", language="zh", filename="sample.wav", data=wav())
+
+
+async def test_missing_voice_enrollment_service_explains_endpoint_requirement():
+    async def handler(request):
+        return httpx.Response(404, json={"code": "InvalidParameter", "message": "Model not exist."})
+
+    manager = DashScopeVoiceManager(settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="DASHSCOPE_TTS_CUSTOMIZATION_URL"):
+        await manager.list_voices()

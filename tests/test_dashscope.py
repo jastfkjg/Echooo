@@ -17,6 +17,7 @@ def settings(**changes):
     return Settings(**{
         "stt_provider": "mock", "llm_provider": "mock", "tts_provider": "dashscope",
         "dashscope_api_key": "test-key", "dashscope_tts_model": "cosyvoice-v3-flash",
+        "dashscope_voice_api_key": "", "dashscope_tts_customization_url": "",
         "dashscope_tts_voice": "longanyang", "dashscope_tts_sample_rate": 24000,
         "dashscope_tts_url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
         "dashscope_tts_timeout_seconds": 1, **changes,
@@ -74,6 +75,7 @@ def test_factory_configuration_and_public_secrets():
         "longanyang", "longanhuan", "longanwen_v3", "my_voice_01"}
     assert next(voice for voice in public["tts"]["voices"]
         if voice["id"] == "my_voice_01")["custom"] is True
+    assert not any("\u4e00" <= char <= "\u9fff" for char in json.dumps(public, ensure_ascii=False))
     assert "test-key" not in json.dumps(public)
     assert "voice-secret" not in json.dumps(public)
     assert "dashscope_api_key" not in public

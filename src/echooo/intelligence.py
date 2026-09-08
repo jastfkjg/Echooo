@@ -42,26 +42,24 @@ class Intelligence:
         payload = {"model": self.settings.llm_model, "temperature": 0,
             "messages": [{"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(data, ensure_ascii=False)}],
-            "stream": True, "max_tokens": 2400}
-        output = ""
+            "stream": False, "max_tokens": 2400}
         timeout = httpx.Timeout(self.settings.llm_timeout_seconds, connect=10)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", self.settings.llm_base_url.rstrip("/") + "/chat/completions",
-                headers=headers, json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    item = line[5:].strip()
-                    if item == "[DONE]":
-                        break
-                    if item:
-                        packet = json.loads(item)
-                        choices = packet.get("choices") or []
-                        if choices:
-                            output += choices[0].get("delta", {}).get("content") or ""
-                    if len(output) > 24000:
-                        raise ValueError("Model output too large")
+            response = await client.post(
+                self.settings.llm_base_url.rstrip("/") + "/chat/completions",
+                headers=headers, json=payload,
+            )
+            response.raise_for_status()
+        packet = response.json()
+        choices = packet.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            raise ValueError("Model returned no choices")
+        message = choices[0].get("message") or {}
+        output = message.get("content")
+        if not isinstance(output, str) or not output:
+            raise ValueError("Model returned no content")
+        if len(output) > 24000:
+            raise ValueError("Model output too large")
         output = re.sub(r"^```(?:json)?\s*|\s*```$", "", output.strip())
         result = json.loads(output)
         if not isinstance(result, dict):
