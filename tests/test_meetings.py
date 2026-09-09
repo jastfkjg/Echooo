@@ -71,7 +71,7 @@ def test_untrusted_analysis_citations_filtered(client, app):
         return {'summary':'A possible date was discussed.', 'items':[
             {'kind':'action','text':'Invented','evidence_ids':['foreign']},
             {'kind':'contradiction','text':'Unsupported conflict','evidence_ids':[u['id']]},
-            {'kind':'question','text':'Confirm the date','evidence_ids':[u['id']]}]}
+            {'kind':'question','text':'Confirm the date','resolution':'unresolved','evidence_ids':[u['id']]}]}
     app.state.service.ai.json_call=analyze
     response=client.post(path+'/chapters')
     assert response.status_code==200
@@ -106,6 +106,29 @@ def test_summary_is_bounded_text_only_and_failure_preserves_progress(client, app
     last=client.post(path+'/chapters').json()
     assert last['summary_remaining']==0 and len(last['sections'])==2
     assert len(calls[-1]['records'])==1
+
+
+def test_kt_knowledge_is_supported_without_forcing_followup(client, app):
+    m=client.post('/api/meetings',json={'title':'Knowledge transfer'}).json()
+    path='/api/meetings/'+m['id']
+    u=client.post(path+'/utterances',json={'content':'The cache TTL is five minutes. This is an explanation, not a change request.'}).json()
+    app.state.service.ai.settings.llm_provider='openai_compatible'
+    async def analyze(prompt,data,**kwargs):
+        assert 'knowledge-transfer (KT)' in prompt
+        assert 'Categories are optional' in prompt
+        assert all(set(record)=={'id','speaker','content'} for record in data['records'])
+        return {'summary':'The existing cache TTL was explained.', 'items':[
+            {'kind':'knowledge','text':'Cache TTL is five minutes.','evidence_ids':[u['id']]},
+            {'kind':'question','text':'What is the cache TTL?','resolution':'answered','evidence_ids':[u['id']]},
+            {'kind':'question','text':'Unclassified question','evidence_ids':[u['id']]},
+            {'kind':'knowledge','text':'Invalid evidence.','evidence_ids':['foreign']}]}
+    app.state.service.ai.json_call=analyze
+    result=client.post(path+'/chapters').json()
+    section=result['sections'][0]
+    assert [item['kind'] for item in section['items']]==['knowledge']
+    assert section['items'][0]['owner']==section['items'][0]['deadline']==''
+    assert client.post(path+f"/sections/{section['id']}/review",json={'status':'rejected','revision':1}).status_code==200
+    assert len(client.get(path).json()['utterances'])==1
 
 
 def test_recording_overview_is_separate_scoped_and_delete_cascades(client, app):

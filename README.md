@@ -40,22 +40,37 @@ and delegations remain separate and available.
 - Expand a live summary's source or read the complete transcript below it.
   Continuous same-speaker speech is joined into compact, collapsible paragraphs;
   select a sentence to reveal playback and correction controls. Pending speaker
-  IDs display as **Unidentified speaker**, not as a verified identity. Turn off
-  **Follow live** when reading earlier content.
+  IDs display as **Unidentified speaker**, not as a verified identity. The sticky
+  **Overview / Chapters / Transcript** navigation jumps within the recording.
+  Search highlights literal words and steps through matching passages (Enter for
+  next, Shift+Enter for previous). Sentence timestamps and corrections expand on
+  demand. **Follow live text** is opt-in and separate from playback following.
 - Both summary paths send recognized text, speaker labels and evidence IDs, never
   audio. Each chapter request processes up to 12 passages / 6,000 text characters;
   each overview request folds up to 40 passages / 6,000 characters into the prior
   overview. Model calls have a 40-second limit, with visible progress and retries
   resuming from remaining text. Compatible hybrid models use non-thinking mode.
-- Analysis proposes decisions, commitments, actions with owners/dates, open
-  questions, possible contradictions, and missing action details, with clickable
-  evidence. **Confirm chapter** or **Reject** records human review. Corrections
-  invalidate previous analysis. No external actions or memory writes occur.
+- Analysis extracts relevant knowledge points and, only where supported,
+  decisions, commitments, actions, unresolved questions, possible conflicts and
+  missing action details. Empty categories are not rendered. KT/training meetings
+  can contain knowledge only; explanations of existing rules are not new decisions,
+  and answered teaching questions are not open issues. Source links establish
+  provenance, not factual truth or participant agreement. Model classification
+  remains fallible, particularly when answers occur in a later chapter.
+- **Review AI output (optional)** contains **Mark accurate** and **Exclude
+  findings**, replacing ambiguous Confirm/Reject buttons. These record the owner's
+  assessment of the AI output; they do not approve a business decision or assign
+  work. Exclusion hides the chapter's extracted points, not its summary or source.
+  Corrections invalidate previous analysis. No external actions or memory writes occur.
 - Click a passage timestamp or an evidence link to play its recording at that
   position. Recordings can also be downloaded as WAV. Audio is the captured mono
   PCM signal at the configured STT sample rate, not synthesized speech; browser
   microphone processing/resampling still applies.
-- The recordings list and player stay above evidence and follow-up. Switching
+- The player remains fixed at the bottom with speed selection and ±10-second
+  controls. Playback highlights the timed sentence; **Follow playback** is off by
+  default and must be enabled to auto-scroll. Reading navigation/search turns off
+  automatic following. The page reserves space for the player on small screens.
+- The recordings list stays above key points and follow-up. Switching
   recordings changes the overview, highlights, full transcript, findings and audio
   together. Each recording can be deleted with confirmation, removing its audio,
   transcript and associated summaries without deleting other recordings.

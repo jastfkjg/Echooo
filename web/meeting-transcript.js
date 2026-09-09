@@ -29,3 +29,42 @@ export function recordingContent(meeting, recordingId) {
   const covered = new Set(overview?.evidence_ids||[]);
   return {records, sections, overview, overviewCurrent:!!overview && overview.revision===meeting.revision && records.every(u=>covered.has(u.id))};
 }
+
+export function transcriptMatches(records, query) {
+  const needle = query.trim().toLocaleLowerCase();
+  return needle ? records.filter(u=>u.content.replace(/\s+/g,' ').toLocaleLowerCase().includes(needle)).map(u=>u.id) : [];
+}
+
+// Use literal matching, not a user-supplied regular expression or HTML.
+export function searchParts(text, query) {
+  const needle = query.trim();
+  if (!needle) return [{text, match:false}];
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = text.matchAll(new RegExp(escaped, 'giu'));
+  const parts=[]; let offset=0;
+  for (const match of matches) {
+    if(match.index>offset)parts.push({text:text.slice(offset,match.index),match:false});
+    parts.push({text:match[0],match:true});offset=match.index+match[0].length;
+  }
+  if(offset<text.length)parts.push({text:text.slice(offset),match:false});
+  return parts;
+}
+
+export function playingUtterance(records, ms) {
+  // Half-open intervals prevent the preceding sentence winning at a boundary.
+  return records.find(u=>u.recording_id && u.start_ms<=ms && ms<u.end_ms)?.id || null;
+}
+
+export const findingTypes = [
+  {key:'knowledge',label:'Knowledge points',kinds:['knowledge'],description:'Concepts, procedures, constraints and examples explained in this meeting.'},
+  {key:'decision',label:'Decisions',kinds:['decision'],description:'Explicitly adopted choices; not suggestions or descriptions of existing rules.'},
+  {key:'action',label:'Follow-up actions',kinds:['action','commitment'],description:'Concrete future work requested or promised. Missing owners and dates remain unspecified.'},
+  {key:'question',label:'Open questions',kinds:['question'],description:'Questions still unresolved, not teaching questions already answered.'},
+  {key:'contradiction',label:'Possible conflicts',kinds:['contradiction'],description:'Potentially incompatible statements with sources for both sides.'},
+  {key:'gap',label:'Missing action details',kinds:['gap'],description:'Missing information needed for an actual follow-up, not a mandatory checklist.'},
+];
+
+export function findingGroups(sections) {
+  const items=sections.filter(s=>!['rejected','stale'].includes(s.status)).flatMap(s=>s.items||[]);
+  return findingTypes.map(type=>({...type,items:items.filter(item=>type.kinds.includes(item.kind))})).filter(group=>group.items.length);
+}

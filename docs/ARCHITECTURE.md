@@ -116,6 +116,20 @@ own scope. The UI filters summaries, findings and transcript to the selected
 recording and keeps the full original text available independently of chapters.
 Findings have validated evidence IDs, but entailment and conflict detection remain
 model judgments; all sections start pending. Human review confirms/rejects a section.
+Knowledge is a first-class optional finding kind for KT/informational meetings.
+The extraction prompt distinguishes existing explanations from adopted decisions
+and unanswered questions from answered teaching Q&A. New question findings require
+an explicit `resolution="unresolved"`; absent/answered classifications are filtered.
+This is an output contract, not a factual verifier or cross-chapter reconciliation.
+The UI renders only populated categories. Review lives in an optional disclosure:
+marking accurate checks AI output, not meeting consensus; exclusion hides findings
+while retaining the section and source. Existing saved analysis is not rewritten.
+The recording reader has a sticky in-page navigator and a fixed audio dock with
+measured scroll clearance. Audio time updates highlight existing sentence nodes;
+they do not re-render the transcript. Playback following is opt-in and independent
+of live-capture following. Literal search is scoped to the current recording,
+preserves complete paragraphs and original evidence IDs, and escapes displayed
+text. Native paragraph and sentence-detail disclosures retain their open state.
 Transcript corrections increment the meeting revision and mark earlier analysis
 stale. Re-analysis appends fresh sections and preserves old sections for history.
 No meeting analysis is automatically published, executed, or saved as domain memory.
