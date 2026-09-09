@@ -1,4 +1,5 @@
 import { Voice } from './voice.js';
+import {showMeetings, leaveMeeting} from './meetings.js?v=recording-reader-3';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js';
 import {enhanceSelects} from './select.js';
@@ -95,18 +96,23 @@ function navigate(hash) { if(location.hash==='#'+hash) renderRoute(); else locat
 function shell(body,crumb='My domains',chatHeader='') {
   const pending=state.proposals.filter(p=>p.status==='pending').length;
   $('#app').innerHTML=`<div class="shell ${chatHeader?'chat-shell':''}"><aside class="sidebar">${brand}<button class="btn primary" data-action="quick-chat">${icon('chat')}Talk with Echooo</button><a class="navlink ${!state.route[0]?'active':''}" href="#">${icon('grid')}<span>My domains</span></a><a class="navlink ${state.route[0]==='sessions'?'active':''}" href="#sessions">${icon('chat')}<span>Conversations</span><span class="count">${state.sessions.length||''}</span></a><a class="navlink ${state.route[0]==='review'?'active':''}" href="#review">${icon('review')}<span>Review</span>${pending?`<span class="count">${pending}</span>`:''}</a><div class="label">Domains · ${state.domains.length}</div><nav class="domain-nav" aria-label="Domains">${state.domains.map(d=>`<a class="navlink ${state.route[1]===d.id?'active':''}" href="#domain/${d.id}/memories"><i class="domain-dot ${esc(d.color)}"></i><span class="name">${esc(d.name)}</span><span class="count">${d.memory_count}</span></a>`).join('')}</nav><button class="navlink" data-action="new-domain">${icon('plus')}<span>Add domain</span></button><div class="side-bottom">${themePicker()}<a class="navlink ${state.route[0]==='settings'?'active':''}" href="#settings">${icon('settings')}<span>Workspace settings</span></a><div class="profile"><span class="avatar">${esc(state.user.name.slice(0,1).toUpperCase())}</span><div><strong>${esc(state.user.name)}</strong><small>Private workspace</small></div></div></div></aside><main class="main" id="main"><header class="topbar">${chatHeader||`<div class="path"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation">${icon('menu')}</button><span>Personal workspace</span><span>/</span><strong>${esc(crumb)}</strong></div><span class="status">Domain isolation enabled</span>`}</header><div class="workspace">${body}</div></main></div>`;
+  $('.sidebar a[href="#sessions"]')?.insertAdjacentHTML('afterend', `<a class="navlink ${state.route[0]==='meetings'?'active':''}" href="#meetings">${icon('mic')}<span>Meetings</span></a>`);
+  if(state.route[0]==='meetings') $('.topbar .status').textContent='Private meeting workspace';
   bindActions();
 }
 const demoBanner=()=>state.config.demo?`<div class="banner">${icon('info')}<span>Local demo: replies use authorized memories. Connect a live model for natural conversations with the same data and permission controls.</span></div>`:'';
 
 async function renderRoute() {
   const run=++navigation;
+  leaveMeeting();
   disconnect();
   state.route=location.hash.slice(1).split('/').filter(Boolean); state.filter=''; state.session=null;
   try {
     await refreshBase(); if(run!==navigation)return;
     const [page,id,tab]=state.route;
-    if(page==='domain') {
+    if(page==='meetings') {
+      await showMeetings({api,shell,openDialog,field,navigate,toast,isCurrent:()=>run===navigation},id);
+    } else if(page==='domain') {
       const d=state.domains.find(d=>d.id===id); if(!d){navigate('');return;}
       [state.memories,state.sources]=await Promise.all([api(`/domains/${id}/memories`),api(`/domains/${id}/sources`)]);
       if(run!==navigation)return;

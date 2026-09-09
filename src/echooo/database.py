@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import (
-    JSON, Column, Float, ForeignKey, Integer, MetaData, String, Table, Text,
+    JSON, LargeBinary, Column, Float, ForeignKey, Integer, MetaData, String, Table, Text,
     UniqueConstraint, create_engine, delete, event, insert, select, text, update,
 )
 from sqlalchemy.pool import StaticPool
@@ -109,7 +109,34 @@ audit = owned_table("audit", Column("session_id", String, ForeignKey("sessions.i
     Column("domain_id", String, ForeignKey("domains.id", ondelete="CASCADE")),
     Column("kind", String, nullable=False), Column("detail", JSON, nullable=False))
 
-OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit]
+meetings = owned_table("meetings", Column("title", String, nullable=False),
+    Column("status", String, nullable=False), Column("revision", Integer, nullable=False))
+
+def meeting_ref():
+    return Column("meeting_id", String, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False, index=True)
+
+recordings = owned_table("meeting_recordings", meeting_ref(),
+    Column("sample_rate", Integer, nullable=False), Column("samples", Integer, nullable=False))
+audio_parts = owned_table("meeting_audio_parts", meeting_ref(),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE"), nullable=False),
+    Column("sequence", Integer, nullable=False), Column("pcm", LargeBinary, nullable=False),
+    constraints=(UniqueConstraint("recording_id", "sequence"),))
+utterances = owned_table("meeting_utterances", meeting_ref(),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE")),
+    Column("speaker", String, nullable=False), Column("content", Text, nullable=False),
+    Column("start_ms", Integer, nullable=False), Column("end_ms", Integer, nullable=False))
+meeting_sections = owned_table("meeting_sections", meeting_ref(),
+    Column("evidence_ids", JSON, nullable=False), Column("summary", Text, nullable=False),
+    Column("items", JSON, nullable=False), Column("revision", Integer, nullable=False),
+    Column("status", String, nullable=False))
+recording_summaries = owned_table("meeting_recording_summaries", meeting_ref(),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE")),
+    Column("scope_key", String, nullable=False), Column("summary", Text, nullable=False),
+    Column("evidence_ids", JSON, nullable=False), Column("revision", Integer, nullable=False),
+    Column("status", String, nullable=False))
+
+OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
+    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries]
 
 
 class Store:

@@ -46,7 +46,7 @@ test('Saved theme loads before styles and the application, using CSP-safe extern
   const html=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
   assert.match(html,/<html[^>]+data-theme="light"/);
   assert.ok(html.indexOf('src="/static/theme.js"')<html.indexOf('rel="stylesheet"'));
-  assert.ok(html.indexOf('src="/static/theme.js"')<html.indexOf('src="/static/app.js"'));
+  assert.ok(html.indexOf('src="/static/theme.js"')<html.indexOf('src="/static/app.js'));
   assert.doesNotMatch(html,/<script[^>]*>\s*[^<\s]/);
 });
 

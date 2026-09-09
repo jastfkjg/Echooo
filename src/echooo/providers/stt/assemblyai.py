@@ -19,6 +19,7 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
         self.settings = settings
         self._ws = None
         self._closed = False
+        self.speaker_labels = False
 
     def _url(self, agent_context: str = "") -> str:
         params: dict[str, object] = {
@@ -26,6 +27,8 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
             "speech_model": self.settings.assemblyai_speech_model,
             "mode": self.settings.assemblyai_mode,
         }
+        if self.speaker_labels:
+            params["speaker_labels"] = "true"
         if self.settings.assemblyai_min_turn_silence is not None:
             params["min_turn_silence"] = self.settings.assemblyai_min_turn_silence
         if self.settings.assemblyai_max_turn_silence is not None:

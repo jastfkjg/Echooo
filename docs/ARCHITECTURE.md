@@ -83,7 +83,54 @@ On approval, the owner may edit the title, content, disclosure setting, audience
 
 Deleting a domain removes its sources, memories, versions, proposals, and conversations using that domain, including messages and approvals. Deleting a source or memory also removes conversations that read it. Deletion follows memories derived from those conversations and their historical versions, preventing retrievable copies from surviving deletion of their source. Mixed-domain conversations and derived memories may therefore be removed together, even if a derived memory was saved in another domain.
 
-This is application-level deletion propagation. Already heard, captured, or exported information cannot be recalled. Database WAL, backups, and provider-retained data need separate lifecycle policies; see Operations. Audit records support local traceability and are not tamper-proof legal evidence. Conversation review currently provides attributed statements and decisions, not automatically organized meeting minutes.
+This is application-level deletion propagation. Already heard, captured, or exported information cannot be recalled. Database WAL, backups, and provider-retained data need separate lifecycle policies; see Operations. Audit records support local traceability and are not tamper-proof legal evidence. Legacy conversation review provides attributed statements and decisions; the separate meeting mode provides draft chapter summaries and structured findings.
+
+## Meeting capture and evidence
+
+`meetings.py` registers a separate owner-only HTTP and WebSocket surface. Meetings
+do not change private/delegated conversation permissions or inherit domain memories.
+New owned tables hold meetings, recording metadata, binary PCM parts, utterances,
+versioned analysis sections, and recording-level rolling overviews. Foreign keys cascade meeting deletion through all
+audio and derived records. The existing owner RLS installer includes these tables.
+
+One browser microphone recorder is allowed per meeting per process. PCM frames are
+committed before acknowledgment and STT forwarding. Recording-local sample offsets
+anchor playback; provider word offsets are preferred when available. AssemblyAI
+speaker labels are enabled only for meetings and remain recording-local hypotheses.
+Real names require human correction. Capture does not invoke the chat reply/TTS path.
+
+The browser requests recording-scoped incremental text analysis every minute and
+after pause. `/chapters` processes one section: up to twelve new passages, bounded to 6,000
+characters, plus preceding context bounded to 2,000 characters. Only utterance IDs,
+speaker labels and recognized text enter the model; recordings are never inputs.
+Each model call has a 40-second total deadline. Completed chapters return immediately;
+the browser continues until the text present at the start of the request is covered.
+Failures preserve completed chapters and expose safe, actionable error categories.
+The separate `/summarize` endpoint updates one recording overview without creating
+sections. It folds up to forty new passages / 6,000 characters into the previous
+overview, tracking covered evidence IDs and the transcript revision. The browser
+continues bounded requests until the initial text snapshot is covered. Overview
+generation is lossy model summarization, not a replacement for the stored original
+transcript. Both endpoints accept a validated recording scope; notes have their
+own scope. The UI filters summaries, findings and transcript to the selected
+recording and keeps the full original text available independently of chapters.
+Findings have validated evidence IDs, but entailment and conflict detection remain
+model judgments; all sections start pending. Human review confirms/rejects a section.
+Transcript corrections increment the meeting revision and mark earlier analysis
+stale. Re-analysis appends fresh sections and preserves old sections for history.
+No meeting analysis is automatically published, executed, or saved as domain memory.
+Individual recording deletion cascades audio and utterances, removes sections and
+overviews derived from that recording, and preserves unrelated recordings. It is
+blocked during active capture or analysis. Confirmed exports and backups remain
+outside this application-level deletion boundary.
+
+Audio downloads are authenticated WAV responses with byte ranges. Binary parts are
+excluded from JSON export; the interface offers separate WAV downloads. This MVP
+stores audio in the database and assembles one recording in memory for playback,
+bounded to 30 minutes per recording. It requires one application worker and an open
+capture page. Object storage, multi-track/platform capture, cross-meeting retrieval,
+durable background analysis, and long-meeting global conflict reconciliation remain
+future work. Microphone processing and resampling apply to the stored PCM signal.
 
 ## Language, speech, and deployment boundaries
 

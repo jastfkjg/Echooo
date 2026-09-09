@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -35,7 +36,7 @@ class Intelligence:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    async def json_call(self, system: str, data: dict) -> dict:
+    async def json_call(self, system: str, data: dict, *, fast: bool = False) -> dict:
         headers = {}
         if self.settings.llm_api_key:
             headers["Authorization"] = f"Bearer {self.settings.llm_api_key}"
@@ -43,6 +44,13 @@ class Intelligence:
             "messages": [{"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(data, ensure_ascii=False)}],
             "stream": False, "max_tokens": 2400}
+        if fast:
+            host = urlsplit(self.settings.llm_base_url).hostname or ""
+            model = self.settings.llm_model.lower()
+            if host.endswith(".aliyuncs.com") and model.startswith(("deepseek-v4", "deepseek-v3.2", "deepseek-v3.1", "qwen3")):
+                payload["enable_thinking"] = False
+            elif host == "api.deepseek.com" and model.startswith("deepseek-v4"):
+                payload["thinking"] = {"type": "disabled"}
         timeout = httpx.Timeout(self.settings.llm_timeout_seconds, connect=10)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
@@ -55,6 +63,8 @@ class Intelligence:
         if not choices or not isinstance(choices[0], dict):
             raise ValueError("Model returned no choices")
         message = choices[0].get("message") or {}
+        if choices[0].get("finish_reason") == "length":
+            raise ValueError("Model output was truncated")
         output = message.get("content")
         if not isinstance(output, str) or not output:
             raise ValueError("Model returned no content")

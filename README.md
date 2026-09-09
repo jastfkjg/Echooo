@@ -19,6 +19,59 @@ The interface and project documentation use English by default. Your domain name
 
 **Current scope: a working personal assistant MVP.** A delegation supports one guest with owner supervision. Meeting platforms, telephony, calendars, email, and payment tools are not connected yet. Approval authorizes the exact wording sent to the guest; it does not execute external transactions. The guest interface clearly identifies the assistant as AI.
 
+## Meeting mode
+
+Open **Meetings → New meeting** in the sidebar. Existing private chats, domains,
+and delegations remain separate and available.
+
+- **Start recording** captures the microphone and saves PCM audio to the workspace
+  database approximately every second. The status reports acknowledged saved audio.
+  Pause/resume creates separate playable recordings; a recording is limited to
+  30 minutes, after which you can resume in the same meeting.
+- Live STT displays interim text and final passages. Meeting capture enables
+  AssemblyAI speaker labels (local to each recording, not verified identities).
+  Use **Correct** to edit a name or transcript. Word timestamps are used when
+  available; otherwise playback boundaries are approximate.
+- Select a recording to see its **Recording summary**, **Live summaries**, and
+  **Full transcript**, in that order. **Summarize recording** updates one overall
+  overview; it does not create a chapter. Live summaries are separate incremental
+  highlights, updated about every minute during capture and on pause, followed by
+  an overview update. **Update highlights** processes saved text on demand.
+- Expand a live summary's source or read the complete transcript below it.
+  Continuous same-speaker speech is joined into compact, collapsible paragraphs;
+  select a sentence to reveal playback and correction controls. Pending speaker
+  IDs display as **Unidentified speaker**, not as a verified identity. Turn off
+  **Follow live** when reading earlier content.
+- Both summary paths send recognized text, speaker labels and evidence IDs, never
+  audio. Each chapter request processes up to 12 passages / 6,000 text characters;
+  each overview request folds up to 40 passages / 6,000 characters into the prior
+  overview. Model calls have a 40-second limit, with visible progress and retries
+  resuming from remaining text. Compatible hybrid models use non-thinking mode.
+- Analysis proposes decisions, commitments, actions with owners/dates, open
+  questions, possible contradictions, and missing action details, with clickable
+  evidence. **Confirm chapter** or **Reject** records human review. Corrections
+  invalidate previous analysis. No external actions or memory writes occur.
+- Click a passage timestamp or an evidence link to play its recording at that
+  position. Recordings can also be downloaded as WAV. Audio is the captured mono
+  PCM signal at the configured STT sample rate, not synthesized speech; browser
+  microphone processing/resampling still applies.
+- The recordings list and player stay above evidence and follow-up. Switching
+  recordings changes the overview, highlights, full transcript, findings and audio
+  together. Each recording can be deleted with confirmation, removing its audio,
+  transcript and associated summaries without deleting other recordings.
+- Ending preserves the meeting for review. Deleting a meeting removes its audio,
+  transcript and analysis from the application database. JSON workspace export
+  includes meeting metadata and text; download audio separately.
+
+Live recognition requires configured STT; AI analysis requires a live LLM.
+Mock mode saves microphone audio and accepts manually entered passages, but its
+chapter summaries are literal excerpts and it does not infer meeting findings.
+Tell participants before recording. Current capture is the browser microphone,
+not system audio or a meeting-platform bot. Keep the page open while recording;
+leaving it stops capture. A sudden browser/network loss can lose unacknowledged
+audio and the final partial transcript; previously acknowledged audio persists.
+The existing single-worker deployment requirement also applies to meetings.
+
 ## Start a conversation
 
 Click **Talk with Echooo** on the home page, in the sidebar, or in Conversations.

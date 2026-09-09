@@ -94,6 +94,9 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
             samesite="strict", max_age=int(ttl), path="/")
         return response
 
+    from echooo.meetings import install_meetings
+    install_meetings(app, store, auth, service.ai, settings, owner, same_origin)
+
     @app.get("/", include_in_schema=False)
     @app.get("/invite", include_in_schema=False)
     @app.get("/room/{sid}", include_in_schema=False)
@@ -432,7 +435,8 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     @app.get("/api/export")
     async def export(request: Request):
         with store.scope(owner(request)) as r:
-            result = {t.name: r.list(t) for t in db.OWNED}
+            result = {t.name: r.list(t) for t in db.OWNED if t is not db.audio_parts}
+            result["audio_export_note"] = "Download original audio from each meeting recording. Binary audio is excluded from JSON."
             result["exported_at"] = time.time()
             return JSONResponse(result, headers={"Content-Disposition": 'attachment; filename="echooo-export.json"'})
 
