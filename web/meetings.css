@@ -31,3 +31,6 @@
 @media(max-width:800px){.meeting-workspace{padding:16px 14px calc(var(--meeting-dock-height,90px) + 32px)!important}.meeting-heading h1{font-size:20px}.meeting-heading .actions .btn{padding:8px;min-height:36px}.meeting-search-controls #search-clear{display:none}.meeting-search-controls #meeting-text{margin-left:2px}.meeting-search-controls input{padding:8px}.meeting-navigation [role="tablist"]{gap:12px}.meeting-navigation [role="tab"]{font-size:12px}.meeting-recording-select select{max-width:114px}}
 
 @media(max-width:800px){.meeting-navigation{flex-wrap:wrap;gap:0}.meeting-recording-tools{margin-left:auto}.meeting-minutes-reader{margin-top:16px}.minutes-overview{font-size:15px;margin-bottom:18px}.minutes-topic{margin-top:14px}.minute-point{min-height:44px;padding-top:10px;padding-bottom:10px}.meeting-source-dialog{padding:16px}.meeting-minutes-reader .meeting-section-heading{flex-wrap:nowrap}#single-recording{font-size:11px}.meeting-library-row{padding:12px}}
+
+.meeting-audio-source{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}.meeting-audio-source select{width:auto;max-width:100%;min-height:36px;font-size:12px;padding:6px 28px 6px 8px}.meeting-audio-help{font-size:12px;margin:8px 0;line-height:1.5}
+@media(max-width:800px){.meeting-audio-source{flex:1;min-width:150px}.meeting-audio-source select{width:100%}}

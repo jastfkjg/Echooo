@@ -1,3 +1,4 @@
+import {MeetingAudio} from './meeting-audio.js?v=tab-audio-1';
 import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent} from './meeting-transcript.js?v=meeting-minutes-6';
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const meetingTime = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
@@ -14,7 +15,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     bindMenus(document.querySelector('.workspace'));return;
   }
   let meeting=await api(`/meetings/${id}`);if(!isCurrent())return;
-  let disposed=false,socket,stream,context,capture,source,stopping=false,recordingRate=16000,pendingBuffers=[],captureFlushed=null;
+  let disposed=false,socket,audioInput,context,capture,starting=false,stopping=false,recordingRate=16000,pendingBuffers=[],captureFlushed=null;
   let selectedRecording=meeting.recordings.at(-1)?.id||'notes',captureRecording=null,selectedPassage=null,selectedView='full';
   let analysisTask=null,analysisMessage='',analysisError=false;
   let searchQuery='',searchIndex=-1,searchIds=[],playingId=null,followedId=null,searchTimer;
@@ -25,7 +26,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const scope=rid=>`?recording_id=${encodeURIComponent(rid)}`;
   const textOf=u=>u.content.replace(/\s+/g,' ').trim();
   shell(`<div class="heading meeting-heading"><div><a class="meeting-back" href="#meetings">← All meetings</a><h1>${esc(meeting.title)}</h1><p id="meeting-context"></p></div><div class="actions"><button class="btn" id="meeting-end">End meeting</button></div></div>
-    <div class="meeting-session-bar"><div class="meeting-health"><p id="capture-status" role="status"></p><p id="transcription-status" role="status"></p></div><button class="meeting-text-button" id="meeting-repair">Check saved audio</button><button class="btn primary" id="meeting-record">Start recording</button></div><p id="capture-warning" class="meeting-warning" role="status"></p>
+    <div class="meeting-session-bar"><div class="meeting-health"><p id="capture-status" role="status"></p><p id="transcription-status" role="status"></p></div><button class="meeting-text-button" id="meeting-repair">Check saved audio</button><label class="meeting-audio-source" for="meeting-audio-source">Audio source<select id="meeting-audio-source" aria-describedby="meeting-audio-help"><option value="tab">Tab + microphone</option><option value="microphone">Microphone only</option></select></label><button class="btn primary" id="meeting-record">Start recording</button></div><p id="meeting-audio-help" class="muted meeting-audio-help">Choose the meeting or video tab and enable “Share tab audio”. Your microphone records your voice.</p><p id="capture-warning" class="meeting-warning" role="status"></p>
     <div class="meeting-navigation"><div role="tablist" aria-label="Meeting content"><button id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript" data-panel="transcript">Transcript</button><button id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-panel="summary">Summary & notes</button></div><div class="meeting-recording-tools"><span id="single-recording"></span><label class="meeting-recording-select" for="recording-picker"><span class="sr-only">Selected recording</span><select id="recording-picker"></select></label><details class="meeting-menu" id="recording-menu"><summary aria-label="Recording options">…</summary><div class="meeting-menu-items" id="recording-options"></div></details></div></div>
     <section id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript" class="meeting-transcript-section">
       <h2 id="transcript-heading" class="sr-only" tabindex="-1">Conversation</h2>
@@ -142,8 +143,10 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('#meeting-player').hidden=!!socket&&selectedRecording===captureRecording;
     const playable=selectedRecording!=='notes'&&!(socket&&selectedRecording===captureRecording);
     $('#play-back').disabled=$('#play-forward').disabled=$('#play-speed').disabled=$('#follow-playback').disabled=!playable;
-    $('#meeting-record').disabled=meeting.status==='ended'||!!meeting.recording&&!socket||stopping;
-    $('#meeting-end').disabled=meeting.status==='ended'||!!socket||meeting.recording||!!analysisTask;$('#meeting-text').disabled=meeting.status==='ended';
+    $('#meeting-record').disabled=meeting.status==='ended'||!!meeting.recording&&!socket||starting||stopping;
+    $('#meeting-audio-source').disabled=starting||!!socket||!!meeting.recording||completed;
+    $('.meeting-audio-source').hidden=completed;$('#meeting-audio-help').hidden=completed;
+    $('#meeting-end').disabled=meeting.status==='ended'||starting||!!socket||meeting.recording||!!analysisTask;$('#meeting-text').disabled=meeting.status==='ended';
     bindContent();
     syncPlayback(false);updateDockSpace();
   }
@@ -276,34 +279,42 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     finally{clearInterval(timer);if(!disposed)draw();}
   }
   async function updateRecording(rid){if(rid)await requestAnalysis(false,rid);}
-  function release(){capture?.disconnect();source?.disconnect();stream?.getTracks().forEach(t=>t.stop());context?.close().catch(()=>{});capture=source=stream=context=null;}
+  function release(){capture?.disconnect();audioInput?.close();context?.close().catch(()=>{});capture=audioInput=context=null;}
   function flush(){if(!pendingBuffers.length||socket?.readyState!==WebSocket.OPEN)return;const pcm=new Uint8Array(pendingBuffers.reduce((n,b)=>n+b.byteLength,0));let offset=0;for(const b of pendingBuffers){pcm.set(new Uint8Array(b),offset);offset+=b.byteLength;}pendingBuffers=[];socket.send(pcm);}
   async function stop(){if(!socket||stopping)return;stopping=true;status('Saving final speech…');if(capture){await new Promise(resolve=>{const timeout=setTimeout(()=>{captureFlushed=null;resolve();},500);captureFlushed=()=>{clearTimeout(timeout);captureFlushed=null;resolve();};capture.port.postMessage({type:'flush'});});}release();flush();if(socket.readyState===WebSocket.OPEN)socket.send('stop');else socket.close();status('Saving final speech…');draw();}
   async function start(){
-    $('#meeting-record').disabled=true;stopping=false;pendingBuffers=[];status('Connecting microphone…');
+    if(starting||disposed)return;
+    starting=true;stopping=false;pendingBuffers=[];warning('');$('#meeting-player').pause();draw();
+    const includeTab=$('#meeting-audio-source').value==='tab';
+    status(includeTab?'Choose a tab and share its audio…':'Connecting microphone…');
     try{
-      stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});if(disposed){release();return;}
+      audioInput=new MeetingAudio({onEnded:()=>{warning('An audio source stopped. Recording ended automatically.');if(socket)stop();}});
+      await audioInput.open(includeTab);if(disposed){release();return;}
+      status('Connecting recording…');
       socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/meetings/${id}`);
       socket.onmessage=async event=>{
         const p=JSON.parse(event.data);if(disposed)return;if(p.type==='warning')warning(p.message);
         if(p.type==='transcription'){const rec=meeting.recordings.find(r=>r.id===p.recording_id);if(rec)rec.transcription=p.state;updateHealth();}
         if(p.type==='ready'){
+          if(stopping)return;
           recordingRate=p.recording.sample_rate;captureRecording=p.recording.id;selectedRecording=captureRecording;meeting.recordings.push(p.recording);meeting.recording=true;setPanel('transcript');$('#meeting-follow').checked=true;warning('');draw();loadSelectedAudio();
           try{
             context=new AudioContext();await context.audioWorklet.addModule('/static/capture-worklet.js?v=meeting-minutes-6');if(disposed||stopping||!socket){release();return;}
-            source=context.createMediaStreamSource(stream);capture=new AudioWorkletNode(context,'pcm16-capture',{processorOptions:{targetSampleRate:recordingRate,chunkSamples:recordingRate/10}});
+            capture=new AudioWorkletNode(context,'pcm16-capture',{processorOptions:{targetSampleRate:recordingRate,chunkSamples:recordingRate/10}});
             capture.port.onmessage=({data})=>{if(data?.type==='flushed'){captureFlushed?.();return;}if(!socket||!(data instanceof ArrayBuffer))return;pendingBuffers.push(data);flush();if(socket.bufferedAmount>recordingRate*20){warning('Connection too slow. Pausing; acknowledged audio is saved.');stop();}};
-            source.connect(capture);capture.connect(context.destination);await context.resume();status('Recording');$('#meeting-record').textContent='Stop recording';draw();
+            audioInput.connect(context,capture);capture.connect(context.destination);await context.resume();if(disposed||stopping)return;status(includeTab?'Recording · tab + microphone':'Recording · microphone');$('#meeting-record').textContent='Stop recording';draw();
           }catch(e){warning(e.message);stop();}
         }
-        if(p.type==='saved'){const rec=meeting.recordings.find(r=>r.id===captureRecording);if(rec)rec.samples=p.samples;status(`Recording · ${meetingTime(p.samples/recordingRate*1000)} saved`);}
+        if(p.type==='saved'){const rec=meeting.recordings.find(r=>r.id===captureRecording);if(rec)rec.samples=p.samples;status(`Recording · ${includeTab?'tab + microphone':'microphone'} · ${meetingTime(p.samples/recordingRate*1000)} saved`);}
         if(p.type==='partial'&&selectedRecording===captureRecording){showPartial(p.text,p.speaker);liveChanged();}
         if(p.type==='utterance'){if(!meeting.utterances.some(u=>u.id===p.utterance.id))meeting.utterances.push(p.utterance);if(selectedRecording===captureRecording){showPartial('');playbackRecords=recordingContent(meeting,selectedRecording).records;updateSearchState(playbackRecords);renderTranscript(playbackRecords);bindContent();liveChanged();}}
       };
       socket.onclose=()=>{const rid=captureRecording;release();socket=null;stopping=false;meeting.recording=false;captureRecording=null;if(!disposed){showPartial('');$('#meeting-latest').hidden=true;$('#meeting-read-status').textContent='';status('Audio saved');$('#meeting-record').textContent='New recording';refresh().then(()=>{if(!disposed){loadSelectedAudio();if(!meeting.transcription_available)return updateRecording(rid);}}).catch(e=>toast(e.message));}};
       socket.onerror=()=>warning('Connection failed. Check your connection and retry.');
-    }catch(e){release();warning(e.message);draw();}
+    }catch(e){release();warning(e.message);status('Recording not started');}
+    finally{starting=false;if(!disposed)draw();}
   }
+  $('#meeting-audio-source').onchange=()=>{$('#meeting-audio-help').textContent=$('#meeting-audio-source').value==='tab'?'Choose the meeting or video tab and enable “Share tab audio”. Your microphone records your voice.':'Records your microphone only. Audio playing on your computer is not shared.';};
   $('#meeting-record').onclick=()=>socket?stop():start();$('#meeting-analyze').onclick=()=>requestAnalysis(true);
   $('#meeting-text').onclick=()=>openDialog('Add text note',field('speaker','Speaker','Unidentified speaker','text','required maxlength="80"')+'<div class="form-field"><label for="meeting-text-input">Spoken words</label><textarea id="meeting-text-input" name="content" required maxlength="6000"></textarea></div>',async fd=>{await api(`${base}/utterances`,'POST',{speaker:fd.get('speaker'),content:fd.get('content')});selectedRecording='notes';await refresh();if(!disposed)loadSelectedAudio();},'Add note');
   $('#meeting-end').onclick=async()=>{try{await requestAnalysis();meeting=await api(`${base}/end`,'POST');status('Meeting ended');draw();}catch(e){toast(e.message);}};

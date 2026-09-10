@@ -92,8 +92,17 @@ and delegations remain separate and available.
 Live recognition requires configured STT; AI analysis requires a live LLM.
 Mock mode saves microphone audio and accepts manually entered passages, but its
 notes use literal excerpts and it does not infer meeting outcomes.
-Tell participants before recording. Current capture is the browser microphone,
-not system audio or a meeting-platform bot. Keep the page open while recording;
+Tell participants before recording. Recording defaults to **Tab + microphone**:
+use desktop Chrome, choose the meeting or video tab in the sharing dialog, and
+enable **Share tab audio**. The tab records remote participants or video sound;
+the microphone records your voice, including when you wear headphones. Both are
+mixed to mono with headroom before the existing PCM save/transcription pipeline.
+Only audio is saved; the required screen-sharing video track is never uploaded.
+Missing shared audio or denied microphone access cancels setup with a message.
+Stopping sharing or losing an input ends recording and saves captured audio.
+Choose **Microphone only** for in-person meetings or browsers without tab sharing.
+This does not capture other desktop apps or act as a meeting-platform bot.
+Keep the page open while recording;
 leaving it stops capture. A sudden browser/network loss can lose unacknowledged
 audio and the final partial transcript; previously acknowledged audio persists.
 The existing single-worker deployment requirement also applies to meetings.
