@@ -135,8 +135,21 @@ recording_summaries = owned_table("meeting_recording_summaries", meeting_ref(),
     Column("evidence_ids", JSON, nullable=False), Column("revision", Integer, nullable=False),
     Column("status", String, nullable=False))
 
+# A separate table upgrades existing installations without rewriting recordings.
+recording_transcriptions = owned_table("meeting_recording_transcriptions", meeting_ref(),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE"), nullable=False),
+    Column("state", JSON, nullable=False),
+    constraints=(UniqueConstraint("recording_id"),))
+
+meeting_minutes = owned_table("meeting_minutes", meeting_ref(),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE")),
+    Column("scope_key", String, nullable=False), Column("content", JSON, nullable=False),
+    Column("evidence_ids", JSON, nullable=False), Column("revision", Integer, nullable=False),
+    Column("status", String, nullable=False),
+    constraints=(UniqueConstraint("meeting_id", "scope_key"),))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
-    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries]
+    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes]
 
 
 class Store:

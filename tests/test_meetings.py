@@ -234,6 +234,9 @@ def test_live_stt_speaker_timestamp_without_agent_reply(client, app, monkeypatch
         ws.send_bytes(bytes(3200))
         assert ws.receive_json()['type']=='saved'
         event=ws.receive_json()
+        if event['type']=='transcription':
+            assert event['state']['phase']=='live'
+            event=ws.receive_json()
         assert event['type']=='utterance'
         assert event['utterance']['speaker'].startswith('Speaker B')
         assert event['utterance']['start_ms']==20

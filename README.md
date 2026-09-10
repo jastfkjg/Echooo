@@ -24,63 +24,74 @@ The interface and project documentation use English by default. Your domain name
 Open **Meetings → New meeting** in the sidebar. Existing private chats, domains,
 and delegations remain separate and available.
 
-- **Start recording** captures the microphone and saves PCM audio to the workspace
-  database approximately every second. The status reports acknowledged saved audio.
-  Pause/resume creates separate playable recordings; a recording is limited to
-  30 minutes, after which you can resume in the same meeting.
-- Live STT displays interim text and final passages. Meeting capture enables
-  AssemblyAI speaker labels (local to each recording, not verified identities).
-  Use **Correct** to edit a name or transcript. Word timestamps are used when
-  available; otherwise playback boundaries are approximate.
-- Select a recording to see its **Recording summary**, **Live summaries**, and
-  **Full transcript**, in that order. **Summarize recording** updates one overall
-  overview; it does not create a chapter. Live summaries are separate incremental
-  highlights, updated about every minute during capture and on pause, followed by
-  an overview update. **Update highlights** processes saved text on demand.
-- Expand a live summary's source or read the complete transcript below it.
-  Continuous same-speaker speech is joined into compact, collapsible paragraphs;
-  select a sentence to reveal playback and correction controls. Pending speaker
-  IDs display as **Unidentified speaker**, not as a verified identity. The sticky
-  **Overview / Chapters / Transcript** navigation jumps within the recording.
-  Search highlights literal words and steps through matching passages (Enter for
-  next, Shift+Enter for previous). Sentence timestamps and corrections expand on
-  demand. **Follow live text** is opt-in and separate from playback following.
-- Both summary paths send recognized text, speaker labels and evidence IDs, never
-  audio. Each chapter request processes up to 12 passages / 6,000 text characters;
-  each overview request folds up to 40 passages / 6,000 characters into the prior
-  overview. Model calls have a 40-second limit, with visible progress and retries
-  resuming from remaining text. Compatible hybrid models use non-thinking mode.
-- Analysis extracts relevant knowledge points and, only where supported,
-  decisions, commitments, actions, unresolved questions, possible conflicts and
-  missing action details. Empty categories are not rendered. KT/training meetings
-  can contain knowledge only; explanations of existing rules are not new decisions,
-  and answered teaching questions are not open issues. Source links establish
-  provenance, not factual truth or participant agreement. Model classification
-  remains fallible, particularly when answers occur in a later chapter.
-- **Review AI output (optional)** contains **Mark accurate** and **Exclude
-  findings**, replacing ambiguous Confirm/Reject buttons. These record the owner's
-  assessment of the AI output; they do not approve a business decision or assign
-  work. Exclusion hides the chapter's extracted points, not its summary or source.
-  Corrections invalidate previous analysis. No external actions or memory writes occur.
-- Click a passage timestamp or an evidence link to play its recording at that
-  position. Recordings can also be downloaded as WAV. Audio is the captured mono
-  PCM signal at the configured STT sample rate, not synthesized speech; browser
-  microphone processing/resampling still applies.
+- **Start recording** saves microphone PCM audio in roughly 100 ms frames. The
+  status reports acknowledged saved audio. **Stop recording** flushes the last
+  microphone frame and waits for final recognition. Each segment is limited to
+  30 minutes; start another recording in the same meeting to continue.
+- Live transcription uses a separate bounded transport, reconnects automatically,
+  and preserves recording-relative timestamps across connections. Reconnected
+  speaker labels are distinguished because provider labels can change identity.
+  Recording and transcription health are displayed separately above the content.
+- **Transcript** is the default view: compact, left-aligned speaker bubbles with
+  one subdued time anchor per group. Select text to reveal playback and editing
+  controls. Existing text nodes are retained as new speech arrives. Provisional
+  words update in place; finalized text is saved without duplicating turns.
+- **Follow live** starts enabled. Scrolling up pauses following and exposes
+  **Back to live**; new text does not move an earlier reading position. Search
+  highlights literal words (Enter for next, Shift+Enter for previous). Speaker
+  colors supplement names, and unidentified speakers remain labeled as such.
+- **Summary & notes** is one compact document: an overview, supported decisions /
+  next steps / open questions, then topic-based discussion points. Empty categories
+  are omitted. Notes update about every minute during capture; **Update notes**
+  rebuilds them from saved text. Coverage is provisional until audio verification.
+- With AssemblyAI configured, stopping automatically checks the complete saved
+  audio using pre-recorded transcription and adds words in uncovered intervals.
+  Existing passages, IDs and manual corrections are retained. Silence does not
+  count as a missing transcript. Completion records processed audio coverage,
+  independently of the last spoken word, and refreshes summaries.
+- **Check saved audio** repairs older recordings; **Retry transcript check**
+  resumes failed checks. Provider job IDs persist, so polling resumes after a
+  restart without uploading the same submitted job again. Failed submissions
+  without a job ID can require a new upload. Verification sends audio to the
+  configured AssemblyAI REST API and uses that service's pre-recorded STT quota.
+  Optional `ffmpeg` losslessly compresses WAV to FLAC for faster upload; without
+  it the original WAV is uploaded. Original audio stays unchanged in the database.
+- Notes use recognized text, speaker labels and evidence IDs, never audio. Each
+  request folds up to 120 passages / 24,000 text characters into the prior minutes,
+  merging recurring topics across batches and removing questions resolved later.
+  Calls have a 40-second limit and visible progress; retries continue saved work.
+  Compatible hybrid models use non-thinking mode.
+- The model is instructed to omit irrelevant small talk, distinguish proposals
+  from adopted decisions, and separate requested actions from explicit commitments.
+  Every point must cite valid source passages; outcomes also require a matching
+  supporting quote. This validates provenance, not semantic accuracy or agreement.
+  KT/training meetings can contain discussion topics without decisions or tasks.
+- Select a note to open its supporting conversation, then **Go to transcript**
+  to inspect the surrounding discussion. Keyboard and touch work too. Sources,
+  timestamps, review controls and per-item menus do not occupy the reading flow.
+  Transcript corrections mark notes as outdated until rebuilt. No external actions
+  or memory writes occur.
+- Select a transcript passage and choose **Play original** to play from that
+  position. Source navigation itself does not start audio. Recordings download as
+  WAV: the captured mono PCM at the configured STT rate, not synthesized speech.
+  Browser microphone processing/resampling still applies.
 - The player remains fixed at the bottom with speed selection and ±10-second
   controls. Playback highlights the timed sentence; **Follow playback** is off by
   default and must be enabled to auto-scroll. Reading navigation/search turns off
   automatic following. The page reserves space for the player on small screens.
-- The recordings list stays above key points and follow-up. Switching
-  recordings changes the overview, highlights, full transcript, findings and audio
-  together. Each recording can be deleted with confirmation, removing its audio,
-  transcript and associated summaries without deleting other recordings.
-- Ending preserves the meeting for review. Deleting a meeting removes its audio,
-  transcript and analysis from the application database. JSON workspace export
-  includes meeting metadata and text; download audio separately.
+- The top bar shows the recording and duration; with multiple recordings, it
+  becomes a picker. Switching changes the transcript, minutes and audio together.
+  **Recording options** contains download and delete; deleting requires confirmation
+  and removes that recording's audio, transcript and associated notes.
+- The **Meetings** library has a menu per meeting for rename, JSON export and
+  deletion. Confirmation names the meeting being deleted. The reading page contains
+  no meeting deletion control or duplicate saved-recordings list. Ending retains
+  the meeting; deletion removes its associated data from the application database.
+  Workspace JSON export includes meeting metadata and text; download audio separately.
 
 Live recognition requires configured STT; AI analysis requires a live LLM.
 Mock mode saves microphone audio and accepts manually entered passages, but its
-chapter summaries are literal excerpts and it does not infer meeting findings.
+notes use literal excerpts and it does not infer meeting outcomes.
 Tell participants before recording. Current capture is the browser microphone,
 not system audio or a meeting-platform bot. Keep the page open while recording;
 leaving it stops capture. A sudden browser/network loss can lose unacknowledged

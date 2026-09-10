@@ -1,6 +1,6 @@
 export function speakerName(value) {
   if (!value || /^(Unknown speaker|Speaker (PENDING|UNKNOWN)(\s|·|$))/i.test(value)) return 'Unidentified speaker';
-  return value.replace(/^(Speaker \S+)\s*·\s*[a-f0-9]+$/i, '$1');
+  return value.replace(/^((?:Recovered speaker|Speaker) .+?)\s*·\s*[a-f0-9]+$/i, '$1');
 }
 
 // Presentation groups only: original utterances and audio anchors stay intact.
@@ -9,9 +9,9 @@ export function groupTranscript(records) {
   for (const record of records) {
     const last = groups.at(-1), speaker = speakerName(record.speaker);
     if (last && last.speaker === speaker && last.recordingId === record.recording_id &&
-        record.start_ms - last.records.at(-1).end_ms <= 30000 &&
-        record.start_ms - last.records[0].start_ms <= 120000 &&
-        last.length + record.content.length <= 600) {
+        record.start_ms - last.records.at(-1).end_ms <= 12000 &&
+        record.start_ms - last.records[0].start_ms <= 45000 &&
+        last.length + record.content.length <= 450) {
       last.records.push(record);
       last.length += record.content.length;
     } else {
@@ -22,7 +22,7 @@ export function groupTranscript(records) {
 }
 
 export function recordingContent(meeting, recordingId) {
-  const records = meeting.utterances.filter(u=>u.recording_id === (recordingId==='notes'?null:recordingId));
+  const records = meeting.utterances.filter(u=>u.recording_id === (recordingId==='notes'?null:recordingId)).sort((a,b)=>a.start_ms-b.start_ms||a.end_ms-b.end_ms||(a.created_at||0)-(b.created_at||0));
   const ids = new Set(records.map(u=>u.id));
   const sections = meeting.sections.filter(s=>s.status!=='stale' && s.evidence_ids.length && s.evidence_ids.every(id=>ids.has(id)));
   const overview = [...(meeting.overviews||[])].reverse().find(s=>s.scope_key===recordingId);
@@ -67,4 +67,11 @@ export const findingTypes = [
 export function findingGroups(sections) {
   const items=sections.filter(s=>!['rejected','stale'].includes(s.status)).flatMap(s=>s.items||[]);
   return findingTypes.map(type=>({...type,items:items.filter(item=>type.kinds.includes(item.kind))})).filter(group=>group.items.length);
+}
+
+export function minutesContent(meeting, recordingId) {
+  const minutes=(meeting.minutes||[]).find(s=>s.scope_key===recordingId);
+  const records=meeting.utterances.filter(u=>u.recording_id===(recordingId==='notes'?null:recordingId));
+  const covered=new Set(minutes?.evidence_ids||[]);
+  return {minutes, current:!!minutes && minutes.revision===meeting.revision && minutes.status==='ready' && records.every(u=>covered.has(u.id))};
 }

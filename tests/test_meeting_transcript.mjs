@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {groupTranscript,speakerName,recordingContent,transcriptMatches,searchParts,playingUtterance,findingGroups} from '../web/meeting-transcript.js';
+import {groupTranscript,speakerName,recordingContent,transcriptMatches,searchParts,playingUtterance,findingGroups,minutesContent} from '../web/meeting-transcript.js';
 const row=(id,text,start=0,extra={})=>({id,content:text,speaker:'Speaker PENDING · 4764',recording_id:'r1',start_ms:start,end_ms:start+3000,...extra});
 test('continuous short turns read as prose without losing evidence IDs',()=>{
   const rows=[row('1','发现异常时，',0),row('2','关联订单和物料。',4000),row('3','嗯。',9000)];
@@ -53,4 +53,37 @@ test('KT shows knowledge only; absent, excluded and stale categories stay hidden
   assert.deepEqual(findingGroups([]),[]);
   sections.push({status:'confirmed',items:[{kind:'commitment'},{kind:'action'}]});
   assert.equal(findingGroups(sections).find(g=>g.key==='action').items.length,2);
+});
+
+test('backfilled passages are read in audio order, and reconnect speaker labels stay distinct',()=>{
+  const meeting={revision:1,utterances:[row('later','Later',10000),row('early','Early',1000)],sections:[],overviews:[]};
+  assert.deepEqual(recordingContent(meeting,'r1').records.map(u=>u.id),['early','later']);
+  assert.equal(speakerName('Speaker A (connection 2) · abcd'),'Speaker A (connection 2)');
+  assert.equal(speakerName('Recovered speaker B · abcd'),'Recovered speaker B');
+});
+
+test('stopping microphone capture flushes a short last frame before its acknowledgment',async()=>{
+  const {readFile}=await import('node:fs/promises'),{default:vm}=await import('node:vm');
+  let Processor;const messages=[];
+  vm.runInNewContext(await readFile(new URL('../web/capture-worklet.js',import.meta.url),'utf8'),{
+    AudioWorkletProcessor:class{port={postMessage:message=>messages.push(message)};},sampleRate:48000,
+    registerProcessor:(name,processor)=>{Processor=processor;},Int16Array,
+  });
+  const capture=new Processor({processorOptions:{targetSampleRate:16000,chunkSamples:1600}});
+  capture.process([[new Float32Array(480).fill(.5)]]);
+  assert.equal(messages.length,0);
+  capture.port.onmessage({data:{type:'flush'}});
+  assert.equal(messages[0].byteLength,320);
+  assert.equal(messages[1].type,'flushed');
+  capture.process([[new Float32Array(480).fill(.5)]]);
+  assert.equal(messages.length,2);
+});
+
+test('minutes are scoped to the selected recording and warn about new or corrected evidence',()=>{
+  const meeting={revision:1,utterances:[row('1','First'),row('2','Other',0,{recording_id:'r2'})],minutes:[{scope_key:'r1',revision:1,status:'ready',evidence_ids:['1']}]};
+  assert.equal(minutesContent(meeting,'r1').current,true);
+  assert.equal(minutesContent(meeting,'r2').minutes,undefined);
+  assert.equal(minutesContent({...meeting,revision:2},'r1').current,false);
+  assert.equal(minutesContent({...meeting,utterances:[...meeting.utterances,row('3','New')]},'r1').current,false);
+  assert.equal(minutesContent({...meeting,minutes:[{...meeting.minutes[0],status:'building'}]},'r1').current,false);
 });

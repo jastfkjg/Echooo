@@ -37,10 +37,12 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
 
     @asynccontextmanager
     async def lifespan(app):
+        app.state.meeting_transcriptions.resume()
         yield
         for clients in list(rooms.clients.values()):
             for client in tuple(clients):
                 await client.stop("The service is shutting down.")
+        await app.state.meeting_transcriptions.close()
         store.close()
 
     app = FastAPI(title="Echooo · Scoped personal representative", version="0.2.0", lifespan=lifespan)

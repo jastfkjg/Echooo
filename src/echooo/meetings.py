@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import json
 import wave
 import logging
 from collections import defaultdict
@@ -15,8 +16,10 @@ from fastapi.responses import Response
 from pydantic import Field
 
 from echooo import database as db
+from echooo import meeting_minutes as minutes_rules
 from echooo.contracts import Input
 from echooo.models import STTEventType
+from echooo.meeting_transcription import RecordingTranscriptions, LiveTranscription
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
 from echooo.auth import AuthError
@@ -89,6 +92,8 @@ Use 1-3 compact paragraphs, at most 350 words. No audio is provided.
 def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     locks = defaultdict(asyncio.Lock)
     captures = set()
+    transcriptions = RecordingTranscriptions(store, settings, locks)
+    app.state.meeting_transcriptions = transcriptions
 
     def get(r, mid, active=False):
         m = need(r.get(db.meetings, mid), "Meeting")
@@ -99,11 +104,18 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     def view(who, mid):
         with store.scope(who) as r:
             m = get(r, mid)
-            return {**m, "recording": mid in captures,
+            states = {s['recording_id']: s['state'] for s in r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid)}
+            recordings = r.list(db.recordings, db.recordings.c.meeting_id == mid)
+            for rec in recordings:
+                rec['transcription'] = states.get(rec['id'], {'phase': 'unverified', 'verified_samples': 0})
+                if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
+                    rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
+            return {**m, "recording": mid in captures, 'transcription_available': transcriptions.available,
                 "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
-                "recordings": r.list(db.recordings, db.recordings.c.meeting_id == mid)}
+                "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
+                "recordings": recordings}
 
     def scoped_records(r, mid, recording_id):
         if recording_id and recording_id != "notes":
@@ -113,7 +125,8 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         records = r.list(db.utterances, db.utterances.c.meeting_id == mid)
         if recording_id:
             records = [u for u in records if u["recording_id"] == (None if recording_id == "notes" else recording_id)]
-        return records
+        with_recordings = {rec['id']: rec['created_at'] for rec in r.list(db.recordings, db.recordings.c.meeting_id == mid)}
+        return sorted(records, key=lambda u: (with_recordings.get(u['recording_id'], u['created_at']), u['start_ms'], u['created_at'], u['id']))
 
     async def text_summary(prompt, data):
         try:
@@ -141,6 +154,10 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         with store.scope(who) as r:
             get(r, mid)
             scoped_records(r, mid, rid)
+        await transcriptions.cancel(rid)
+        with store.scope(who) as r:
+            get(r, mid)
+            scoped_records(r, mid, rid)
             if rid == "notes":
                 raise Problem("Select an audio recording to delete.")
             if mid in captures:
@@ -155,6 +172,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for summary in r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid):
                 if set(summary["evidence_ids"]) & ids:
                     r.remove(db.recording_summaries, summary["id"])
+            for minutes in r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid):
+                if set(minutes["evidence_ids"]) & ids:
+                    r.remove(db.meeting_minutes, minutes["id"])
             r.remove(db.recordings, rid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
         return view(who, mid)
@@ -169,13 +189,53 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         with store.scope(owner(request)) as r:
             return r.add(db.meetings, title=data.title, status="active", revision=1)
 
+    @app.patch("/api/meetings/{mid}")
+    async def rename(request: Request, mid: str, data: MeetingInput):
+        with store.scope(owner(request)) as r:
+            get(r, mid)
+            r.change(db.meetings, mid, title=data.title)
+        return view(owner(request), mid)
+
+    @app.get("/api/meetings/{mid}/export")
+    async def export_meeting(request: Request, mid: str):
+        result = view(owner(request), mid)
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'minutes')}
+        export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
+        return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})
+
     @app.get("/api/meetings/{mid}")
     async def detail(request: Request, mid: str):
-        return view(owner(request), mid)
+        who = owner(request)
+        result = view(who, mid)
+        if mid not in captures and transcriptions.available:
+            for rec in result['recordings']:
+                if rec['transcription']['phase'] in {'verifying', 'interrupted'}:
+                    transcriptions.start(who, mid, rec['id'])
+        return result
+
+    @app.post('/api/meetings/{mid}/recordings/{rid}/transcribe', status_code=202)
+    async def repair_recording(request: Request, mid: str, rid: str):
+        who = owner(request)
+        with store.scope(who) as r:
+            get(r, mid)
+            scoped_records(r, mid, rid)
+            if rid == 'notes':
+                raise Problem('Select an audio recording.')
+        if mid in captures:
+            raise Problem('Stop recording before checking saved audio.', 409)
+        transcriptions.start(who, mid, rid, retry=True)
+        return view(who, mid)
 
     @app.delete("/api/meetings/{mid}")
     async def delete(request: Request, mid: str):
-        with store.scope(owner(request)) as r:
+        who = owner(request)
+        result = view(who, mid)
+        if mid in captures:
+            raise Problem("Pause recording before deleting this meeting.", 409)
+        for rec in result['recordings']:
+            await transcriptions.cancel(rec['id'])
+        with store.scope(who) as r:
             get(r, mid)
             if mid in captures:
                 raise Problem("Pause recording before deleting this meeting.", 409)
@@ -205,11 +265,63 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 r.log("meeting.transcript_corrected", meeting_id=mid, utterance_id=uid)
         return view(owner(request), mid)
 
+    @app.post("/api/meetings/{mid}/minutes")
+    async def generate_minutes(request: Request, mid: str, recording_id: str | None = None, force: bool = False):
+        return await minutes_for(owner(request), mid, recording_id, force, lambda: owner(request))
+
+    async def minutes_for(who, mid, recording_id, force=False, validate=lambda: None):
+        async with locks[mid]:
+            with store.scope(who) as r:
+                meeting = get(r, mid)
+                records = scoped_records(r, mid, recording_id)
+                candidates = r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid,
+                    db.meeting_minutes.c.scope_key == (recording_id or "all"))
+                saved = candidates[0] if candidates else None
+            previous = saved if saved and saved['revision'] == meeting['revision'] and not force else None
+            covered = set(previous['evidence_ids']) if previous else set()
+            pending = [u for u in records if u['id'] not in covered]
+            batch, size = [], 0
+            for u in pending:
+                if batch and (size + len(u['content']) > minutes_rules.MINUTES_CHAR_LIMIT or len(batch) >= minutes_rules.MINUTES_RECORD_LIMIT):
+                    break
+                batch.append(u)
+                size += len(u['content'])
+            if batch:
+                included = covered | {u['id'] for u in batch}
+                evidence = [u for u in records if u['id'] in included]
+                if settings.llm_provider == 'mock':
+                    result = {'overview': 'Demo notes from the available transcript.', 'outcomes': [],
+                        'topics': [{'title': 'Discussion', 'points': [{'text': u['content'][:600], 'evidence_ids': [u['id']]} for u in evidence[:4]]}]}
+                else:
+                    result = await text_summary(minutes_rules.PROMPT, {'title': meeting['title'],
+                        'previous_minutes': previous['content'] if previous else None,
+                        'records': [{'id': u['id'], 'speaker': minutes_rules.speaker_label(u['speaker']), 'content': u['content']} for u in batch]})
+                try:
+                    content = minutes_rules.clean_minutes(result, evidence)
+                except ValueError as exc:
+                    raise Problem('Invalid meeting notes returned. Previous notes are saved; retry updating.', 503) from exc
+                validate()
+                with store.scope(who) as r:
+                    get(r, mid)
+                    values = dict(content=content, evidence_ids=[u['id'] for u in evidence], revision=meeting['revision'],
+                        status='building' if len(batch) < len(pending) else 'ready')
+                    if saved:
+                        r.change(db.meeting_minutes, saved['id'], **values)
+                    else:
+                        r.add(db.meeting_minutes, meeting_id=mid, scope_key=recording_id or 'all',
+                            recording_id=recording_id if recording_id and recording_id != 'notes' else None, **values)
+                covered = included
+            result = view(who, mid)
+            result['summary_remaining'] = sum(u['id'] not in covered for u in records)
+            return result
+
+    app.state.generate_meeting_minutes = minutes_for
+
     @app.post("/api/meetings/{mid}/summarize")
     async def summarize_recording(request: Request, mid: str, recording_id: str | None = None):
-        who = owner(request)
-        if locks[mid].locked():
-            raise Problem("A summary is already running. Please wait for it to finish.", 409)
+        return await summarize_for(owner(request), mid, recording_id, lambda: owner(request))
+
+    async def summarize_for(who, mid, recording_id, validate=lambda: None):
         async with locks[mid]:
             with store.scope(who) as r:
                 meeting = get(r, mid)
@@ -236,7 +348,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                     if not isinstance(summary, str) or not 0 < len(summary) <= 6000:
                         raise Problem("Invalid recording overview returned. Retry summarizing.", 503)
                 covered.update(u["id"] for u in batch)
-                owner(request)
+                validate()
                 with store.scope(who) as r:
                     get(r, mid)
                     values = dict(summary=summary, evidence_ids=[u["id"] for u in records if u["id"] in covered],
@@ -253,9 +365,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
 
     @app.post("/api/meetings/{mid}/chapters")
     async def summarize_chapters(request: Request, mid: str, max_sections: int = Query(1, ge=1, le=4), recording_id: str | None = None):
-        who = owner(request)
-        if locks[mid].locked():
-            raise Problem("A summary is already running. Please wait for it to finish.", 409)
+        return await chapters_for(owner(request), mid, max_sections, recording_id, lambda: owner(request))
+
+    async def chapters_for(who, mid, max_sections, recording_id, validate=lambda: None):
         async with locks[mid]:
             with store.scope(who) as r:
                 m = get(r, mid)
@@ -320,7 +432,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                         continue
                     clean.append({"kind": item["kind"], "text": item["text"], "evidence_ids": ids,
                         "owner": str(item.get("owner") or "")[:80], "deadline": str(item.get("deadline") or "")[:120]})
-                owner(request)  # Credentials can be revoked during inference.
+                validate()  # Credentials can be revoked during inference.
                 with store.scope(who) as r:
                     get(r, mid)
                     r.add(db.meeting_sections, meeting_id=mid, evidence_ids=[u["id"] for u in batch],
@@ -329,6 +441,14 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         covered = {uid for s in result["sections"] if s["status"] != "stale" and set(s["evidence_ids"]) <= record_ids for uid in s["evidence_ids"]}
         result["summary_remaining"] = sum(u["id"] not in covered for u in records)
         return result
+
+    async def update_after_transcription(who, mid, rid):
+        while True:
+            result = await minutes_for(who, mid, rid)
+            if not result['summary_remaining']:
+                break
+
+    transcriptions.on_complete = update_after_transcription
 
     @app.post("/api/meetings/{mid}/sections/{sid}/review")
     async def review(request: Request, mid: str, sid: str, data: SectionReview):
@@ -402,8 +522,8 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             await ws.close(code=1008)
             return
         captures.add(mid)
-        stt = None
-        task = None
+        live = None
+        rec = None
         samples = 0
         last_end = 0
         rate = settings.assemblyai_sample_rate
@@ -420,103 +540,96 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             with store.scope(who) as r:
                 get(r, mid, True)
 
-        async def consume():
+        async def live_state(phase, message):
+            state = transcriptions.state(who, mid, rec['id'], phase=phase, message=message)
+            with contextlib.suppress(Exception):
+                await send({'type': 'transcription', 'recording_id': rec['id'], 'state': state})
+
+        async def consume(event, offset_ms, session):
             nonlocal last_end
-            try:
-                async for event in stt.events():
-                    validate()
-                    if event.type == STTEventType.PARTIAL:
-                        await send({"type": "partial", "text": event.transcript})
-                    elif event.type == STTEventType.FINAL and event.transcript:
-                        turn = event.raw.get("turn_order")
-                        if turn is not None and turn in seen_turns:
-                            continue
-                        if turn is not None:
-                            seen_turns.add(turn)
-                        end_ms = round(samples * 1000 / rate)
-                        start_ms = last_end
-                        words = event.raw.get("words") or []
-                        if words and isinstance(words[0], dict) and isinstance(words[-1], dict):
-                            start, finish = words[0].get("start"), words[-1].get("end")
-                            if isinstance(start, (int, float)) and isinstance(finish, (int, float)) and 0 <= start <= finish:
-                                start_ms, end_ms = min(round(start), end_ms), min(round(finish), end_ms)
-                        label = event.raw.get("speaker_label")
-                        # Labels are local to this recording, not verified real-world identity.
-                        speaker = f"Speaker {str(label)[:20]} · {rec['id'][:4]}" if label and str(label).upper() not in {"PENDING", "UNKNOWN"} else "Unknown speaker"
-                        with store.scope(who) as r:
-                            u = r.add(db.utterances, meeting_id=mid, recording_id=rec["id"],
-                                speaker=speaker, content=event.transcript[:6000],
-                                start_ms=start_ms, end_ms=end_ms)
-                        last_end = end_ms
-                        await send({"type": "utterance", "utterance": u})
-                    elif event.type in {STTEventType.ERROR, STTEventType.TERMINATED}:
-                        await send({"type": "warning", "message": "Transcription stopped. Audio is still being saved; pause and resume to reconnect."})
-                        return
-            except asyncio.CancelledError:
-                raise
-            except Exception:
+            validate()
+            if event.type == STTEventType.PARTIAL:
+                label = event.raw.get('speaker_label')
+                await send({'type': 'partial', 'text': event.transcript, 'speaker': speaker_label(label, session)})
+            elif event.type == STTEventType.FINAL and event.transcript:
+                turn = event.raw.get('turn_order')
+                key = (session, turn)
+                if turn is not None and key in seen_turns:
+                    return
+                end_ms = round(samples * 1000 / rate)
+                start_ms = max(last_end, offset_ms)
+                words = event.raw.get('words') or []
+                if words and isinstance(words[0], dict) and isinstance(words[-1], dict):
+                    start, finish = words[0].get('start'), words[-1].get('end')
+                    if isinstance(start, (int, float)) and isinstance(finish, (int, float)) and 0 <= start <= finish:
+                        start_ms, end_ms = min(offset_ms + round(start), end_ms), min(offset_ms + round(finish), end_ms)
+                with store.scope(who) as r:
+                    u = r.add(db.utterances, meeting_id=mid, recording_id=rec['id'],
+                        speaker=speaker_label(event.raw.get('speaker_label'), session), content=event.transcript[:6000],
+                        start_ms=start_ms, end_ms=max(start_ms, end_ms))
+                if turn is not None:
+                    seen_turns.add(key)
+                last_end = end_ms
                 with contextlib.suppress(Exception):
-                    await send({"type": "warning", "message": "Transcription disconnected. Audio is still being saved."})
+                    await send({'type': 'utterance', 'utterance': u})
+
+        def speaker_label(label, session):
+            if label is None or str(label).upper() in {'PENDING', 'UNKNOWN'}:
+                return 'Unknown speaker'
+            suffix = f' (connection {session})' if session > 1 else ''
+            return f"Speaker {str(label)[:20]}{suffix} · {rec['id'][:4]}"
 
         try:
             await ws.accept()
             with store.scope(who) as r:
                 rec = r.add(db.recordings, meeting_id=mid, sample_rate=rate, samples=0)
-            if settings.stt_provider != "mock":
-                try:
-                    stt = create_stt(settings)
-                    if hasattr(stt, "speaker_labels"):
-                        stt.speaker_labels = True
-                    await stt.connect()
-                    task = asyncio.create_task(consume())
-                except Exception:
-                    await send({"type": "warning", "message": "Live transcription unavailable. Audio will still be saved."})
+            phase = 'connecting' if settings.stt_provider != 'mock' else 'unverified'
+            rec['transcription'] = transcriptions.state(who, mid, rec['id'], phase=phase, message='')
+            if settings.stt_provider != 'mock':
+                live = LiveTranscription(lambda: create_stt(settings), rate, consume, live_state)
+                live.start()
             else:
-                await send({"type": "warning", "message": "Demo mode saves audio but does not transcribe. Add text manually or configure live STT."})
-            await send({"type": "ready", "recording": rec})
+                await send({'type': 'warning', 'message': 'Demo mode saves audio but does not transcribe.'})
+            await send({'type': 'ready', 'recording': rec})
             while True:
                 packet = await asyncio.wait_for(ws.receive(), timeout=30)
                 validate()
-                if packet["type"] == "websocket.disconnect":
+                if packet['type'] == 'websocket.disconnect':
                     break
-                pcm = packet.get("bytes")
+                pcm = packet.get('bytes')
                 if pcm is not None:
                     if not pcm or len(pcm) > rate * 4 or len(pcm) % 2:
-                        raise Problem("Invalid PCM audio frame.")
+                        raise Problem('Invalid PCM audio frame.')
                     if samples + len(pcm) // 2 > rate * 1800:
-                        await send({"type": "warning", "message": "30-minute recording limit reached. Resume to start another recording segment."})
+                        await send({'type': 'warning', 'message': '30-minute recording limit reached. Start another recording segment.'})
                         break
                     samples += len(pcm) // 2
                     with store.scope(who) as r:
-                        r.add(db.audio_parts, meeting_id=mid, recording_id=rec["id"], sequence=sequence, pcm=pcm)
-                        r.change(db.recordings, rec["id"], samples=samples)
+                        r.add(db.audio_parts, meeting_id=mid, recording_id=rec['id'], sequence=sequence, pcm=pcm)
+                        r.change(db.recordings, rec['id'], samples=samples)
                     sequence += 1
-                    await send({"type": "saved", "samples": samples})
-                    if stt and task and not task.done():
-                        try:
-                            await asyncio.wait_for(stt.send_audio(pcm), timeout=3)
-                        except Exception:
-                            task.cancel()
-                            await send({"type": "warning", "message": "Transcription unavailable. Audio continues saving."})
-                elif packet.get("text") == "stop":
-                    # Give final recognition a short silence window, without storing artificial audio.
-                    if stt and task and not task.done():
-                        with contextlib.suppress(Exception):
-                            await asyncio.wait_for(stt.send_audio(bytes(rate * 2)), timeout=2)
-                            await asyncio.sleep(1)
-                    await send({"type": "stopped"})
+                    await send({'type': 'saved', 'samples': samples})
+                    if live:
+                        live.feed(pcm, samples)
+                elif packet.get('text') == 'stop':
+                    if live:
+                        await live.finish()
+                        live = None
+                    await send({'type': 'stopped'})
                     break
-        except Exception:
+        except Exception as exc:
+            logger.warning('Meeting capture disconnected: recording=%s type=%s', rec and rec['id'], type(exc).__name__)
             with contextlib.suppress(Exception):
-                await send({"type": "warning", "message": "Recording disconnected. Previously acknowledged audio is saved."})
+                await send({'type': 'warning', 'message': 'Recording disconnected. Acknowledged audio is saved.'})
         finally:
-            if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-            if stt:
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(stt.close(), timeout=3)
+            if live:
+                await live.finish()
             captures.discard(mid)
+            if rec:
+                with contextlib.suppress(Exception):
+                    if samples and transcriptions.available:
+                        transcriptions.start(who, mid, rec['id'])
+                    else:
+                        transcriptions.state(who, mid, rec['id'], phase='unverified')
             with contextlib.suppress(Exception):
                 await ws.close()

@@ -11,6 +11,15 @@ class PCM16CaptureProcessor extends AudioWorkletProcessor {
     this.enabled = true;
     this.port.onmessage = ({ data }) => {
       if (data?.type === "enabled") this.enabled = Boolean(data.value);
+      if (data?.type === "flush") {
+        this.enabled = false;
+        if (this.offset) {
+          const tail = this.buffer.slice(0, this.offset);
+          this.port.postMessage(tail.buffer, [tail.buffer]);
+          this.offset = 0;
+        }
+        this.port.postMessage({ type: "flushed" });
+      }
     };
   }
 
@@ -44,4 +53,3 @@ class PCM16CaptureProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor("pcm16-capture", PCM16CaptureProcessor);
-

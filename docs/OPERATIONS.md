@@ -99,3 +99,51 @@ Start with synthetic data and enable STT, the live LLM, and TTS separately. Vali
 - Attribution in memory proposals, incorrect merges, and the proportion requiring owner edits.
 
 Automated tests use simulated provider events or HTTP transports to verify protocols and authorization. They have not submitted acceptance audio to live AssemblyAI, LLM, or CosyVoice services or measured actual voice quality. `/health` reports that the web service is running, not that every provider is connected.
+
+
+## Meeting transcription recovery
+
+Live audio saving does not wait for the STT socket. Reconnects use absolute audio
+sample offsets and connection-scoped turn IDs. When a recording stops, a durable
+verification job checks the saved audio and fills uncovered word intervals;
+existing text and edits remain intact. Summary refresh happens after verification.
+The `meeting_recording_transcriptions` table is created on startup without a
+recordings-table rewrite. In-flight jobs resume at startup or when the meeting is
+opened. Run only one application worker, including recovery workers.
+
+Use `POST /api/meetings/{mid}/recordings/{rid}/transcribe` to check a saved recording
+or retry a failed check. It returns 202 with meeting state; poll the existing
+meeting detail endpoint for `recordings[].transcription`. `verified_samples`
+tracks audio processing coverage, not the time of the final recognized word.
+`phase=complete` does not certify speech recognition accuracy. Summary errors
+are independent (`summary_phase`, `summary_error`) and can be retried from the UI.
+
+`ASSEMBLYAI_API_URL` defaults to `https://api.assemblyai.com`; set the appropriate
+regional REST endpoint alongside the streaming endpoint when using regional data
+residency. API credentials are server-only. Uploads use bounded chunks, and an
+optional `ffmpeg` installation converts WAV to lossless FLAC in memory. Submitted
+job IDs are retained for retries. Logs contain recording IDs and error types,
+not provider keys or transcript contents. Back up SQLite with its backup API
+(or stop the service before copying); an ordinary copy can miss committed WAL data.
+
+
+## Topic-based meeting notes
+
+The `meeting_minutes` table is created on startup, owner scoped with the same
+meeting/recording deletion boundaries as the transcript. One document is stored
+per meeting and recording scope; legacy chapters and overviews are retained for
+compatibility but no longer rendered in the reading view.
+
+`POST /api/meetings/{mid}/minutes?recording_id={rid}` folds pending transcript
+passages into the current document. Repeat while `summary_remaining` is nonzero.
+`force=true` rebuilds from the beginning; use it on the first request only, then
+continue normally. Transcript revisions automatically trigger rebuilding. Failed
+model calls retain the last saved document or completed batch. Audio verification
+refreshes these minutes automatically. Detail responses include `minutes`; use
+revision, evidence coverage and status to identify outdated or partial documents.
+
+`PATCH /api/meetings/{mid}` renames a meeting, and `GET /api/meetings/{mid}/export`
+downloads meeting JSON without binary audio or provider job details. Both use the
+existing owner authentication. The library owns these management actions; the
+recording selector owns audio download/deletion. Source dialogs retain original
+passage IDs and navigate without autoplaying audio.

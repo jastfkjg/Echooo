@@ -101,6 +101,7 @@ class Settings:
     tts_provider: str = field(default_factory=lambda: os.getenv("TTS_PROVIDER", "browser"))
 
     assemblyai_api_key: str = field(default_factory=lambda: os.getenv("ASSEMBLYAI_API_KEY", ""))
+    assemblyai_api_url: str = field(default_factory=lambda: os.getenv("ASSEMBLYAI_API_URL", "https://api.assemblyai.com"))
     assemblyai_streaming_url: str = field(
         default_factory=lambda: os.getenv(
             "ASSEMBLYAI_STREAMING_URL", "wss://streaming.assemblyai.com/v3/ws"

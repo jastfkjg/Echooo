@@ -106,6 +106,11 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
             return
         await self._ws.send(json.dumps({"type": "UpdateConfiguration", "agent_context": text}))
 
+    async def finish(self) -> None:
+        """Flush the last turn; keep receiving until the server acknowledges termination."""
+        if self._ws is not None and not self._closed:
+            await self._ws.send(json.dumps({"type": "Terminate"}))
+
     async def close(self) -> None:
         if self._closed:
             return
