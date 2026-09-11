@@ -1,305 +1,89 @@
 # Echooo
 
-A personal voice assistant built around **user-defined knowledge domains and explicit delegation**. Organize your own information or authorize the assistant to speak with someone on your behalf. Each conversation has separate permissions for reading, disclosure, actions, and memory updates.
+A personal voice assistant for private conversations, domain-based memory, delegated conversations, and meeting notes. You control what the assistant can read, disclose, and save.
 
-Each workspace starts with a `default` domain for everyday conversations and memories. You can create, name, edit, and delete additional domains for your own contexts, such as personal life, work, or individual projects.
+## Features
 
-The interface and project documentation use English by default. Your domain names, sources, memories, and conversation records retain their original language. Live model replies follow the language of the latest message.
+- **Private chat:** start a text or voice conversation with **Talk with Echooo**. Quick chats use confirmed, unexpired memories in `default`; **Choose domains** lets you start a chat with other domains or no memory.
+- **Knowledge and memory:** organize information into domains, add memories, or import TXT, Markdown, CSV, JSON, PDF, and DOCX files. Review proposals before saving, control sharing and expiry, and inspect or restore versions.
+- **Delegation:** invite one guest into a time-limited conversation with an explicit audience, goal, and knowledge scope. Follow the transcript, approve commitments, and revoke access.
+- **Meetings:** record tab audio and microphone together, follow live transcripts, edit passages, play original audio, and generate notes linked to supporting passages. Saved audio can be checked to recover gaps in transcription.
 
-## What this release supports
+Reading, disclosure, commitments, and memory updates have separate permissions. Guest replies are checked before publication and speech synthesis; proposed memories require review. Delegation currently supports one guest with owner supervision. External services such as calendars, email, telephony, and payments are not connected; approving a commitment does not execute a transaction.
 
-- Create a private workspace and sign in to manage any domains you choose.
-- Enter memories in a specific domain or import TXT, Markdown, CSV, JSON, PDF, and DOCX files. Extracted information becomes a proposal for review, not immediately available knowledge for public replies.
-- Mark memories as private or shareable, restrict their audiences, set expiry dates, inspect provenance and versions, and edit or restore earlier content.
-- Create private conversations or time-limited delegations with a specific audience, goal, knowledge scope, and destination domain for memory updates.
-- Invite one participant to speak with the AI assistant. The owner can follow the transcript, keep private notes, approve new commitments, and end or revoke access.
-- Use text or a microphone. Public replies are checked before reaching the browser or speech synthesis, and can be interrupted.
-- Review attributed statements, approval records, and proposed memories after a conversation. Edit, reject, or save proposals as new or replacement memories in the **authorized destination domain**.
-- Export workspace data and delete domains, sources, and dependent records. Private chats do not expire with time; delegated conversations retain an authorization deadline. Revocation, knowledge changes, and selected-memory expiry still invalidate affected conversations.
+## Quick start
 
-**Current scope: a working personal assistant MVP.** A delegation supports one guest with owner supervision. Meeting platforms, telephony, calendars, email, and payment tools are not connected yet. Approval authorizes the exact wording sent to the guest; it does not execute external transactions. The guest interface clearly identifies the assistant as AI.
-
-## Meeting mode
-
-Open **Meetings → New meeting** in the sidebar. Existing private chats, domains,
-and delegations remain separate and available.
-
-- **Start recording** saves microphone PCM audio in roughly 100 ms frames. The
-  status reports acknowledged saved audio. **Stop recording** flushes the last
-  microphone frame and waits for final recognition. Each segment is limited to
-  30 minutes; start another recording in the same meeting to continue.
-- Live transcription uses a separate bounded transport, reconnects automatically,
-  and preserves recording-relative timestamps across connections. Reconnected
-  speaker labels are distinguished because provider labels can change identity.
-  Recording and transcription health are displayed separately above the content.
-- **Transcript** is the default view: compact, left-aligned speaker bubbles with
-  one subdued time anchor per group. Select text to reveal playback and editing
-  controls. Existing text nodes are retained as new speech arrives. Provisional
-  words update in place; finalized text is saved without duplicating turns.
-- **Follow live** starts enabled. Scrolling up pauses following and exposes
-  **Back to live**; new text does not move an earlier reading position. Search
-  highlights literal words (Enter for next, Shift+Enter for previous). Speaker
-  colors supplement names, and unidentified speakers remain labeled as such.
-- **Summary & notes** is one compact document: an overview, supported decisions /
-  next steps / open questions, then topic-based discussion points. Empty categories
-  are omitted. Notes update about every minute during capture; **Update notes**
-  rebuilds them from saved text. Coverage is provisional until audio verification.
-- With AssemblyAI configured, stopping automatically checks the complete saved
-  audio using pre-recorded transcription and adds words in uncovered intervals.
-  Existing passages, IDs and manual corrections are retained. Silence does not
-  count as a missing transcript. Completion records processed audio coverage,
-  independently of the last spoken word, and refreshes summaries.
-- **Check saved audio** repairs older recordings; **Retry transcript check**
-  resumes failed checks. Provider job IDs persist, so polling resumes after a
-  restart without uploading the same submitted job again. Failed submissions
-  without a job ID can require a new upload. Verification sends audio to the
-  configured AssemblyAI REST API and uses that service's pre-recorded STT quota.
-  Optional `ffmpeg` losslessly compresses WAV to FLAC for faster upload; without
-  it the original WAV is uploaded. Original audio stays unchanged in the database.
-- Notes use recognized text, speaker labels and evidence IDs, never audio. Each
-  request folds up to 120 passages / 24,000 text characters into the prior minutes,
-  merging recurring topics across batches and removing questions resolved later.
-  Calls have a 40-second limit and visible progress; retries continue saved work.
-  Compatible hybrid models use non-thinking mode.
-- The model is instructed to omit irrelevant small talk, distinguish proposals
-  from adopted decisions, and separate requested actions from explicit commitments.
-  Every point must cite valid source passages; outcomes also require a matching
-  supporting quote. This validates provenance, not semantic accuracy or agreement.
-  KT/training meetings can contain discussion topics without decisions or tasks.
-- Select a note to open its supporting conversation, then **Go to transcript**
-  to inspect the surrounding discussion. Keyboard and touch work too. Sources,
-  timestamps, review controls and per-item menus do not occupy the reading flow.
-  Transcript corrections mark notes as outdated until rebuilt. No external actions
-  or memory writes occur.
-- Select a transcript passage and choose **Play original** to play from that
-  position. Source navigation itself does not start audio. Recordings download as
-  WAV: the captured mono PCM at the configured STT rate, not synthesized speech.
-  Browser microphone processing/resampling still applies.
-- The player remains fixed at the bottom with speed selection and ±10-second
-  controls. Playback highlights the timed sentence; **Follow playback** is off by
-  default and must be enabled to auto-scroll. Reading navigation/search turns off
-  automatic following. The page reserves space for the player on small screens.
-- The top bar shows the recording and duration; with multiple recordings, it
-  becomes a picker. Switching changes the transcript, minutes and audio together.
-  **Recording options** contains download and delete; deleting requires confirmation
-  and removes that recording's audio, transcript and associated notes.
-- The **Meetings** library has a menu per meeting for rename, JSON export and
-  deletion. Confirmation names the meeting being deleted. The reading page contains
-  no meeting deletion control or duplicate saved-recordings list. Ending retains
-  the meeting; deletion removes its associated data from the application database.
-  Workspace JSON export includes meeting metadata and text; download audio separately.
-
-Live recognition requires configured STT; AI analysis requires a live LLM.
-Mock mode saves microphone audio and accepts manually entered passages, but its
-notes use literal excerpts and it does not infer meeting outcomes.
-Tell participants before recording. Recording defaults to **Tab + microphone**:
-use desktop Chrome, choose the meeting or video tab in the sharing dialog, and
-enable **Share tab audio**. The tab records remote participants or video sound;
-the microphone records your voice, including when you wear headphones. Both are
-mixed to mono with headroom before the existing PCM save/transcription pipeline.
-Only audio is saved; the required screen-sharing video track is never uploaded.
-Missing shared audio or denied microphone access cancels setup with a message.
-Stopping sharing or losing an input ends recording and saves captured audio.
-Choose **Microphone only** for in-person meetings or browsers without tab sharing.
-This does not capture other desktop apps or act as a meeting-platform bot.
-Keep the page open while recording;
-leaving it stops capture. A sudden browser/network loss can lose unacknowledged
-audio and the final partial transcript; previously acknowledged audio persists.
-The existing single-worker deployment requirement also applies to meetings.
-
-## Start a conversation
-
-Click **Talk with Echooo** on the home page, in the sidebar, or in Conversations.
-A private chat opens immediately in `default`; no manual domain selection or conversation title is required.
-The title is generated from your first message. Turn on the microphone and enable
-**Read replies aloud** for voice interaction when real STT is configured.
-
-Quick chats use the confirmed, unexpired memories in `default` and propose updates
-to that domain when the conversation ends. Proposals require review before they
-become memories. Other domains are never included automatically. **Choose domains**
-opens a selector for a fresh private chat with explicitly selected memories; you
-can also deselect all domains to chat without memory. Previous transcripts remain
-in their original conversations and are not copied into the new context. The
-domain page still offers a shortcut with that domain selected.
-
-Existing workspaces with no domains receive `default` at startup. It is an ordinary
-editable domain. If you rename or delete it, the next quick chat creates a new,
-empty `default`; deleted information is not restored.
-
-Use **Save memory** to choose one of your own messages, edit the information, and
-pick a destination domain (or create your first domain). This creates a proposal
-for review; it does not expand the current chat's reading permissions. In scoped
-chats, the destination must belong to the selected domains. **Delegate** always
-creates a separately authorized guest conversation without copying private history.
-
-## Run locally
-
-Requirements: Python 3.11+ and a modern browser with AudioWorklet support. The text demo requires no model credentials.
+Requires **Python 3.11+** and a modern browser with AudioWorklet support. No model credentials are needed for the text demo.
 
 ```bash
 ./start.sh
 ```
 
-The launcher creates `.venv` if needed, installs project and development dependencies,
-and copies `.env.mock.example` only when `.env` is missing. Later runs reuse the
-environment, reinstalling dependencies only when `pyproject.toml` changes or you
-pass `--install`. Existing `.env` settings are preserved. No manual activation is needed.
+Open [localhost:8000](http://127.0.0.1:8000) and create your workspace credentials. The launcher creates `.venv`, installs dependencies, and copies [.env.mock.example](.env.mock.example) to `.env` if missing. Existing settings are preserved. Data persists in `data/echooo.db` by default.
 
 ```bash
-./start.sh --mock             # Use demo providers for this run
-./start.sh --port 8010        # Use localhost:8010 with matching origin/cookie settings
-./start.sh --install          # Refresh dependencies
-./start.sh --help
+./start.sh --mock       # Use demo providers for this run
+./start.sh --port 8010  # Use a different local port
+./start.sh --install    # Refresh dependencies
 ```
 
-Stop with **Ctrl+C**. You can also invoke `/path/to/echooo/start.sh` from another
-directory; the script starts from the repository root so data paths stay consistent.
-To choose Python when creating `.venv`, use `PYTHON=python3.12 ./start.sh`.
+Stop with **Ctrl+C**. To choose Python when creating the environment, use `PYTHON=python3.12 ./start.sh`.
 
-Open the [local workspace](http://127.0.0.1:8000) and set a username and a nonempty password. Data is saved to `data/echooo.db` by default and survives restarts. Complete initial setup before exposing the service publicly.
+Demo replies are deterministic. Mock STT does not transcribe microphone audio; optional browser speech can read replies aloud.
 
-If your package mirror is missing a dependency, use the official index for this installation:
+## Connect live providers
 
-```bash
-PIP_INDEX_URL=https://pypi.org/simple ./start.sh --install
-```
+Use [.env.example](.env.example) as a reference to update `.env`, then restart without `--mock`.
 
-Manual setup remains available: create and activate a Python virtual environment,
-install with `python -m pip install -e '.[dev]'`, create `.env` from the example if
-needed, and run `python -m echooo` from the repository root.
+| Capability | Settings |
+| --- | --- |
+| Speech recognition | `STT_PROVIDER=assemblyai`, `ASSEMBLYAI_API_KEY` |
+| Language model | `LLM_PROVIDER=openai_compatible`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` |
+| Browser speech | `TTS_PROVIDER=browser` |
+| Self-hosted CosyVoice | `TTS_PROVIDER=cosyvoice`, `COSYVOICE_BASE_URL`, compatible `COSYVOICE_SPEAKER_ID` |
+| DashScope speech | `TTS_PROVIDER=dashscope`, `DASHSCOPE_API_KEY`; model and voice configured with `DASHSCOPE_TTS_*` |
 
-Suggested first walkthrough:
+The LLM endpoint must support streaming `/chat/completions` and reliable JSON instruction following. API keys stay on the server; audio and authorized text are sent to the configured providers as needed.
 
-1. Create a domain, such as “Northstar product research.”
-2. Add two memories: mark an internal resource plan as **Private**, and a progress update as shareable with the audience **Client**.
-3. Select **Delegate**, enter **Client** as the audience, choose the domain, and explicitly select **Disclose** for the progress update.
-4. Create an invitation and open it in another browser or private window. Keep the owner view open for supervision.
-5. Ask about progress and internal resources, then request a new commitment. Observe the disclosure boundary and approval flow.
-6. Select **End and review**, then edit, approve, or dismiss the proposed memories in **Review**.
+See [Operations](docs/OPERATIONS.md#configuration) for all settings and [DashScope setup](docs/OPERATIONS.md#alibaba-cloud-cosyvoice-setup) for cloud speech and custom voices. Model prompts live in [config/prompts.toml](config/prompts.toml).
 
-Demo mode uses deterministic matching against authorized facts; it does not represent live model conversation quality. Mock STT cannot transcribe microphone input. **Read replies aloud** enables optional browser speech. Each invitation can be redeemed once; creating another invitation revokes previous guest credentials.
+## Record a meeting
 
-## Connect speech and language models
+1. Open **Meetings → New meeting**.
+2. Choose **Tab + microphone** in desktop Chrome, select the meeting or video tab, and enable **Share tab audio**. Use **Microphone only** for in-person meetings.
+3. Start recording, follow the transcript, and open **Summary & notes** for notes with source references.
+4. Stop recording to finish transcription and, with AssemblyAI configured, check saved audio for gaps. Select a passage to play its original audio; download recordings as WAV.
 
-Update `.env` using [.env.example](.env.example), then restart the service:
+Tell participants before recording and keep the page open. Each recording is limited to 30 minutes; start another in the same meeting to continue. Tab sharing captures the selected tab's audio, not other desktop apps. Only audio is saved.
 
-| Capability | Configuration | Notes |
-| --- | --- | --- |
-| Speech recognition | `STT_PROVIDER=assemblyai` and `ASSEMBLYAI_API_KEY` | AssemblyAI v3 WebSocket; browser input is 16 kHz mono PCM16 |
-| Understanding and replies | `LLM_PROVIDER=openai_compatible`, URL, model, and API key | Streaming `/chat/completions`; requires reliable JSON instruction following |
-| Browser speech | `TTS_PROVIDER=browser` | Opt-in playback; prefers local voices, but the device may use cloud speech |
-| Self-hosted synthesis | `TTS_PROVIDER=cosyvoice` | Official FastAPI protocol; this release uses a preset speaker and requires a compatible SFT model and speaker ID |
-| Alibaba Cloud CosyVoice | `TTS_PROVIDER=dashscope` and `DASHSCOPE_API_KEY` | Async WebSocket streaming; defaults to `cosyvoice-v3-flash`, `longanyang`, 24 kHz PCM16; no local model required |
+Live transcription requires STT; AI notes require a live LLM and should be reviewed. Mock mode saves audio and accepts manual passages, but only produces excerpt-based notes. Workspace JSON exports include meeting text and metadata; download audio separately.
 
-Public replies from a live LLM follow **structured draft → independent check → publication**. This increases first-response latency, an intentional tradeoff in this release. The server filters knowledge before inference; it does not send a complete personal profile and merely instruct the model to keep it secret.
+## Deployment
 
-Every STT, LLM, and TTS provider uses the same authorization and memory-writing layer. That layer is the core of Echooo; speech APIs are replaceable infrastructure.
-
-- [AssemblyAI Streaming documentation](https://www.assemblyai.com/docs/streaming)
-- [CosyVoice repository](https://github.com/FunAudioLLM/CosyVoice)
-- [DashScope CosyVoice WebSocket API](https://help.aliyun.com/zh/model-studio/cosyvoice-websocket-api)
-- Model behavior: [config/prompts.toml](config/prompts.toml)
-
-### Alibaba Cloud CosyVoice setup
-
-Add these settings to your server's `.env`, using a Beijing-region DashScope API key:
-
-```dotenv
-TTS_PROVIDER=dashscope
-DASHSCOPE_API_KEY=your-api-key
-DASHSCOPE_TTS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/inference
-DASHSCOPE_TTS_MODEL=cosyvoice-v3-flash
-DASHSCOPE_TTS_VOICE=longanyang
-DASHSCOPE_TTS_SAMPLE_RATE=24000
-DASHSCOPE_TTS_TIMEOUT_SECONDS=60
-```
-
-The shared Beijing endpoint remains supported. For a workspace-specific endpoint, use
-`wss://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`.
-For Singapore, use `wss://YOUR_WORKSPACE_ID.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference`
-with that region's key and available model/voice. See the official API documentation above.
-Use a **DashScope API key**, not an Alibaba Cloud AccessKey ID/Secret.
-
-Restart with `./start.sh` (preserve any existing `--port` option). Do not use `--mock`,
-which overrides TTS to browser speech. Start voice and unmute output in a conversation.
-Microphone transcription still requires a configured STT provider; enabling cloud TTS
-does not enable speech recognition. API keys remain on the server.
-
-`longanyang` is a Mandarin/English male voice; `longanhuan` is a female alternative.
-Choose a [voice compatible with the model and region](https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list).
-For supported Qwen-Audio-TTS and CosyVoice models, the conversation's **Voice options**
-menu offers model-matched presets and saves the selection for that conversation. The session API can also
-override the cloud voice with `voice: {"dashscope_voice": "longanhuan"}`;
-the self-hosted `speaker_id` (such as `中文女`) is not sent to DashScope.
-Existing sessions without this override use `DASHSCOPE_TTS_VOICE`.
-
-Echooo can upload a WAV, MP3, or M4A sample from **Voice options → Manage custom voices**,
-create a model-bound cloned voice, query the account's compatible cloned voices, and delete
-them. Uploaded samples use Alibaba Cloud's temporary OSS flow and are not saved by Echooo;
-Alibaba removes those temporary objects after 48 hours. This flow is intended for development
-and light use. Configure long-lived OSS for production or high-concurrency deployments.
-The DashScope workspace must expose the `voice-enrollment` service. If the TTS inference key
-does not have that model, configure a same-account management key with
-`DASHSCOPE_VOICE_API_KEY` and, when needed, override `DASHSCOPE_TTS_CUSTOMIZATION_URL`.
-For a Beijing shared-domain management key, use:
-
-```env
-DASHSCOPE_VOICE_API_KEY=sk-your-model-studio-key
-DASHSCOPE_TTS_CUSTOMIZATION_URL=https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization
-DASHSCOPE_UPLOAD_URL=https://dashscope.aliyuncs.com/api/v1/uploads
-```
-
-To expose a voice created outside Echooo without querying it first, add its `voice_id`
-to the comma-separated `DASHSCOPE_TTS_CUSTOM_VOICES` setting and restart Echooo. It will
-then appear in Voice options. Custom voices remain bound to the model and region used
-when they were created.
-
-Only checked replies are synthesized. Audio streams directly as mono PCM16 through the
-existing browser player; no temporary audio files or decoding dependencies are required.
-Interrupting, muting, ending a session, or losing authorization closes the active cloud
-connection. Retry audio reuses the checked reply without calling the LLM again.
-Missing keys fail startup; synthesis, network, or quota failures preserve the text and
-show the existing playback error. The timeout bounds connection setup and time waiting
-for incoming events, rather than the total spoken duration.
-
-## PostgreSQL and deployment
-
-SQLite supports a simple local setup. PostgreSQL is recommended for deployment. Owner-level row-level security (RLS) is implemented and has been tested against a real PostgreSQL instance. Domain and disclosure permissions are still enforced by the application service; RLS is not a model safety guarantee.
-
-An optional local database service is included. Set `POSTGRES_PASSWORD` in `.env`, then run:
+SQLite is the local default. For PostgreSQL, set `POSTGRES_PASSWORD` in `.env` and start the included database:
 
 ```bash
 docker compose up -d db
 ```
 
-Set `DATABASE_URL` to `postgresql+psycopg://echooo:URL_ENCODED_PASSWORD@127.0.0.1:5433/echooo` and restart the application. SQLite and PostgreSQL are separate data sources: **changing the connection does not migrate existing data**.
+Then set `DATABASE_URL=postgresql+psycopg://echooo:URL_ENCODED_PASSWORD@127.0.0.1:5433/echooo` and restart. Changing databases does not migrate existing data.
 
-See [Operations](docs/OPERATIONS.md). Room coordination and cancellation currently run in one process, so use **one application worker**. Public access requires HTTPS, the correct `PUBLIC_ORIGIN`, and `COOKIE_SECURE=true`.
+Use **one application worker**. Before public access, complete workspace setup and configure HTTPS, the correct `PUBLIC_ORIGIN`, and `COOKIE_SECURE=true`. See [Operations](docs/OPERATIONS.md) for deployment and backups.
 
-## Tests
+## Development
 
-```bash
-STT_PROVIDER=mock LLM_PROVIDER=mock TTS_PROVIDER=browser python -m pytest -q
-python -m compileall -q src tests
-node --check web/app.js
-node --check web/voice.js
-```
-
-PostgreSQL integration tests require an isolated database named `echooo_test*`. Tests clear its application tables; never point them at your working database:
+After `./start.sh` has installed dependencies:
 
 ```bash
-ECHO_TEST_POSTGRES_URL='postgresql+psycopg://USER:PASSWORD@HOST/echooo_test' \
-STT_PROVIDER=mock LLM_PROVIDER=mock TTS_PROVIDER=browser \
-python -m pytest tests/test_product.py -q
+STT_PROVIDER=mock LLM_PROVIDER=mock TTS_PROVIDER=browser .venv/bin/python -m pytest -q
+node --test tests/*.mjs
 ```
 
-Tests cover domain isolation, separate disclosure permissions, one-time invitations, credential and conversation revocation, revocation during generation, private notes, commitment approval, attributed learning, version conflicts, deletion propagation, STT-to-checked-audio flow, interruption, persistence, and PostgreSQL RLS. Recognition accuracy, voice quality, and network latency require acceptance testing with your actual providers.
+Optional PostgreSQL tests use `ECHO_TEST_POSTGRES_URL` and require an isolated database named `echooo_test*`. They clear application tables; never use your working database.
 
-## Documentation and direction
+## Documentation
 
 - [Architecture and information boundaries](docs/ARCHITECTURE.md)
-- [Configuration, operations, deletion, and backups](docs/OPERATIONS.md)
+- [Configuration, operations, and backups](docs/OPERATIONS.md)
 - [Roadmap and acceptance criteria](docs/ROADMAP.md)
-- [Implementation scope and verification record](docs/IMPLEMENTATION.md)
-
-The previous unauthenticated `/ws` demo, unchecked streamed output, and voice-sample upload flow have been removed. The new endpoint is `/ws/sessions/{id}`, with identity and scope checks. Do not combine the old frontend with the new service.
+- [Implementation and verification record](docs/IMPLEMENTATION.md)

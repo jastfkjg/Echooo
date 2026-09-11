@@ -50,7 +50,7 @@ Data is stored at `DATABASE_URL`. Relative SQLite paths are resolved from the wo
 
 Browser input is fixed at 16 kHz mono PCM16 in 100 ms frames. This release rejects other STT input sample rates. CosyVoice output rate must match the checkpoint. Preset mode requires a compatible SFT checkpoint; do not assume every checkpoint provides preset voices. Speaker IDs are literal provider values and should not be translated.
 
-DashScope setup and endpoint examples are in the README. Cloud synthesis uses the configured
+See [Alibaba Cloud CosyVoice setup](#alibaba-cloud-cosyvoice-setup) below for endpoint and voice configuration. Cloud synthesis uses the configured
 default voice or the session's `voice.dashscope_voice`, independently of self-hosted
 `voice.speaker_id`. Restart after configuration changes; `./start.sh --mock` overrides TTS
 to browser speech. Each checked reply owns one cloud connection, which is closed on
@@ -58,6 +58,69 @@ completion, mute, interruption, disconnection or authorization revocation. Faile
 are not automatically retried; the explicit Retry audio action reuses the last checked text.
 
 Upload limits: 5 MB per file; 100,000 extracted characters; up to 100 PDF pages. Encrypted PDFs and image-only scans are unsupported. DOCX uncompressed content is limited to 20 MB. Only extracted text is stored, not the original binary file. Conversations may select up to 12 domains and 100 memories, last up to 100 turns, and be authorized for 5 minutes to 24 hours. Extraction has a proposal-count limit; it does not guarantee exhaustive coverage of long sources. Important facts can be entered manually.
+
+## Alibaba Cloud CosyVoice setup
+
+Add these settings to your server's `.env`, using a Beijing-region DashScope API key:
+
+```dotenv
+TTS_PROVIDER=dashscope
+DASHSCOPE_API_KEY=your-api-key
+DASHSCOPE_TTS_URL=wss://dashscope.aliyuncs.com/api-ws/v1/inference
+DASHSCOPE_TTS_MODEL=cosyvoice-v3-flash
+DASHSCOPE_TTS_VOICE=longanyang
+DASHSCOPE_TTS_SAMPLE_RATE=24000
+DASHSCOPE_TTS_TIMEOUT_SECONDS=60
+```
+
+The shared Beijing endpoint remains supported. For a workspace-specific endpoint, use
+`wss://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`.
+For Singapore, use `wss://YOUR_WORKSPACE_ID.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference`
+with that region's key and available model/voice. See the official API documentation above.
+Use a **DashScope API key**, not an Alibaba Cloud AccessKey ID/Secret.
+
+Restart with `./start.sh` (preserve any existing `--port` option). Do not use `--mock`,
+which overrides TTS to browser speech. Start voice and unmute output in a conversation.
+Microphone transcription still requires a configured STT provider; enabling cloud TTS
+does not enable speech recognition. API keys remain on the server.
+
+`longanyang` is a Mandarin/English male voice; `longanhuan` is a female alternative.
+Choose a [voice compatible with the model and region](https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list).
+For supported Qwen-Audio-TTS and CosyVoice models, the conversation's **Voice options**
+menu offers model-matched presets and saves the selection for that conversation. The session API can also
+override the cloud voice with `voice: {"dashscope_voice": "longanhuan"}`;
+the self-hosted `speaker_id` (such as `中文女`) is not sent to DashScope.
+Existing sessions without this override use `DASHSCOPE_TTS_VOICE`.
+
+Echooo can upload a WAV, MP3, or M4A sample from **Voice options → Manage custom voices**,
+create a model-bound cloned voice, query the account's compatible cloned voices, and delete
+them. Uploaded samples use Alibaba Cloud's temporary OSS flow and are not saved by Echooo;
+Alibaba removes those temporary objects after 48 hours. This flow is intended for development
+and light use. Configure long-lived OSS for production or high-concurrency deployments.
+The DashScope workspace must expose the `voice-enrollment` service. If the TTS inference key
+does not have that model, configure a same-account management key with
+`DASHSCOPE_VOICE_API_KEY` and, when needed, override `DASHSCOPE_TTS_CUSTOMIZATION_URL`.
+For a Beijing shared-domain management key, use:
+
+```env
+DASHSCOPE_VOICE_API_KEY=sk-your-model-studio-key
+DASHSCOPE_TTS_CUSTOMIZATION_URL=https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization
+DASHSCOPE_UPLOAD_URL=https://dashscope.aliyuncs.com/api/v1/uploads
+```
+
+To expose a voice created outside Echooo without querying it first, add its `voice_id`
+to the comma-separated `DASHSCOPE_TTS_CUSTOM_VOICES` setting and restart Echooo. It will
+then appear in Voice options. Custom voices remain bound to the model and region used
+when they were created.
+
+Only checked replies are synthesized. Audio streams directly as mono PCM16 through the
+existing browser player; no temporary audio files or decoding dependencies are required.
+Interrupting, muting, ending a session, or losing authorization closes the active cloud
+connection. Retry audio reuses the checked reply without calling the LLM again.
+Missing keys fail startup; synthesis, network, or quota failures preserve the text and
+show the existing playback error. The timeout bounds connection setup and time waiting
+for incoming events, rather than the total spoken duration.
+
 
 ## PostgreSQL
 
