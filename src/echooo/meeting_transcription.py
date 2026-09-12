@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from echooo import database as db
 from echooo.models import STTEventType
+from echooo.meeting_live import TranscriptFeed, join_words, timed_words, label_name, invalidate, remember
 from echooo.service import Problem
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,62 @@ def missing_passages(result, existing, duration_ms, recording_id):
                 current = dict(speaker=speaker, content=text.strip(), start_ms=start, end_ms=end)
                 additions.append(current)
     return additions
+
+
+def reconcile_passages(r, result, existing, rid):
+    """Refine machine fields in place; IDs, human edits and evidence survive.
+
+    Batch labels belong to the complete recording, so this also reconciles
+    labels across streaming reconnects. Ambiguous intervals stay unattributed.
+    Legacy records without provenance retain their text.
+    """
+    sources = {s['utterance_id']: s for s in r.list(db.utterance_sources,
+        db.utterance_sources.c.recording_id == rid)}
+    words = []
+    for passage in result.get('utterances') or []:
+        words.extend({**w, 'speaker': w.get('speaker', passage.get('speaker'))}
+            for w in timed_words(passage.get('words')))
+    if not words:
+        return []
+    # A user's explicit name can anchor a batch speaker, only with clear evidence.
+    votes = defaultdict(lambda: defaultdict(float))
+    for u in existing:
+        source = sources.get(u['id'])
+        if not source or not source['state'].get('speaker_edited') or u['speaker'] == 'Unknown speaker':
+            continue
+        for w in words:
+            overlap = min(u['end_ms'], w['end']) - max(u['start_ms'], w['start'])
+            if overlap > 0 and w.get('speaker') is not None:
+                votes[w['speaker']][u['speaker']] += overlap
+    names = {}
+    for label, counts in votes.items():
+        name, count = max(counts.items(), key=lambda p: p[1])
+        if count >= 500 and count / sum(counts.values()) >= .85:
+            names[label] = name
+    changed = []
+    for u in existing:
+        part = [w for w in words if u['start_ms'] <= (w['start'] + w['end']) / 2 < u['end_ms']]
+        if not part:
+            continue
+        source = sources.get(u['id'])
+        state = source['state'] if source else {}
+        values = {}
+        if source and not state.get('content_edited') and u['content'] == state['content']:
+            values['content'] = join_words(part)[:6000]
+        if (source and not state.get('speaker_edited') and u['speaker'] == state['speaker']) or (not source and u['speaker'] == 'Unknown speaker'):
+            counts = defaultdict(float)
+            for w in part:
+                counts[w.get('speaker')] += w['end'] - w['start']
+            label, count = max(counts.items(), key=lambda p: p[1])
+            values['speaker'] = (names.get(label) or label_name(label, rid)) if count / sum(counts.values()) >= .85 else 'Unknown speaker'
+        if any(u[k] != v for k, v in values.items()):
+            r.change(db.utterances, u['id'], **values)
+            u.update(values)
+            changed.append(dict(u))
+        if source:
+            r.change(db.utterance_sources, source['id'], state={**state, 'words': part,
+                'content': values.get('content', state['content']), 'speaker': values.get('speaker', state['speaker'])})
+    return changed
 
 
 class BatchTranscriber:
@@ -130,6 +187,7 @@ class RecordingTranscriptions:
         self.tasks = {}
         self.provider = BatchTranscriber(settings)
         self.on_complete = None
+        self.feed = TranscriptFeed()
 
     @property
     def available(self):
@@ -226,19 +284,25 @@ class RecordingTranscriptions:
                     if not rec:
                         return
                     existing = r.list(db.utterances, db.utterances.c.recording_id == rid)
+                    changed = reconcile_passages(r, result, existing, rid)
                     additions = missing_passages(result, existing, round(rec['samples'] / rec['sample_rate'] * 1000), rid)
                     for values in additions:
-                        r.add(db.utterances, meeting_id=mid, recording_id=rid, **values)
-                    if additions:
-                        meeting = r.get(db.meetings, mid)
-                        r.change(db.meetings, mid, revision=meeting['revision'] + 1)
-                        for section in r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid):
-                            r.change(db.meeting_sections, section['id'], status='stale')
+                        values['speaker'] = values['speaker'].replace('Recovered speaker ', 'Speaker ', 1)
+                        values['content'] = join_words([{'text': values['content']}])
+                        u = r.add(db.utterances, meeting_id=mid, recording_id=rid, **values)
+                        remember(r, u, batch=True)
+                        changed.append(u)
+                    if changed:
+                        invalidate(r, mid)
                     row = r.list(db.recording_transcriptions, db.recording_transcriptions.c.recording_id == rid)[0]
                     r.change(db.recording_transcriptions, row['id'], state={**row['state'],
                         'phase': 'complete', 'verified_samples': rec['samples'], 'recovered_passages': len(additions),
+                        'corrected_passages': len(changed) - len(additions),
                         'message': '', 'summary_phase': 'building', 'updated_at': time.time()})
                     r.log('meeting.transcript_verified', meeting_id=mid, recording_id=rid, recovered_passages=len(additions))
+            for u in changed:
+                self.feed.publish(who, mid, {'type': 'utterance', 'utterance': u})
+            self.feed.publish(who, mid, {'type': 'resync'})
             with contextlib.suppress(Exception):
                 await self.provider.delete(job_id)
             await self.update_summary(who, mid, rid)
@@ -333,13 +397,23 @@ class LiveTranscription:
                 await asyncio.wait_for(self.provider.connect(**({'agent_context': self.agent_context} if self.agent_context else {})), 10)
                 await self.on_state('live', 'Live transcription reconnected. Saved audio will be checked when recording stops.' if session > 1 else '')
                 offset_ms = round(base_sample * 1000 / self.rate)
+                connected_at = time.monotonic()
+                first_partial = True
 
                 async def receive():
+                    nonlocal first_partial
                     async for event in self.provider.events():
                         if event.type in {STTEventType.ERROR, STTEventType.TERMINATED}:
                             if self.stopping and event.type == STTEventType.TERMINATED:
                                 return
                             raise ConnectionError('Transcription stream ended')
+                        if event.type == STTEventType.FINAL or event.type == STTEventType.PARTIAL and first_partial:
+                            words = timed_words(event.raw.get('words'))
+                            lag = max(0, round(self.samples * 1000 / self.rate) - offset_ms - words[-1]['end']) if words else None
+                            logger.info('STT delivery: session=%s event=%s since_connect_ms=%s audio_behind_ms=%s queued_frames=%s',
+                                session, event.type.value, round((time.monotonic() - connected_at) * 1000), lag, self.queue.qsize())
+                            if event.type == STTEventType.PARTIAL:
+                                first_partial = False
                         await self.on_event(event, offset_ms, session)
                     if not self.stopping:
                         raise ConnectionError('Transcription stream closed')

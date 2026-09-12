@@ -27,6 +27,7 @@ from echooo.contracts import Input
 from echooo.meeting_transcription import LiveTranscription
 from echooo.meeting_agent import MeetingAgent
 from echooo.models import STTEventType
+from echooo.meeting_live import TranscriptWriter
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
 
@@ -173,43 +174,24 @@ class BotRecording:
         with manager.store.scope(self.who) as r:
             self.rec = r.add(db.recordings, meeting_id=self.mid, sample_rate=RATE, samples=0)
         manager.transcriptions.state(self.who, self.mid, self.rec['id'], phase='connecting' if manager.settings.stt_provider != 'mock' else 'unverified', message='')
+        self.writer = TranscriptWriter(manager.store, self.who, self.mid, self.rec['id'], manager.transcriptions.feed)
         self.live = None
         if manager.settings.stt_provider != 'mock':
             stt_settings = replace(manager.settings, assemblyai_sample_rate=RATE)
             self.live = LiveTranscription(lambda: create_stt(stt_settings), RATE, self.consume, self.state,
-                agent_context='The AI meeting participant is named Echooo, pronounced Echo. Participants may address it as Echooo or 艾可. Transcribe its name as Echooo.')
+                agent_context='')
             self.live.start()
 
     async def state(self, phase, message):
         self.manager.transcriptions.state(self.who, self.mid, self.rec['id'], phase=phase, message=message)
+        if phase != 'live':
+            self.writer.clear()
 
     async def consume(self, event, offset_ms, session):
+        rows = self.writer.consume(event, offset_ms, session, round(self.samples * 1000 / RATE))
         agent = self.manager.agents.get(self.row['id'])
-        if agent and event.type != STTEventType.FINAL:
-            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", "partial")}')
-        if event.type != STTEventType.FINAL or not event.transcript:
-            return
-        key = (session, event.raw.get('turn_order'))
-        if key[1] is not None and key in self.seen:
-            return
-        duration = round(self.samples * 1000 / RATE)
-        start, end = max(self.last_end, offset_ms), duration
-        words = event.raw.get('words') or []
-        if words and isinstance(words[0], dict) and isinstance(words[-1], dict):
-            a, b = words[0].get('start'), words[-1].get('end')
-            if isinstance(a, (int, float)) and isinstance(b, (int, float)) and 0 <= a <= b:
-                start, end = min(duration, offset_ms + round(a)), min(duration, offset_ms + round(b))
-        label = event.raw.get('speaker_label')
-        speaker = 'Unknown speaker' if label is None or str(label).upper() in {'PENDING', 'UNKNOWN'} else f'Speaker {str(label)[:20]} · {self.rec["id"][:4]} / {session}'
-        with self.manager.store.scope(self.who) as r:
-            if not r.get(db.recordings, self.rec['id']):
-                return
-            r.add(db.utterances, meeting_id=self.mid, recording_id=self.rec['id'], speaker=speaker,
-                content=event.transcript[:6000], start_ms=start, end_ms=max(start, end))
-        self.seen.add(key)
-        self.last_end = end
-        if agent:
-            await agent.transcript(event, f'{self.rec["id"]}:{session}:{key[1] if key[1] is not None else end}')
+        if agent and (event.type == STTEventType.PARTIAL or event.type == STTEventType.FINAL and rows):
+            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", self.samples)}')
 
     def feed(self, pcm):
         self.samples += len(pcm) // 2
@@ -233,6 +215,7 @@ class BotRecording:
                 self.live.feed(bytes(self.pending), self.samples)
                 self.pending.clear()
             await self.live.finish()
+        self.writer.clear()
         if self.samples and self.manager.transcriptions.available:
             self.manager.transcriptions.start(self.who, self.mid, self.rec['id'])
         else:

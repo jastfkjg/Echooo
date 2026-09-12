@@ -1,5 +1,5 @@
 import { Voice } from './voice.js';
-import {showMeetings, leaveMeeting} from './meetings.js?v=meeting-entry-6';
+import {showMeetings, leaveMeeting} from './meetings.js?v=live-transcript-1';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js';
 import {enhanceSelects} from './select.js';

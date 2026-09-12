@@ -12,13 +12,14 @@ from typing import Literal
 
 import httpx
 from fastapi import Request, WebSocket, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import Field
 
 from echooo import database as db
 from echooo import meeting_minutes as minutes_rules
 from echooo.contracts import Input
 from echooo.models import STTEventType
+from echooo.meeting_live import TranscriptWriter, remember
 from echooo.meeting_transcription import RecordingTranscriptions, LiveTranscription
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
@@ -217,6 +218,45 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                     transcriptions.start(who, mid, rec['id'])
         return result
 
+    @app.get('/api/meetings/{mid}/events')
+    async def live_events(request: Request, mid: str):
+        who = owner(request)
+        with store.scope(who) as r:
+            get(r, mid)
+
+        async def stream():
+            queue = transcriptions.feed.subscribe(who, mid)
+            try:
+                yield 'data: {"type":"resync"}\n\n'
+                draft = transcriptions.feed.drafts.get((who, mid))
+                if draft:
+                    yield 'data: ' + json.dumps(draft, ensure_ascii=False) + '\n\n'
+                while not await request.is_disconnected():
+                    # Recheck revoked credentials and deleted meetings, including idle streams.
+                    try:
+                        owner(request)
+                        with store.scope(who) as r:
+                            get(r, mid)
+                    except (AuthError, Problem):
+                        return
+                    try:
+                        event = await asyncio.wait_for(queue.get(), 15)
+                    except TimeoutError:
+                        yield ': heartbeat\n\n'
+                    else:
+                        try:
+                            owner(request)
+                            with store.scope(who) as r:
+                                get(r, mid)
+                        except (AuthError, Problem):
+                            return
+                        yield 'data: ' + json.dumps(event, ensure_ascii=False) + '\n\n'
+            finally:
+                transcriptions.feed.unsubscribe(who, mid, queue)
+
+        return StreamingResponse(stream(), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no'})
+
     @app.post('/api/meetings/{mid}/recordings/{rid}/transcribe', status_code=202)
     async def repair_recording(request: Request, mid: str, rid: str):
         who = owner(request)
@@ -262,11 +302,20 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 if u["meeting_id"] != mid:
                     raise Problem("Utterance is outside this meeting.", 404)
                 r.change(db.utterances, uid, **data.model_dump())
+                sources = r.list(db.utterance_sources, db.utterance_sources.c.utterance_id == uid)
+                if not sources and u['recording_id']:
+                    remember(r, {**u, **data.model_dump()}, content_edited=True, speaker_edited=True)
+                for source in sources:
+                    state = source['state']
+                    r.change(db.utterance_sources, source['id'], state={**state,
+                        'content_edited': state.get('content_edited', False) or data.content != u['content'],
+                        'speaker_edited': state.get('speaker_edited', False) or data.speaker != u['speaker']})
                 r.change(db.meetings, mid, revision=m["revision"] + 1)
                 # Later sections may have used this utterance as context.
                 for s in r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid):
                     r.change(db.meeting_sections, s["id"], status="stale")
                 r.log("meeting.transcript_corrected", meeting_id=mid, utterance_id=uid)
+        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': {**u, **data.model_dump()}})
         return view(owner(request), mid)
 
     @app.post("/api/meetings/{mid}/minutes")
@@ -531,10 +580,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         live = None
         rec = None
         samples = 0
-        last_end = 0
         rate = settings.assemblyai_sample_rate
         sequence = 0
-        seen_turns = set()
+        writer = None
         send_lock = asyncio.Lock()
 
         async def send(event):
@@ -547,48 +595,29 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 get(r, mid, True)
 
         async def live_state(phase, message):
+            if writer and phase != 'live':
+                writer.clear()
             state = transcriptions.state(who, mid, rec['id'], phase=phase, message=message)
             with contextlib.suppress(Exception):
                 await send({'type': 'transcription', 'recording_id': rec['id'], 'state': state})
 
         async def consume(event, offset_ms, session):
-            nonlocal last_end
             validate()
+            rows = writer.consume(event, offset_ms, session, round(samples * 1000 / rate))
+            # Keep capture sockets compatible; other viewers use the shared feed.
             if event.type == STTEventType.PARTIAL:
-                label = event.raw.get('speaker_label')
-                await send({'type': 'partial', 'text': event.transcript, 'speaker': speaker_label(label, session)})
-            elif event.type == STTEventType.FINAL and event.transcript:
-                turn = event.raw.get('turn_order')
-                key = (session, turn)
-                if turn is not None and key in seen_turns:
-                    return
-                end_ms = round(samples * 1000 / rate)
-                start_ms = max(last_end, offset_ms)
-                words = event.raw.get('words') or []
-                if words and isinstance(words[0], dict) and isinstance(words[-1], dict):
-                    start, finish = words[0].get('start'), words[-1].get('end')
-                    if isinstance(start, (int, float)) and isinstance(finish, (int, float)) and 0 <= start <= finish:
-                        start_ms, end_ms = min(offset_ms + round(start), end_ms), min(offset_ms + round(finish), end_ms)
-                with store.scope(who) as r:
-                    u = r.add(db.utterances, meeting_id=mid, recording_id=rec['id'],
-                        speaker=speaker_label(event.raw.get('speaker_label'), session), content=event.transcript[:6000],
-                        start_ms=start_ms, end_ms=max(start_ms, end_ms))
-                if turn is not None:
-                    seen_turns.add(key)
-                last_end = end_ms
+                draft = transcriptions.feed.drafts.get((who, mid))
+                if draft:
+                    await send(draft)
+            for u in rows:
                 with contextlib.suppress(Exception):
                     await send({'type': 'utterance', 'utterance': u})
-
-        def speaker_label(label, session):
-            if label is None or str(label).upper() in {'PENDING', 'UNKNOWN'}:
-                return 'Unknown speaker'
-            suffix = f' (connection {session})' if session > 1 else ''
-            return f"Speaker {str(label)[:20]}{suffix} · {rec['id'][:4]}"
 
         try:
             await ws.accept()
             with store.scope(who) as r:
                 rec = r.add(db.recordings, meeting_id=mid, sample_rate=rate, samples=0)
+            writer = TranscriptWriter(store, who, mid, rec['id'], transcriptions.feed)
             phase = 'connecting' if settings.stt_provider != 'mock' else 'unverified'
             rec['transcription'] = transcriptions.state(who, mid, rec['id'], phase=phase, message='')
             if settings.stt_provider != 'mock':
@@ -630,6 +659,8 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         finally:
             if live:
                 await live.finish()
+            if writer:
+                writer.clear()
             captures.discard(mid)
             if rec:
                 with contextlib.suppress(Exception):

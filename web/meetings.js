@@ -1,3 +1,4 @@
+import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
 import {MeetingAudio} from './meeting-audio.js?v=tab-audio-1';
 import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent} from './meeting-transcript.js?v=meeting-minutes-6';
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -21,6 +22,9 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   let searchOpen=false,searchQuery='',searchIndex=-1,searchIds=[],playingId=null,followedId=null,searchTimer;
   let playbackRecords=[],activePanel='transcript',unread=0,partialSpeaker='Listening',refreshing=false;
   let minuteSources=[];
+  const liveUpdates=new TranscriptUpdates();
+  let liveDraft=null,feedConnected=false,refreshAgain=false;
+  let eventFeed;
   const panelScroll={transcript:0,summary:0};
   let botBusy=false;
   const botActive=()=>!!meeting.connector?.bot&&!['ended','fatal_error','data_deleted','not_created'].includes(meeting.connector.bot.state);
@@ -85,7 +89,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   }
   function updateHealth(){
     const rec=meeting.recordings.find(r=>r.id===selectedRecording),state=rec?.transcription||{phase:'unverified'};
-    const messages={connecting:'Connecting transcription…',live:'Live transcription',reconnecting:'Transcription reconnecting · audio is saving',verifying:'Checking saved audio · filling transcript gaps',complete:'Saved audio checked',error:'Audio saved · transcript check failed',interrupted:'Audio saved · transcript needs checking',unverified:'Transcript has not been checked against saved audio'};
+    const messages={connecting:'Connecting transcription…',live:'Live transcription',reconnecting:'Transcription reconnecting · audio is saving',verifying:'Checking saved audio · refining transcript',complete:'Saved audio checked',error:'Audio saved · transcript check failed',interrupted:'Audio saved · transcript needs checking',unverified:'Transcript has not been checked against saved audio'};
     $('#transcription-status').textContent=selectedRecording==='notes'?'Text notes':(state.phase==='error'&&state.message?state.message:messages[state.phase])||messages.unverified;
     $('#transcription-status').dataset.phase=state.phase;
     $('#meeting-repair').hidden=selectedRecording==='notes'||!!socket||!!meeting.recording||(state.phase==='complete'&&state.summary_phase!=='error')||state.phase==='verifying'||!meeting.transcription_available;
@@ -115,6 +119,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('#meeting-read-status').textContent=$('#meeting-follow').checked?'Following live':'Reading earlier conversation';
   }
   function showPartial(text,speaker){
+    document.querySelectorAll('.meeting-inline-draft').forEach(node=>node.remove());
     partialSpeaker=speakerName(speaker||'Listening');
     const draft=$('#meeting-draft'),last=$('#meeting-transcript').lastElementChild;
     if(text&&last?.querySelector('.paragraph-speaker')?.textContent===partialSpeaker){
@@ -151,6 +156,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     setHTML($('#meeting-minutes'),minutes?`<p class="minutes-overview">${esc(minutes.content.overview)}</p>${[['decision','Decisions'],['action','Next steps'],['question','Open questions']].map(([kind,label])=>{const items=minutes.content.outcomes.filter(i=>i.kind===kind);return items.length?`<section class="minutes-outcomes"><h3>${label}</h3><ul>${items.map(pointHTML).join('')}</ul></section>`:'';}).join('')}${minutes.content.topics.length?`<section class="minutes-discussion"><h3>Discussion</h3>${minutes.content.topics.map(t=>`<section class="minutes-topic"><h4>${esc(t.title)}</h4><ul>${t.points.map(pointHTML).join('')}</ul></section>`).join('')}</section>`:''}`:`<p class="meeting-placeholder">${records.length?'Update notes to organize this conversation into topics, outcomes and next steps.':'Meeting notes will appear after the conversation starts.'}</p>`);
     updateSearchState(records);
     renderTranscript(records);
+    if(liveDraft?.recording_id===selectedRecording)showPartial(liveDraft.text,liveDraft.speaker);else showPartial('');
     const picker=$('#recording-picker'),multiple=picker.options.length>1,rec=meeting.recordings.find(r=>r.id===selectedRecording);
     $('.meeting-recording-select').hidden=!multiple;$('#single-recording').hidden=multiple;
     $('#single-recording').textContent=rec?`${recordingLabel(rec.id)} · ${meetingTime(rec.samples/rec.sample_rate*1000)}`:'Text notes';
@@ -210,7 +216,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     },'Delete recording'));
     document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{
       const u=meeting.utterances.find(u=>u.id===b.dataset.edit);
-      openDialog('Correct transcript',field('speaker','Speaker',speakerName(u.speaker),'text','required maxlength="80"')+`<div class="form-field"><label for="meeting-correction">Original words</label><textarea id="meeting-correction" name="content" required maxlength="6000">${esc(u.content)}</textarea></div>`,async fd=>{meeting=await api(`${base}/utterances/${u.id}`,'PATCH',{speaker:fd.get('speaker'),content:fd.get('content')});draw();toast('Transcript corrected. Update notes to include the correction.');});
+      openDialog('Correct transcript',field('speaker','Speaker',speakerName(u.speaker),'text','required maxlength="80"')+`<div class="form-field"><label for="meeting-correction">Original words</label><textarea id="meeting-correction" name="content" required maxlength="6000">${esc(u.content)}</textarea></div>`,async fd=>{const since=liveUpdates.version;const next=await api(`${base}/utterances/${u.id}`,'PATCH',{speaker:fd.get('speaker')===speakerName(u.speaker)?u.speaker:fd.get('speaker'),content:fd.get('content')});if(disposed)return;merge(next,since);draw();toast('Transcript corrected. Update notes to include the correction.');});
     });
   }
   function showSource(item){
@@ -325,14 +331,58 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   $('#meeting-player').onerror=()=>{if($('#meeting-player').getAttribute('src'))$('#meeting-playback').textContent='Audio unavailable. Try reselecting the recording.';};
   $('#follow-playback').onchange=()=>{if($('#follow-playback').checked){$('#meeting-follow').checked=false;followedId=null;syncPlayback();}};
   $('#meeting-follow').onchange=()=>{if($('#meeting-follow').checked)$('#follow-playback').checked=false;liveChanged();};
-  function merge(next){
+  function merge(next,since=liveUpdates.version){
     const previous=meeting.recordings.at(-1)?.id||'notes',latest=next.recordings.at(-1)?.id;
     if(botActive()&&latest&&latest!==previous&&selectedRecording===previous&&$('#meeting-follow').checked)selectedRecording=latest;
     const known=new Set(next.utterances.map(u=>u.id));const extra=socket?meeting.utterances.filter(u=>!known.has(u.id)&&u.recording_id===captureRecording):[];
-    meeting={...next,utterances:[...next.utterances,...extra]};
+    meeting={...next,utterances:liveUpdates.merge([...next.utterances,...extra],since)};
     if(botActive())captureRecording=latest;
   }
-  async function refresh(){if(refreshing)return;refreshing=true;try{const next=await api(base);if(!disposed){const count=meeting.utterances.length,previous=selectedRecording,remoteStopped=!!meeting.connector?.bot&&meeting.recording&&!next.recording;merge(next);draw();if(previous!==selectedRecording||remoteStopped)loadSelectedAudio();if(meeting.utterances.length>count)liveChanged();}}finally{refreshing=false;}}
+  async function refresh(){
+    if(refreshing){refreshAgain=true;return;}
+    refreshing=true;const since=liveUpdates.version;
+    try{
+      const next=await api(base);
+      if(!disposed){
+        const count=meeting.utterances.length,previous=selectedRecording;
+        const remoteStopped=!!meeting.connector?.bot&&meeting.recording&&!next.recording;
+        merge(next,since);draw();
+        if(previous!==selectedRecording||remoteStopped)loadSelectedAudio();
+        if(meeting.utterances.length>count)liveChanged();
+      }
+    }finally{
+      refreshing=false;
+      if(refreshAgain&&!disposed){refreshAgain=false;refresh().catch(()=>{});}
+    }
+  }
+  function receiveLive(p){
+    if(disposed)return;
+    if(p.type==='resync'){liveDraft=null;showPartial('');refresh().catch(()=>{});return;}
+    if(p.type==='partial'){
+      liveDraft=p.text?p:null;
+      if(!meeting.recordings.some(r=>r.id===p.recording_id))refresh().catch(()=>{});
+      if(selectedRecording===p.recording_id){showPartial(p.text,p.speaker);if(p.text)liveChanged();}
+    }
+    if(p.type==='utterance'){
+      const u=p.utterance,index=meeting.utterances.findIndex(old=>old.id===u.id);
+      const previous=index<0?null:meeting.utterances[index];
+      liveUpdates.receive(u);
+      if(index<0)meeting.utterances.push(u);else meeting.utterances[index]=u;
+      if(!meeting.recordings.some(r=>r.id===u.recording_id))refresh().catch(()=>{});
+      if(selectedRecording===u.recording_id){
+        playbackRecords=recordingContent(meeting,selectedRecording).records;
+        updateSearchState(playbackRecords);renderTranscript(playbackRecords);bindContent();
+        if(liveDraft?.recording_id===selectedRecording)showPartial(liveDraft.text,liveDraft.speaker);
+        if(!previous)liveChanged();
+      }
+    }
+  }
+  if(typeof EventSource!=='undefined'){
+    eventFeed=new EventSource(`/api${base}/events`);
+    eventFeed.onopen=()=>{feedConnected=true;};
+    eventFeed.onerror=()=>{feedConnected=false;};
+    eventFeed.onmessage=event=>{try{receiveLive(JSON.parse(event.data));}catch(error){console.warn('Live transcript update failed',error);}};
+  }
   function requestAnalysis(force=false,rid=selectedRecording){
     if(disposed)return Promise.resolve();if(analysisTask)return analysisTask;
     analysisTask=Promise.resolve().then(()=>runAnalysis(force,rid)).finally(()=>{analysisTask=null;if(!disposed)draw();});draw();return analysisTask;
@@ -344,7 +394,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     progress();const timer=setInterval(progress,1000);
     try{
       while(!disposed&&remaining){
-        const next=await api(`${base}/minutes${scope(rid)}${force?'&force=true':''}`,'POST');if(disposed)return;force=false;merge(next);draw();
+        const since=liveUpdates.version;const next=await api(`${base}/minutes${scope(rid)}${force?'&force=true':''}`,'POST');if(disposed)return;force=false;merge(next,since);draw();
         const nextRemaining=next.summary_remaining;
         if(nextRemaining>=remaining)throw new Error('No new notes returned. Please retry.');remaining=nextRemaining;
       }
@@ -380,10 +430,10 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
           }catch(e){warning(e.message);stop();}
         }
         if(p.type==='saved'){const rec=meeting.recordings.find(r=>r.id===captureRecording);if(rec)rec.samples=p.samples;status(`Recording · ${includeTab?'tab + microphone':'microphone'} · ${meetingTime(p.samples/recordingRate*1000)} saved`);}
-        if(p.type==='partial'&&selectedRecording===captureRecording){showPartial(p.text,p.speaker);liveChanged();}
-        if(p.type==='utterance'){if(!meeting.utterances.some(u=>u.id===p.utterance.id))meeting.utterances.push(p.utterance);if(selectedRecording===captureRecording){showPartial('');playbackRecords=recordingContent(meeting,selectedRecording).records;updateSearchState(playbackRecords);renderTranscript(playbackRecords);bindContent();liveChanged();}}
+        if(p.type==='partial'&&!feedConnected)receiveLive({...p,recording_id:captureRecording});
+        if(p.type==='utterance'&&!feedConnected){receiveLive({type:'partial',text:'',recording_id:captureRecording});receiveLive(p);}
       };
-      socket.onclose=()=>{const rid=captureRecording;release();socket=null;stopping=false;meeting.recording=false;captureRecording=null;if(!disposed){showPartial('');$('#meeting-latest').hidden=true;$('#meeting-read-status').textContent='';status('Audio saved');$('#meeting-record').textContent='New recording';refresh().then(()=>{if(!disposed){loadSelectedAudio();if(!meeting.transcription_available)return updateRecording(rid);}}).catch(e=>toast(e.message));}};
+      socket.onclose=()=>{const rid=captureRecording;liveDraft=null;release();socket=null;stopping=false;meeting.recording=false;captureRecording=null;if(!disposed){showPartial('');$('#meeting-latest').hidden=true;$('#meeting-read-status').textContent='';status('Audio saved');$('#meeting-record').textContent='New recording';refresh().then(()=>{if(!disposed){loadSelectedAudio();if(!meeting.transcription_available)return updateRecording(rid);}}).catch(e=>toast(e.message));}};
       socket.onerror=()=>warning('Connection failed. Check your connection and retry.');
     }catch(e){release();warning(e.message);status('Recording not started');}
     finally{starting=false;if(!disposed)draw();}
@@ -411,9 +461,9 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   $('#bot-chat-enabled').onchange=updateAgent;$('#bot-voice-enabled').onchange=updateAgent;
   $('#meeting-end').onclick=async()=>{try{await requestAnalysis();meeting=await api(`${base}/end`,'POST');status('Meeting ended');draw();}catch(e){toast(e.message);}};
   const timer=setInterval(()=>{if(socket&&!stopping&&!analysisTask&&captureRecording)updateRecording(captureRecording);},60000);
-  const remoteTimer=setInterval(()=>{if(!disposed&&!analysisTask&&(!socket||meeting.recordings.some(r=>r.transcription?.phase==='verifying')))refresh().catch(()=>{});},3000);
+  const remoteTimer=setInterval(()=>{if(!disposed&&(!socket||meeting.recordings.some(r=>r.transcription?.phase==='verifying')))refresh().catch(()=>{});},3000);
   const unload=e=>{if(socket){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
-  current={dispose(){disposed=true;clearInterval(timer);clearInterval(remoteTimer);clearTimeout(searchTimer);resizeObserver.disconnect();window.removeEventListener('resize',updateDockSpace);window.removeEventListener('wheel',onReadIntent);window.removeEventListener('touchmove',onReadIntent);window.removeEventListener('keydown',onReadIntent);activity.close();workspace.removeEventListener('focusin',onFocus);window.removeEventListener('beforeunload',unload);release();flush();$('#meeting-player')?.pause();$('#meeting-source-dialog')?.close();dock.remove();document.documentElement.classList.remove('meeting-open');document.documentElement.style.removeProperty('--meeting-dock-height');document.documentElement.style.removeProperty('--meeting-nav-height');if(socket?.readyState===WebSocket.OPEN)socket.send('stop');else socket?.close();}};
+  current={dispose(){disposed=true;eventFeed?.close();clearInterval(timer);clearInterval(remoteTimer);clearTimeout(searchTimer);resizeObserver.disconnect();window.removeEventListener('resize',updateDockSpace);window.removeEventListener('wheel',onReadIntent);window.removeEventListener('touchmove',onReadIntent);window.removeEventListener('keydown',onReadIntent);activity.close();workspace.removeEventListener('focusin',onFocus);window.removeEventListener('beforeunload',unload);release();flush();$('#meeting-player')?.pause();$('#meeting-source-dialog')?.close();dock.remove();document.documentElement.classList.remove('meeting-open');document.documentElement.style.removeProperty('--meeting-dock-height');document.documentElement.style.removeProperty('--meeting-nav-height');if(socket?.readyState===WebSocket.OPEN)socket.send('stop');else socket?.close();}};
   status(meeting.status==='ended'?'Meeting ended':meeting.recording?'Recording on another page':meeting.recordings.length?'Audio saved':'Ready to record');draw();loadSelectedAudio();
 }
 

@@ -124,6 +124,10 @@ class Settings:
     assemblyai_max_turn_silence: int | None = field(
         default_factory=lambda: _optional_int("ASSEMBLYAI_MAX_TURN_SILENCE")
     )
+    assemblyai_language_codes: tuple[str, ...] = field(default_factory=lambda: _csv("ASSEMBLYAI_LANGUAGE_CODES"))
+    assemblyai_keyterms: tuple[str, ...] = field(default_factory=lambda: _csv("ASSEMBLYAI_KEYTERMS") or ("Echooo",))
+    assemblyai_prompt: str = field(default_factory=lambda: os.getenv("ASSEMBLYAI_PROMPT", ""))
+    assemblyai_interruption_delay: int = field(default_factory=lambda: _int("ASSEMBLYAI_INTERRUPTION_DELAY", 0))
 
     llm_base_url: str = field(
         default_factory=lambda: os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
@@ -181,6 +185,10 @@ class Settings:
                 raise ValueError(f"Unsupported {label} provider: {value}")
         if self.assemblyai_sample_rate != 16000:
             raise ValueError("This browser capture release requires ASSEMBLYAI_SAMPLE_RATE=16000")
+        if not 0 <= self.assemblyai_interruption_delay <= 1000:
+            raise ValueError("ASSEMBLYAI_INTERRUPTION_DELAY must be between 0 and 1000 ms")
+        if len(self.assemblyai_keyterms) > 100 or len(self.assemblyai_prompt) > 1750:
+            raise ValueError("AssemblyAI supports at most 100 keyterms and a 1750-character prompt")
         if self.stt_provider == "assemblyai" and not self.assemblyai_api_key:
             raise ValueError("ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai")
         if self.tts_provider == "dashscope":

@@ -10,6 +10,7 @@ class STTEventType(StrEnum):
     SPEECH_STARTED = "speech_started"
     PARTIAL = "partial"
     FINAL = "final"
+    SPEAKER_REVISION = "speaker_revision"
     TERMINATED = "terminated"
     ERROR = "error"
 
