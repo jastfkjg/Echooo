@@ -1,4 +1,4 @@
-"""Self-hosted Attendee transport. No knowledge grants or autonomous speech.
+"""Self-hosted Attendee transport and explicitly addressed meeting assistance.
 
 Creation is durable before network I/O; uncertain requests are reconciled by the
 provider deduplication key, never retried by creating another participant.
@@ -14,7 +14,8 @@ import re
 import secrets
 import time
 from dataclasses import replace
-from urllib.parse import urlsplit
+from datetime import datetime, timezone
+from urllib.parse import urlsplit, parse_qs
 
 import httpx
 from fastapi import Request, WebSocket, WebSocketDisconnect
@@ -24,6 +25,7 @@ from sqlalchemy import select
 from echooo import database as db
 from echooo.contracts import Input
 from echooo.meeting_transcription import LiveTranscription
+from echooo.meeting_agent import MeetingAgent
 from echooo.models import STTEventType
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
@@ -84,6 +86,11 @@ class JoinMeeting(Input):
         return value if re.search(r'\bAI\b', value, re.I) else value + ' · AI'
 
 
+class AgentSettings(Input):
+    chat_enabled: bool
+    voice_enabled: bool
+
+
 class AttendeeClient:
     def __init__(self, settings):
         self.settings = settings
@@ -109,6 +116,32 @@ class AttendeeClient:
 
     async def leave(self, provider_id):
         return await self.request('POST', 'bots/' + provider_id + '/leave')
+
+    async def chat_messages(self, provider_id, after):
+        params = {'updated_after': datetime.fromtimestamp(after, timezone.utc).isoformat()}
+        messages, seen = [], set()
+        for _ in range(40):
+            page = await self.request('GET', 'bots/' + provider_id + '/chat_messages', params=params)
+            if isinstance(page, list):
+                return messages + page
+            messages.extend(page['results'])
+            if not page.get('next'):
+                return messages
+            # Never follow a provider-supplied URL with the connector bearer token.
+            cursor = parse_qs(urlsplit(page['next']).query).get('cursor', [''])[0]
+            if not cursor or cursor in seen:
+                raise ValueError('Invalid chat pagination')
+            seen.add(cursor)
+            params['cursor'] = cursor
+        raise ValueError('Too many chat pages')
+
+    async def send_chat(self, provider_id, text, recipient=None):
+        # The provider rejects non-BMP characters. Recipient selection is application policy.
+        text = ''.join(c for c in text if ord(c) <= 0xffff)
+        payload = {'message': text, 'to': 'specific_user' if recipient else 'everyone'}
+        if recipient:
+            payload['to_user_uuid'] = recipient
+        return await self.request('POST', 'bots/' + provider_id + '/send_chat_message', json=payload)
 
 
 def rejection_message(response):
@@ -143,13 +176,17 @@ class BotRecording:
         self.live = None
         if manager.settings.stt_provider != 'mock':
             stt_settings = replace(manager.settings, assemblyai_sample_rate=RATE)
-            self.live = LiveTranscription(lambda: create_stt(stt_settings), RATE, self.consume, self.state)
+            self.live = LiveTranscription(lambda: create_stt(stt_settings), RATE, self.consume, self.state,
+                agent_context='The AI meeting participant is named Echooo, pronounced Echo. Participants may address it as Echooo or 艾可. Transcribe its name as Echooo.')
             self.live.start()
 
     async def state(self, phase, message):
         self.manager.transcriptions.state(self.who, self.mid, self.rec['id'], phase=phase, message=message)
 
     async def consume(self, event, offset_ms, session):
+        agent = self.manager.agents.get(self.row['id'])
+        if agent and event.type != STTEventType.FINAL:
+            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", "partial")}')
         if event.type != STTEventType.FINAL or not event.transcript:
             return
         key = (session, event.raw.get('turn_order'))
@@ -171,6 +208,8 @@ class BotRecording:
                 content=event.transcript[:6000], start_ms=start, end_ms=max(start, end))
         self.seen.add(key)
         self.last_end = end
+        if agent:
+            await agent.transcript(event, f'{self.rec["id"]}:{session}:{key[1] if key[1] is not None else end}')
 
     def feed(self, pcm):
         self.samples += len(pcm) // 2
@@ -207,6 +246,7 @@ class MeetingBots:
         self.lock = asyncio.Lock()
         self.sockets = {}
         self.last_audio = {}
+        self.agents = {}
         self.task = None
         self.closed = False
 
@@ -241,7 +281,14 @@ class MeetingBots:
         return {'configured': self.configured, 'bot': None if not row else {
             key: row[key] for key in ('id', 'meeting_url', 'platform', 'bot_name', 'state', 'desired_state', 'error', 'updated_at', 'deadline')
         }, 'audio_connected': bool(row and row['id'] in self.sockets),
-            'last_audio_at': self.last_audio.get(row['id']) if row else None}
+            'last_audio_at': self.last_audio.get(row['id']) if row else None,
+            'agent': (self.agents[row['id']].view() if row['id'] in self.agents else MeetingAgent.saved_view(self, row)) if row else None}
+
+    def ensure_agent(self, row):
+        if row['id'] not in self.agents and row['state'] == 'joined_recording' and row['desired_state'] == 'joined':
+            agent = self.agents[row['id']] = MeetingAgent(self, row)
+            agent.start()
+        return self.agents.get(row['id'])
 
     def start(self):
         self.closed = False
@@ -269,7 +316,7 @@ class MeetingBots:
                     deadline=time.time() + self.settings.attendee_max_seconds, updated_at=time.time())
             payload = {'meeting_url': data.meeting_url, 'bot_name': data.bot_name,
                 'deduplication_key': row['id'], 'metadata': {'echooo_connection': row['id']},
-                'recording_settings': {'format': 'none'},
+                'recording_settings': {'format': 'none', 'record_participant_speech_start_stop_events': True},
                 'transcription_settings': {'meeting_closed_captions': {}},
                 'websocket_settings': {'audio': {'url': self.settings.attendee_callback_url.rstrip('/') + '/ws/meeting-bots/' + row['id'] + '?token=' + token, 'sample_rate': RATE}},
                 'automatic_leave_settings': {'max_uptime_seconds': self.settings.attendee_max_seconds,
@@ -321,6 +368,9 @@ class MeetingBots:
             return self.view(who, mid)
 
     async def disconnect(self, row_id):
+        agent = self.agents.pop(row_id, None)
+        if agent:
+            await agent.close()
         ws = self.sockets.get(row_id)
         if ws:
             with contextlib.suppress(Exception):
@@ -337,6 +387,10 @@ class MeetingBots:
             if row['state'] in TERMINAL:
                 await self.disconnect(row['id'])
                 return
+            if row['state'] != 'joined_recording' and row['id'] in self.agents:
+                await self.agents[row['id']].stop(all_replies=True)
+            if row['desired_state'] == 'joined' and time.time() < row['deadline']:
+                self.ensure_agent(row)
             if row['desired_state'] == 'left' or time.time() >= row['deadline']:
                 self.update(row, desired_state='left')
                 await self.disconnect(row['id'])
@@ -401,6 +455,16 @@ class MeetingBots:
                 if len(text) > 100000:
                     raise ValueError('Oversize frame')
                 data = json.loads(text)
+                if data.get('trigger') in {'echooo.audio_status', 'echooo.speaker'}:
+                    if data.get('bot_id') != row['provider_id'] or not isinstance(data.get('data'), dict):
+                        raise ValueError('Wrong stream identity')
+                    agent = self.ensure_agent(row)
+                    if agent:
+                        if data['trigger'] == 'echooo.audio_status':
+                            agent.playback.receive(data['data'])
+                        else:
+                            agent.speaker_event(data['data'])
+                    continue
                 if data.get('trigger') != 'realtime_audio.mixed' or data.get('bot_id') != row['provider_id']:
                     raise ValueError('Wrong stream identity')
                 audio = data['data']
@@ -413,6 +477,7 @@ class MeetingBots:
                     await sink.finish()
                     sink = None
                 if sink is None:
+                    self.ensure_agent(row)
                     sink = BotRecording(self, row)
                 sink.feed(pcm)
                 self.last_audio[row_id] = time.time()
@@ -420,6 +485,8 @@ class MeetingBots:
             logger.warning('Meeting bot media disconnected: connection=%s', row_id)
         finally:
             try:
+                if row_id in self.agents:
+                    await self.agents[row_id].stop()
                 if sink:
                     await sink.finish()
             finally:
@@ -451,6 +518,28 @@ def install_meeting_bots(app, store, settings, transcriptions, captures, owner):
     @app.post('/api/meetings/{mid}/bot/leave', status_code=202)
     async def leave(request: Request, mid: str):
         return await manager.leave(owner(request), mid)
+
+    def owned_agent(request, mid):
+        who = owner(request)
+        with store.scope(who) as r:
+            need(r.get(db.meetings, mid), 'Meeting')
+        row = manager.row(who, mid)
+        agent = manager.agents.get(row['id']) if row else None
+        if not agent:
+            raise Problem('Wait until Echooo has joined the meeting.', 409)
+        return who, agent
+
+    @app.patch('/api/meetings/{mid}/bot/agent')
+    async def agent_settings(request: Request, mid: str, data: AgentSettings):
+        who, agent = owned_agent(request, mid)
+        await agent.configure(data.chat_enabled, data.voice_enabled)
+        return manager.view(who, mid)
+
+    @app.post('/api/meetings/{mid}/bot/stop')
+    async def stop_speaking(request: Request, mid: str):
+        who, agent = owned_agent(request, mid)
+        await agent.stop()
+        return manager.view(who, mid)
 
     @app.websocket('/ws/meeting-bots/{row_id}')
     async def media(ws: WebSocket, row_id: str):

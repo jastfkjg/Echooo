@@ -2,7 +2,21 @@
 
 Echooo can invite **Echooo AI** into an online meeting as a visible, independent participant. The browser sends a join request to Echooo; a self-hosted Attendee worker joins the meeting, and sends live audio back to Echooo over an authenticated TLS WebSocket. Closing the Echooo page does not remove the participant.
 
-This version records silently. It does not speak, represent a person, read personal memory, or make commitments. Speech and turn-taking policies are a separate product step.
+Echooo now answers meeting chat and speaks when explicitly addressed. It is an independent meeting assistant: it uses this meeting's discussion, has no access to personal memory, and cannot make commitments or execute external tools.
+
+## Chat and voice
+
+- **Zoom private chat:** send Echooo a message; the reply is addressed to that sender only. Private messages never enter the shared transcript, notes, or public/voice response context.
+- **Public chat:** address `Echooo` (for example `@Echooo 总结一下`). Ordinary discussion is observed without an unsolicited reply.
+- **Voice:** start with `Echooo, …` (pronounced Echo; `艾可` also works). Replies use server TTS and the bot's virtual microphone. Browser speech synthesis cannot speak into a remote meeting.
+- **Continuous follow-ups:** after speech finishes playing, a 15-second attention window allows follow-ups without repeating Echooo. A fast LLM call decides `respond`, `listen`, or `end` using public meeting context and prior public/voice questions. It handles requests, corrections and answers without keyword gates. Zoom activity and STT speaker labels are imperfect hints, never authorization credentials; unknown identity alone does not reject a continuation. Clear human discussion/closure can end the window. Explicit Stop and expiry also end it. Classification runs independently of transcription; newer speech and Stop invalidate stale results. Model errors stay silent and suggest addressing Echooo explicitly. Private chat never enters this classifier.
+- **Interrupt:** explicit `停止`, `等一下`, or `stop` cancels promptly. Noise-only activity and short acknowledgements such as `嗯`, `对`, `okay` are ignored. Other interim speech pauses playback first: a single fragment resumes after about 550 ms; sustained developing speech or a substantive finalized turn yields the floor. A canceled answer never resumes automatically. Detection depends on live transcription; noisy/overlapping speech may delay it.
+- **Controls:** disable chat or spoken replies independently. The participant keeps recording. **Assistant activity** shows questions, replies and failures to the workspace owner; private exchanges are labelled. “Submitted to meeting chat” means Attendee accepted the request, not an SDK delivery receipt.
+- **Context:** public replies use only this meeting's public discussion; private replies can additionally use the same sender's private thread. No personal domains, other meetings, web search, or action tools are provided.
+
+Zoom is the first live-tested interactive platform. The pinned Google Meet and Teams adapters post to the shared meeting chat and do not support targeted private delivery; Echooo refuses to answer a private event on those adapters. Their public chat and audio paths share the implementation but still need live platform validation.
+
+The worker uses a small reproducible overlay from `deploy/attendee/overlay.py`, applied to copies under `.local/attendee-overlay`. It preserves Zoom recipient/self metadata, forwards active-speaker hints, and installs continuous audio playback with interruption support. The pinned upstream checkout remains unmodified. Setup fails if patch anchors change. After updating an existing installation, run `python3 scripts/attendee.py up` and restart Echooo; bots already in a meeting must leave and rejoin to load the new browser adapter.
 
 ## Start locally
 
@@ -84,7 +98,7 @@ For external meetings while keeping Echooo visible as an independent participant
 
 ## Cost and deployment boundary
 
-Self-hosting removes the Recall/Attendee cloud per-minute fee. Docker compute, network and storage remain your responsibility; **the configured AssemblyAI and LLM providers can still charge for transcription and notes**. This change does not introduce a free local speech model.
+Self-hosting removes the Recall/Attendee cloud per-minute fee. Docker compute, network and storage remain your responsibility; **the configured AssemblyAI, LLM and TTS providers can still charge for transcription, replies, speech and notes**. This change does not introduce a free local speech model.
 
 Attendee uses the [Elastic License 2.0](https://github.com/attendee-labs/attendee/blob/60e885df6f9ed0f38ef141438caac9978a38a6cc/LICENSE). It is source-available software with license conditions, not an unrestricted MIT component.
 
@@ -98,6 +112,8 @@ The supplied Compose stack is **for a local workstation**: its Django developmen
 | Waiting for the host | Admit Echooo AI and check the meeting's guest-access policy. |
 | Zoom request rejected | Configure Zoom App credentials in the Attendee project and check Zoom authorization requirements. |
 | In the meeting, no audio | Check host permission, the participant microphone, gateway port and worker-to-Echooo connectivity. |
+| Chat does not reply | Open Assistant activity. Confirm Chat replies is enabled, address Echooo in public chat, and update the worker/rejoin if Zoom recipient metadata is missing. |
+| No spoken reply | Enable Answer when called, use server TTS, say “Echooo” at the beginning, and check live transcription plus meeting microphone permissions. |
 | Audio saves but transcription reconnects | Inspect Echooo provider configuration/network. Saved audio is retained for verification. |
 | Departure remains unconfirmed | Keep services running so retries can complete, or remove Echooo AI using the meeting host controls and inspect the Attendee dashboard. |
 
@@ -107,4 +123,57 @@ Do not share `.local/attendee.env`, the private TLS key, or raw upstream logs th
 
 On 2026-09-12, the pinned deployment was built and run on Apple Silicon. A user-provided Google Meet was joined twice as **Echooo AI**. The first run verified admission, audio persistence and confirmed departure. The second verified non-silent audio, 19 live transcript passages with valid recording-relative timestamps, and continued capture after navigating away from the Echooo page and returning. Saved-audio verification completed with 26 passages and generated meeting notes. Both participants were confirmed departed. The small browser audio frames discovered in this test are now coalesced before transcription.
 
-The automated suite passed 152 Python tests (one optional PostgreSQL test skipped) and 58 JavaScript tests. Connector tests cover owner isolation, URL validation, duplicate prevention, ambiguous create recovery, departure failure, callback authentication, stream identity, audio preservation, frame coalescing, independent sample rates and duration expiry. Desktop and mobile browser controls were exercised with no browser console errors. Local diagnostic storage was checked for write/read, login, signed-URL integrity and organization isolation. After restarting the services, TLS callback authentication and actual Uvicorn token redaction were verified. Zoom and Teams request schemas were checked against the running Attendee serializer; **live Zoom/Teams meetings have not yet been tested**.
+The automated suite passed 152 Python tests (one optional PostgreSQL test skipped) and 58 JavaScript tests. Connector tests cover owner isolation, URL validation, duplicate prevention, ambiguous create recovery, departure failure, callback authentication, stream identity, audio preservation, frame coalescing, independent sample rates and duration expiry. Desktop and mobile browser controls were exercised with no browser console errors. Local diagnostic storage was checked for write/read, login, signed-URL integrity and organization isolation. After restarting the services, TLS callback authentication and actual Uvicorn token redaction were verified. Zoom and Teams request schemas were checked against the running Attendee serializer; **this was the initial recording-only verification; the interactive Zoom verification below supersedes that limitation for Zoom**.
+
+
+### Interactive Zoom verification (2026-09-12)
+
+A user-provided Zoom meeting was joined with the patched web adapter. Actual private
+messages were persisted as `only_bot` with verified recipient metadata, and replies
+were submitted to the sender's participant ID. The user confirmed receiving the
+private replies, hearing spoken responses after saying “Echo”, and receiving a public
+reply after addressing `@Echooo AI` in the all-participants chat. Live activity
+recorded both completed speech and interrupted replies. A request for current weather
+was answered with the limitation that no external search tool is connected.
+
+The deployed Python playback queue and browser audio-source cancellation were also
+exercised independently: queued audio was cleared, scheduled sources stopped, and
+subsequent playback could start again. Desktop and 390-pixel mobile layouts were
+checked. The expanded suite passes 186 Python tests (one optional PostgreSQL test
+skipped) and 61 JavaScript tests. Public-chat routing, private-context isolation,
+durable deduplication, ambiguous-send handling, disabled replies, ownership checks,
+PCM framing, interruption and restart are covered by automated tests. The restarted
+deployment also passed voice-toggle and stop API checks. Google Meet/Teams interaction
+still needs user-visible live verification.
+
+
+### Continuous playback and turn-taking
+
+Echooo now sends versioned `echooo.audio` commands over the authenticated media socket.
+The worker forwards original-rate PCM to an AudioWorklet, without the old Python
+resampling/sleep loop or per-chunk microphone clicks. A 200 ms prebuffer and bounded
+remote queue absorb arrival jitter; the worklet interpolates continuously across packet
+boundaries. Output connects only to the virtual microphone, not local speakers.
+Playback acknowledgements report buffer occupancy, consumed samples and underruns;
+Echooo waits for actual drain before marking speech complete and opening the follow-up
+window. Pause retains queued audio, resume continues it, and stop clears it.
+
+The continuity tests send an uninterrupted sine wave across irregular packet boundaries,
+exercise underrun recovery, pause/resume and exact short-tail drain. Turn-taking tests
+cover model-directed follow-ups, speaker hints, unknown identity, overlap, expiry,
+explicit exit, delayed/failed decisions, noise, acknowledgements and staged interruption. The full suite passes
+204 Python tests (one optional PostgreSQL test skipped) and 65 JavaScript tests.
+
+In the September 12 Zoom retest, the user confirmed the periodic clicking was gone.
+Remote playback reported zero underruns for the completed replies. Follow-ups reached
+the agent without a wake name, but the original keyword gate missed some requests; it
+was replaced with the model decision above. A ten-case live model check accepted all
+six intended replies and stayed silent on all four acknowledgements/human remarks.
+Two closure cases returned `listen` rather than `end`, so those still rely on the
+attention timeout. This small check is not a general accuracy guarantee.
+
+The subsequent Google Meet retest completed the opening voice reply plus the unnamed
+follow-ups “用英文说一下” and “后续回答都用英文”. Both were accepted by the model
+(`respond`) and acknowledged as fully played, with zero reported underruns. The user
+reported the test was working. Desktop (1280 px) and mobile (390 px) status text and
+layout were checked; Google Meet private-chat replies remain unsupported.

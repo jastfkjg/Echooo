@@ -16,6 +16,11 @@ x-app: &app
     - ./worker.sh:/echooo-worker.sh:ro
     - ./local_debug.py:/attendee/attendee/echooo_debug.py:ro
     - ./urls.py:/attendee/attendee/echooo_urls.py:ro
+    - ./audio_bridge.py:/attendee/attendee/echooo_audio.py:ro
+    - ../../.local/attendee-overlay/bots/zoom_web_bot_adapter/zoom_web_chromedriver_page.js:/attendee/bots/zoom_web_bot_adapter/zoom_web_chromedriver_page.js:ro
+    - ../../.local/attendee-overlay/bots/web_bot_adapter/shared_chromedriver_payload.js:/attendee/bots/web_bot_adapter/shared_chromedriver_payload.js:ro
+    - ../../.local/attendee-overlay/bots/bot_controller/bot_controller.py:/attendee/bots/bot_controller/bot_controller.py:ro
+    - ../../.local/attendee-overlay/bots/bot_controller/realtime_audio_output_manager.py:/attendee/bots/bot_controller/realtime_audio_output_manager.py:ro
     - debug:/attendee/local-debug
     - ../../.local/attendee-tls/server.crt:/echooo-ca.crt:ro
   depends_on:

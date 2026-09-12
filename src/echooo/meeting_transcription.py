@@ -289,7 +289,7 @@ class RecordingTranscriptions:
 
 class LiveTranscription:
     """Bounded transport independent of audio persistence; gaps are repaired later."""
-    def __init__(self, factory, rate, on_event, on_state):
+    def __init__(self, factory, rate, on_event, on_state, *, agent_context=''):
         self.factory, self.rate = factory, rate
         self.on_event, self.on_state = on_event, on_state
         self.queue = asyncio.Queue(maxsize=150)  # 15 seconds at the normal 100 ms frame size.
@@ -297,6 +297,7 @@ class LiveTranscription:
         self.stopping = False
         self.task = None
         self.provider = None
+        self.agent_context = agent_context
         self.session = 0
 
     def feed(self, pcm, samples):
@@ -329,7 +330,7 @@ class LiveTranscription:
                 self.provider = self.factory()
                 if hasattr(self.provider, 'speaker_labels'):
                     self.provider.speaker_labels = True
-                await asyncio.wait_for(self.provider.connect(), 10)
+                await asyncio.wait_for(self.provider.connect(**({'agent_context': self.agent_context} if self.agent_context else {})), 10)
                 await self.on_state('live', 'Live transcription reconnected. Saved audio will be checked when recording stops.' if session > 1 else '')
                 offset_ms = round(base_sample * 1000 / self.rate)
 

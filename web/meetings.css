@@ -41,3 +41,5 @@
 .meeting-bot .actions{flex-shrink:0}
 .meeting-bot .meeting-warning{padding:0}
 @media(max-width:700px){.meeting-bot{align-items:flex-start;flex-direction:column}.meeting-bot .actions{width:100%}.meeting-bot .btn{min-height:44px}}
+
+.meeting-agent-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 20px;margin-top:12px}.meeting-agent-controls label{display:flex;align-items:center;gap:8px;min-height:44px;font-size:14px}.meeting-agent-controls input{width:18px;height:18px;margin:0}.meeting-agent-history{margin-top:12px;max-width:760px}.meeting-agent-history summary{cursor:pointer;min-height:44px;display:list-item;padding:12px 0}.meeting-agent-history ol{padding:0;list-style:none;max-height:300px;overflow:auto}.meeting-agent-history li{border-top:1px solid var(--line);padding:12px 0;overflow-wrap:anywhere}.meeting-agent-history p{white-space:pre-wrap}.meeting-agent-answer{padding-left:12px;border-left:2px solid var(--line)}

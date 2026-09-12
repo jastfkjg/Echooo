@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import (
-    JSON, LargeBinary, Column, Float, ForeignKey, Integer, MetaData, String, Table, Text,
+    JSON, Boolean, LargeBinary, Column, Float, ForeignKey, Integer, MetaData, String, Table, Text,
     UniqueConstraint, create_engine, delete, event, insert, select, text, update,
 )
 from sqlalchemy.pool import StaticPool
@@ -156,8 +156,22 @@ meeting_bots = owned_table("meeting_bots", meeting_ref(),
     Column("updated_at", Float, nullable=False), Column("deadline", Float, nullable=False),
     constraints=(UniqueConstraint("meeting_id"),))
 
+meeting_agent_settings = owned_table("meeting_agent_settings", meeting_ref(),
+    Column("connection_id", String, ForeignKey("meeting_bots.id", ondelete="CASCADE"), nullable=False),
+    Column("chat_enabled", Boolean, nullable=False), Column("voice_enabled", Boolean, nullable=False),
+    constraints=(UniqueConstraint("connection_id"),))
+
+# Private chat is deliberately separate from meeting utterances and minutes.
+meeting_agent_events = owned_table("meeting_agent_events", meeting_ref(),
+    Column("connection_id", String, nullable=False), Column("source_key", String, nullable=False),
+    Column("audience", String, nullable=False), Column("sender", String, nullable=False),
+    Column("request", Text, nullable=False), Column("response", Text, nullable=False),
+    Column("status", String, nullable=False), Column("error", Text, nullable=False),
+    constraints=(UniqueConstraint("connection_id", "source_key"),))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
-    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots]
+    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
+    meeting_agent_settings, meeting_agent_events]
 
 
 class Store:

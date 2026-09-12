@@ -75,6 +75,7 @@ def main():
     head = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip()
     if head != REVISION or subprocess.check_output(['git', '-C', str(checkout), 'status', '--porcelain'], text=True).strip():
         raise SystemExit('Attendee checkout differs from the pinned revision. Preserve your changes before rebuilding.')
+    run(sys.executable, 'deploy/attendee/overlay.py')
     run('docker', 'build', '--platform', 'linux/amd64', '-t', 'echooo-attendee:60e885df', str(checkout))
     compose('up', '-d', '--wait', 'postgres', 'redis')
     compose('run', '--rm', '--no-deps', '--user', 'root', 'api', 'chown', '1000:1000', '/attendee/local-debug')

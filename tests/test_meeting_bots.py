@@ -24,6 +24,14 @@ class Connector:
         self.leave_error = None
         self.leaves = 0
         self.lookups = []
+        self.chats = []
+
+    async def chat_messages(self, *_):
+        return []
+
+    async def send_chat(self, provider_id, text, recipient=None):
+        self.chats.append((text, recipient))
+        return {}
 
     async def create(self, payload):
         self.payloads.append(payload)
@@ -97,7 +105,7 @@ def test_join_is_owned_durable_single_and_silent(client, app):
     assert result.json()['bot']['bot_name'] == 'Echooo · AI'
     connector = app.state.meeting_bots.client
     payload = connector.payloads[0]
-    assert payload['recording_settings'] == {'format': 'none'}
+    assert payload['recording_settings'] == {'format': 'none', 'record_participant_speech_start_stop_events': True}
     assert payload['transcription_settings'] == {'meeting_closed_captions': {}}
     assert payload['websocket_settings']['audio']['sample_rate'] == 16000
     assert 'token=' in payload['websocket_settings']['audio']['url']

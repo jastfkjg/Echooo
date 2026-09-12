@@ -49,7 +49,7 @@ See [Operations](docs/OPERATIONS.md#configuration) for all settings and [DashSco
 
 ## Record a meeting
 
-To have **Echooo AI join as a separate participant**, start the [self-hosted Attendee connector](docs/ATTENDEE.md), then use **Meetings → New meeting → Join online meeting**. It records silently and keeps participating when you close the page; the server and Docker must remain running. Use **Leave online meeting** to remove it.
+To have **Echooo AI join as a separate participant**, start the [self-hosted Attendee connector](docs/ATTENDEE.md), then use **Meetings → New meeting → Join online meeting**. It records, replies to Zoom private messages, answers public questions addressed to Echooo, and speaks when called “Echooo”. Use the chat/voice toggles or **Stop speaking** to control it. It keeps participating when you close the page; the server and Docker must remain running. Use **Leave online meeting** to remove it.
 
 For browser capture:
 

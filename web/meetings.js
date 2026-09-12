@@ -28,7 +28,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const scope=rid=>`?recording_id=${encodeURIComponent(rid)}`;
   const textOf=u=>u.content.replace(/\s+/g,' ').trim();
   shell(`<div class="heading meeting-heading"><div><a class="meeting-back" href="#meetings">← All meetings</a><h1>${esc(meeting.title)}</h1><p id="meeting-context"></p></div><div class="actions"><button class="btn" id="meeting-end">End meeting</button></div></div>
-    <section class="meeting-bot" aria-label="Online meeting participant"><div><h2>Echooo AI · meeting participant</h2><p id="bot-status" role="status" aria-live="polite"></p><p id="bot-help" class="muted"></p><p id="bot-error" class="meeting-warning" role="alert"></p></div><div class="actions"><button class="btn primary" id="bot-join">Join online meeting</button><button class="btn" id="bot-leave" hidden>Leave online meeting</button></div></section>
+    <section class="meeting-bot" aria-label="Online meeting participant"><div><h2>Echooo AI · meeting participant</h2><p id="bot-status" role="status" aria-live="polite"></p><p id="bot-help" class="muted"></p><p id="bot-error" class="meeting-warning" role="alert"></p><div id="bot-agent-controls" class="meeting-agent-controls" hidden><label><input type="checkbox" id="bot-chat-enabled"> Chat replies</label><label><input type="checkbox" id="bot-voice-enabled"> Answer when called</label><button class="btn" id="bot-stop">Stop speaking</button></div><details id="bot-agent-history" class="meeting-agent-history" hidden><summary>Assistant activity</summary><p class="muted">Private exchanges are visible here to the workspace owner; they are excluded from public replies and meeting notes.</p><ol id="bot-agent-events"></ol></details></div><div class="actions"><button class="btn primary" id="bot-join">Join online meeting</button><button class="btn" id="bot-leave" hidden>Leave online meeting</button></div></section>
     <div class="meeting-session-bar"><div class="meeting-health"><p id="capture-status" role="status"></p><p id="transcription-status" role="status"></p></div><button class="meeting-text-button" id="meeting-repair">Check saved audio</button><label class="meeting-audio-source" for="meeting-audio-source">Audio source<select id="meeting-audio-source" aria-describedby="meeting-audio-help"><option value="tab">Tab + microphone</option><option value="microphone">Microphone only</option></select></label><button class="btn primary" id="meeting-record">Start recording</button></div><p id="meeting-audio-help" class="muted meeting-audio-help">Choose the meeting or video tab and enable “Share tab audio”. Your microphone records your voice.</p><p id="capture-warning" class="meeting-warning" role="status"></p>
     <div class="meeting-navigation"><div role="tablist" aria-label="Meeting content"><button id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript" data-panel="transcript">Transcript</button><button id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-panel="summary">Summary & notes</button></div><div class="meeting-recording-tools"><span id="single-recording"></span><label class="meeting-recording-select" for="recording-picker"><span class="sr-only">Selected recording</span><select id="recording-picker"></select></label><details class="meeting-menu" id="recording-menu"><summary aria-label="Recording options">…</summary><div class="meeting-menu-items" id="recording-options"></div></details></div></div>
     <section id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript" class="meeting-transcript-section">
@@ -156,16 +156,25 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     syncPlayback(false);updateDockSpace();
   }
   function drawBot(){
-    const connector=meeting.connector||{},bot=connector.bot,active=botActive();
+    const connector=meeting.connector||{},bot=connector.bot,agent=connector.agent,active=botActive();
     const labels={creating:'Requesting entry…',unknown:'Confirming participant status…',ready:'Preparing to join…',joining:'Joining…',waiting_room:'Waiting for the host to admit Echooo AI',joined_not_recording:'In the meeting · waiting for audio',joined_recording:'In the meeting',joined_recording_paused:'In the meeting · recording paused',joined_recording_permission_denied:'In the meeting · recording permission needed',leaving:'Leaving…',post_processing:'Finishing…',ended:'Left the meeting',fatal_error:'Participant disconnected',not_created:'Could not join',data_deleted:'Participant session ended'};
-    $('#bot-status').textContent=botBusy?'Sending request…':bot?.desired_state==='left'&&active?'Leaving · waiting for confirmation…':bot?`${bot.bot_name} · ${labels[bot.state]||'Updating status…'}${connector.audio_connected?' · audio connected':''}`:'Join Zoom, Google Meet or Microsoft Teams as a separate participant.';
-    $('#bot-help').textContent=!connector.configured?'The self-hosted meeting connector needs to be configured before joining.':active?'Echooo records silently. You can close this page; keep the Echooo server and connector running.':'Echooo joins visibly as an AI participant and records audio. Tell participants before inviting it; the host may need to admit it.';
+    $('#bot-status').textContent=botBusy?'Sending request…':bot?.desired_state==='left'&&active?'Leaving · waiting for confirmation…':bot?`${bot.bot_name} · ${labels[bot.state]||'Updating status…'}${connector.audio_connected?' · audio connected':''}${agent?' · '+({listening:agent.deciding_turn?'Considering your follow-up…':agent.conversation_active?'Ready for your follow-up':'Listening',thinking:'Thinking…',speaking:'Speaking…',paused:'Pausing to listen…',waiting:'Waiting'}[agent.phase]||agent.phase):''}`:'Join Zoom, Google Meet or Microsoft Teams as a separate participant.';
+    $('#bot-help').textContent=!connector.configured?'The self-hosted meeting connector needs to be configured before joining.':active?`${bot?.platform==='zoom'?'Send Echooo a private message, address Echooo in meeting chat,':'Address Echooo in public meeting chat'} or say “Echooo, …”. ${agent?.conversation_active?`You can follow up without saying Echooo${agent.follow_up_seconds?` · ${agent.follow_up_seconds}s remaining`:""}.`:"After a spoken reply, follow up within 15 seconds without repeating Echooo. It uses conversation context to decide when to answer."} Say “停止” to stop or “谢谢，你先听着” to end the conversation.`:'Echooo joins as an AI participant, records audio and answers when addressed. Tell participants before inviting it; the host may need to admit it.';
     const audioStale=active&&bot?.state==='joined_recording'&&(!connector.last_audio_at||Date.now()/1000-connector.last_audio_at>15);
-    $('#bot-error').textContent=bot?.error||(audioStale?'Waiting for meeting audio. If this persists, check recording permissions in the meeting.':'');
+    $('#bot-error').textContent=bot?.error||agent?.error||(agent&&!agent.voice_available?'Voice replies need server speech synthesis and live transcription. Meeting chat can still be used.':'')||(audioStale?'Waiting for meeting audio. If this persists, check recording permissions in the meeting.':'');
     $('#bot-error').hidden=!$('#bot-error').textContent;
     $('#bot-join').hidden=active||meeting.status==='ended';
     $('#bot-join').disabled=botBusy||!connector.configured||!!socket||!!meeting.recording||starting||stopping;
     $('#bot-leave').hidden=!active;$('#bot-leave').disabled=botBusy||bot?.desired_state==='left';
+    $('#bot-agent-controls').hidden=!active||!agent;
+    if(agent){
+      $('#bot-chat-enabled').checked=agent.chat_enabled;$('#bot-voice-enabled').checked=agent.voice_enabled;
+      $('#bot-chat-enabled').disabled=botBusy;$('#bot-voice-enabled').disabled=botBusy||!agent.voice_available;
+      $('#bot-stop').disabled=botBusy||!agent.voice_enabled;
+    }
+    const events=agent?.events||[];
+    $('#bot-agent-history').hidden=!events.length;
+    setHTML($('#bot-agent-events'),events.map(e=>`<li><p class="muted">${esc({private:'Private reply to sender',public:'Meeting chat',voice:'Spoken reply'}[e.audience])} · ${esc({submitted:'Submitted to meeting chat',spoken:'Speech played',thinking:'Thinking…',speaking:'Speaking…',queued:'Queued',interrupted:'Interrupted',uncertain:'Delivery unconfirmed',error:'Failed',skipped:'Skipped'}[e.status]||e.status)}</p><p>${esc(e.request)}</p>${e.response?`<p class="meeting-agent-answer">${esc(e.response)}</p>`:''}${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}</li>`).join(''));
     if(bot&&!socket)status(active?(bot.desired_state==='left'?'Saving meeting audio…':connector.audio_connected?'Recording from Echooo AI':'Waiting for Echooo AI audio'):meeting.recordings.length?'Audio saved':'Ready to record');
   }
   function bindContent(){
@@ -341,7 +350,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   $('#meeting-audio-source').onchange=()=>{$('#meeting-audio-help').textContent=$('#meeting-audio-source').value==='tab'?'Choose the meeting or video tab and enable “Share tab audio”. Your microphone records your voice.':'Records your microphone only. Audio playing on your computer is not shared.';};
   $('#meeting-record').onclick=()=>socket?stop():start();$('#meeting-analyze').onclick=()=>requestAnalysis(true);
   $('#meeting-text').onclick=()=>openDialog('Add text note',field('speaker','Speaker','Unidentified speaker','text','required maxlength="80"')+'<div class="form-field"><label for="meeting-text-input">Spoken words</label><textarea id="meeting-text-input" name="content" required maxlength="6000"></textarea></div>',async fd=>{await api(`${base}/utterances`,'POST',{speaker:fd.get('speaker'),content:fd.get('content')});selectedRecording='notes';await refresh();if(!disposed)loadSelectedAudio();},'Add note');
-  $('#bot-join').onclick=()=>openDialog('Invite Echooo AI',`${field('meeting_url','Meeting link','','url','required maxlength="2048" placeholder="https://meet.google.com/…"')}${field('bot_name','Participant name','Echooo AI','text','required maxlength="60"')}<p>Echooo will appear as an independent AI participant and record the conversation silently. Inform the other participants and ask the host to admit it.</p>`,async fd=>{
+  $('#bot-join').onclick=()=>openDialog('Invite Echooo AI',`${field('meeting_url','Meeting link','','url','required maxlength="2048" placeholder="https://meet.google.com/…"')}${field('bot_name','Participant name','Echooo AI','text','required maxlength="60"')}<p>Echooo will appear as an independent AI participant. It records the conversation, replies to private messages and public questions addressed to Echooo, and speaks when you say “Echooo, …”. Private messages are never read aloud. Inform the other participants and ask the host to admit it.</p>`,async fd=>{
     botBusy=true;draw();
     try{meeting.connector=await api(`${base}/bot`,'POST',{meeting_url:fd.get('meeting_url'),bot_name:fd.get('bot_name')});await refresh();}
     finally{botBusy=false;draw();}
@@ -351,6 +360,14 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     try{meeting.connector=await api(`${base}/bot/leave`,'POST');await refresh();}
     catch(e){toast(e.message);}finally{botBusy=false;draw();}
   };
+  const agentControl=async(path,method,body)=>{
+    botBusy=true;draw();
+    try{meeting.connector=await api(`${base}/bot/${path}`,method,body);}
+    catch(e){toast(e.message);}finally{botBusy=false;draw();}
+  };
+  $('#bot-stop').onclick=()=>agentControl('stop','POST');
+  const updateAgent=()=>agentControl('agent','PATCH',{chat_enabled:$('#bot-chat-enabled').checked,voice_enabled:$('#bot-voice-enabled').checked});
+  $('#bot-chat-enabled').onchange=updateAgent;$('#bot-voice-enabled').onchange=updateAgent;
   $('#meeting-end').onclick=async()=>{try{await requestAnalysis();meeting=await api(`${base}/end`,'POST');status('Meeting ended');draw();}catch(e){toast(e.message);}};
   const timer=setInterval(()=>{if(socket&&!stopping&&!analysisTask&&captureRecording)updateRecording(captureRecording);},60000);
   const remoteTimer=setInterval(()=>{if(!disposed&&!analysisTask&&(!socket||meeting.recordings.some(r=>r.transcription?.phase==='verifying')))refresh().catch(()=>{});},3000);
