@@ -21,11 +21,14 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   let searchQuery='',searchIndex=-1,searchIds=[],playingId=null,followedId=null,searchTimer;
   let playbackRecords=[],activePanel='transcript',unread=0,partialSpeaker='Listening',refreshing=false;
   let minuteSources=[];
+  let botBusy=false;
+  const botActive=()=>!!meeting.connector?.bot&&!['ended','fatal_error','data_deleted','not_created'].includes(meeting.connector.bot.state);
   const base=`/meetings/${id}`,$=s=>document.querySelector(s);
   const recordingLabel=rid=>rid==='notes'?'Meeting notes':`Recording ${meeting.recordings.findIndex(r=>r.id===rid)+1}`;
   const scope=rid=>`?recording_id=${encodeURIComponent(rid)}`;
   const textOf=u=>u.content.replace(/\s+/g,' ').trim();
   shell(`<div class="heading meeting-heading"><div><a class="meeting-back" href="#meetings">← All meetings</a><h1>${esc(meeting.title)}</h1><p id="meeting-context"></p></div><div class="actions"><button class="btn" id="meeting-end">End meeting</button></div></div>
+    <section class="meeting-bot" aria-label="Online meeting participant"><div><h2>Echooo AI · meeting participant</h2><p id="bot-status" role="status" aria-live="polite"></p><p id="bot-help" class="muted"></p><p id="bot-error" class="meeting-warning" role="alert"></p></div><div class="actions"><button class="btn primary" id="bot-join">Join online meeting</button><button class="btn" id="bot-leave" hidden>Leave online meeting</button></div></section>
     <div class="meeting-session-bar"><div class="meeting-health"><p id="capture-status" role="status"></p><p id="transcription-status" role="status"></p></div><button class="meeting-text-button" id="meeting-repair">Check saved audio</button><label class="meeting-audio-source" for="meeting-audio-source">Audio source<select id="meeting-audio-source" aria-describedby="meeting-audio-help"><option value="tab">Tab + microphone</option><option value="microphone">Microphone only</option></select></label><button class="btn primary" id="meeting-record">Start recording</button></div><p id="meeting-audio-help" class="muted meeting-audio-help">Choose the meeting or video tab and enable “Share tab audio”. Your microphone records your voice.</p><p id="capture-warning" class="meeting-warning" role="status"></p>
     <div class="meeting-navigation"><div role="tablist" aria-label="Meeting content"><button id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript" data-panel="transcript">Transcript</button><button id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-panel="summary">Summary & notes</button></div><div class="meeting-recording-tools"><span id="single-recording"></span><label class="meeting-recording-select" for="recording-picker"><span class="sr-only">Selected recording</span><select id="recording-picker"></select></label><details class="meeting-menu" id="recording-menu"><summary aria-label="Recording options">…</summary><div class="meeting-menu-items" id="recording-options"></div></details></div></div>
     <section id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript" class="meeting-transcript-section">
@@ -73,7 +76,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       const selected=selectedView==='full'?g.records.find(u=>u.id===selectedPassage):null,actions=node.querySelector('.meeting-passage-actions');
       setHTML(actions,actionsHTML(selected));actions.hidden=!selected;
     });
-    if(!groups.length)root.innerHTML='<p class="meeting-placeholder">Start recording to follow the conversation here.</p>';
+    if(!groups.length)root.innerHTML=`<p class="meeting-placeholder">${botActive()?'Waiting for speech from the online meeting…':meeting.recordings.length?'No speech has been transcribed in this recording.':'Join an online meeting or start recording to follow the conversation here.'}</p>`;
   }
   function updateHealth(){
     const rec=meeting.recordings.find(r=>r.id===selectedRecording),state=rec?.transcription||{phase:'unverified'};
@@ -115,6 +118,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   }
   function draw(){
     if(disposed)return;
+    drawBot();
     if(selectedRecording!=='notes'&&!meeting.recordings.some(r=>r.id===selectedRecording))selectedRecording=meeting.recordings.at(-1)?.id||'notes';
     const {records}=recordingContent(meeting,selectedRecording);
     const {minutes,current:minutesCurrent}=minutesContent(meeting,selectedRecording);
@@ -123,7 +127,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     setHTML($('#recording-picker'),options);$('#recording-picker').value=selectedRecording;
     updateHealth();$('.meeting-live-controls').hidden=!socket&&!meeting.recording;
     const completed=meeting.status==='ended',verified=meeting.recordings.find(r=>r.id===selectedRecording)?.transcription;
-    $('#meeting-end').hidden=completed;$('#meeting-record').hidden=completed;
+    $('#meeting-end').hidden=completed;$('#meeting-record').hidden=completed||botActive();
     $('.meeting-session-bar').hidden=completed&&verified?.phase==='complete'&&verified?.summary_phase!=='error';
     $('#meeting-context').textContent=completed?`Ended${verified?.phase==='complete'?' · Saved audio checked':''}`:meeting.recording?'Recording':'Active';
     $('#meeting-summary-status').textContent=analysisMessage||(meeting.recordings.find(r=>r.id===selectedRecording)?.transcription?.summary_phase==='building'?'Updating notes from the verified transcript…':'');$('#meeting-summary-status').dataset.error=String(analysisError);
@@ -139,16 +143,30 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('#single-recording').textContent=rec?`${recordingLabel(rec.id)} · ${meetingTime(rec.samples/rec.sample_rate*1000)}`:'Text notes';
     $('#recording-menu').hidden=!rec;
     setHTML($('#recording-options'),rec?`<a href="/api${base}/recordings/${rec.id}/audio" download>Download audio</a><button class="danger" data-delete-recording="${rec.id}" ${socket||meeting.recording||analysisTask?'disabled':''}>Delete recording…</button>`:'');
-    $('#meeting-player-label').textContent=recordingLabel(selectedRecording);$('.meeting-player-wrap').hidden=selectedRecording==='notes'||!!socket;
-    $('#meeting-player').hidden=!!socket&&selectedRecording===captureRecording;
-    const playable=selectedRecording!=='notes'&&!(socket&&selectedRecording===captureRecording);
+    const remoteLive=botActive()&&meeting.recording&&selectedRecording===meeting.recordings.at(-1)?.id;
+    $('#meeting-player-label').textContent=recordingLabel(selectedRecording);$('.meeting-player-wrap').hidden=selectedRecording==='notes'||!!socket||remoteLive;
+    $('#meeting-player').hidden=!!socket&&selectedRecording===captureRecording||remoteLive;
+    const playable=selectedRecording!=='notes'&&!(socket&&selectedRecording===captureRecording)&&!remoteLive;
     $('#play-back').disabled=$('#play-forward').disabled=$('#play-speed').disabled=$('#follow-playback').disabled=!playable;
-    $('#meeting-record').disabled=meeting.status==='ended'||!!meeting.recording&&!socket||starting||stopping;
-    $('#meeting-audio-source').disabled=starting||!!socket||!!meeting.recording||completed;
-    $('.meeting-audio-source').hidden=completed;$('#meeting-audio-help').hidden=completed;
-    $('#meeting-end').disabled=meeting.status==='ended'||starting||!!socket||meeting.recording||!!analysisTask;$('#meeting-text').disabled=meeting.status==='ended';
+    $('#meeting-record').disabled=meeting.status==='ended'||!!meeting.recording&&!socket||starting||stopping||botActive()||botBusy;
+    $('#meeting-audio-source').disabled=starting||!!socket||!!meeting.recording||completed||botActive()||botBusy;
+    $('.meeting-audio-source').hidden=completed||botActive();$('#meeting-audio-help').hidden=completed||botActive();
+    $('#meeting-end').disabled=meeting.status==='ended'||starting||!!socket||meeting.recording||!!analysisTask||botActive()||botBusy;$('#meeting-text').disabled=meeting.status==='ended';
     bindContent();
     syncPlayback(false);updateDockSpace();
+  }
+  function drawBot(){
+    const connector=meeting.connector||{},bot=connector.bot,active=botActive();
+    const labels={creating:'Requesting entry…',unknown:'Confirming participant status…',ready:'Preparing to join…',joining:'Joining…',waiting_room:'Waiting for the host to admit Echooo AI',joined_not_recording:'In the meeting · waiting for audio',joined_recording:'In the meeting',joined_recording_paused:'In the meeting · recording paused',joined_recording_permission_denied:'In the meeting · recording permission needed',leaving:'Leaving…',post_processing:'Finishing…',ended:'Left the meeting',fatal_error:'Participant disconnected',not_created:'Could not join',data_deleted:'Participant session ended'};
+    $('#bot-status').textContent=botBusy?'Sending request…':bot?.desired_state==='left'&&active?'Leaving · waiting for confirmation…':bot?`${bot.bot_name} · ${labels[bot.state]||'Updating status…'}${connector.audio_connected?' · audio connected':''}`:'Join Zoom, Google Meet or Microsoft Teams as a separate participant.';
+    $('#bot-help').textContent=!connector.configured?'The self-hosted meeting connector needs to be configured before joining.':active?'Echooo records silently. You can close this page; keep the Echooo server and connector running.':'Echooo joins visibly as an AI participant and records audio. Tell participants before inviting it; the host may need to admit it.';
+    const audioStale=active&&bot?.state==='joined_recording'&&(!connector.last_audio_at||Date.now()/1000-connector.last_audio_at>15);
+    $('#bot-error').textContent=bot?.error||(audioStale?'Waiting for meeting audio. If this persists, check recording permissions in the meeting.':'');
+    $('#bot-error').hidden=!$('#bot-error').textContent;
+    $('#bot-join').hidden=active||meeting.status==='ended';
+    $('#bot-join').disabled=botBusy||!connector.configured||!!socket||!!meeting.recording||starting||stopping;
+    $('#bot-leave').hidden=!active;$('#bot-leave').disabled=botBusy||bot?.desired_state==='left';
+    if(bot&&!socket)status(active?(bot.desired_state==='left'?'Saving meeting audio…':connector.audio_connected?'Recording from Echooo AI':'Waiting for Echooo AI audio'):meeting.recordings.length?'Audio saved':'Ready to record');
   }
   function bindContent(){
     bindMenus(workspace);
@@ -182,7 +200,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     const player=$('#meeting-player');player.pause();player.onloadedmetadata=null;playingId=null;followedId=null;
     player.playbackRate=Number($('#play-speed').value);syncPlayback(false);
     if(selectedRecording==='notes'){player.removeAttribute('src');player.load();return;}
-    if(socket&&selectedRecording===captureRecording){player.removeAttribute('src');player.load();$('#meeting-playback').textContent='Original audio will be ready to play after pausing.';return;}
+    if(socket&&selectedRecording===captureRecording||botActive()&&meeting.recording&&selectedRecording===meeting.recordings.at(-1)?.id){player.removeAttribute('src');player.load();$('#meeting-playback').textContent='Original audio will be ready after recording stops.';return;}
     const url=`/api${base}/recordings/${selectedRecording}/audio`,seek=()=>{player.playbackRate=Number($('#play-speed').value);player.currentTime=Math.min(ms/1000,Number.isFinite(player.duration)?player.duration:ms/1000);syncPlayback();if(autoplay)player.play().catch(e=>{if(e.name!=='AbortError'&&!disposed)toast(e.message);});};
     if(player.getAttribute('src')!==url){player.onloadedmetadata=seek;player.src=url;player.load();}else if(Number.isFinite(player.duration))seek();else{player.onloadedmetadata=seek;player.load();}
     $('#meeting-playback').textContent='Original audio';
@@ -257,8 +275,14 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   $('#meeting-player').onerror=()=>{if($('#meeting-player').getAttribute('src'))$('#meeting-playback').textContent='Audio unavailable. Try reselecting the recording.';};
   $('#follow-playback').onchange=()=>{if($('#follow-playback').checked){$('#meeting-follow').checked=false;followedId=null;syncPlayback();}};
   $('#meeting-follow').onchange=()=>{if($('#meeting-follow').checked)$('#follow-playback').checked=false;liveChanged();};
-  function merge(next){const known=new Set(next.utterances.map(u=>u.id));const extra=meeting.utterances.filter(u=>!known.has(u.id)&&u.recording_id===captureRecording);meeting={...next,utterances:[...next.utterances,...extra]};}
-  async function refresh(){if(refreshing)return;refreshing=true;try{const next=await api(base);if(!disposed){merge(next);draw();}}finally{refreshing=false;}}
+  function merge(next){
+    const previous=meeting.recordings.at(-1)?.id||'notes',latest=next.recordings.at(-1)?.id;
+    if(botActive()&&latest&&latest!==previous&&selectedRecording===previous&&$('#meeting-follow').checked)selectedRecording=latest;
+    const known=new Set(next.utterances.map(u=>u.id));const extra=socket?meeting.utterances.filter(u=>!known.has(u.id)&&u.recording_id===captureRecording):[];
+    meeting={...next,utterances:[...next.utterances,...extra]};
+    if(botActive())captureRecording=latest;
+  }
+  async function refresh(){if(refreshing)return;refreshing=true;try{const next=await api(base);if(!disposed){const count=meeting.utterances.length,previous=selectedRecording,remoteStopped=!!meeting.connector?.bot&&meeting.recording&&!next.recording;merge(next);draw();if(previous!==selectedRecording||remoteStopped)loadSelectedAudio();if(meeting.utterances.length>count)liveChanged();}}finally{refreshing=false;}}
   function requestAnalysis(force=false,rid=selectedRecording){
     if(disposed)return Promise.resolve();if(analysisTask)return analysisTask;
     analysisTask=Promise.resolve().then(()=>runAnalysis(force,rid)).finally(()=>{analysisTask=null;if(!disposed)draw();});draw();return analysisTask;
@@ -317,6 +341,16 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   $('#meeting-audio-source').onchange=()=>{$('#meeting-audio-help').textContent=$('#meeting-audio-source').value==='tab'?'Choose the meeting or video tab and enable “Share tab audio”. Your microphone records your voice.':'Records your microphone only. Audio playing on your computer is not shared.';};
   $('#meeting-record').onclick=()=>socket?stop():start();$('#meeting-analyze').onclick=()=>requestAnalysis(true);
   $('#meeting-text').onclick=()=>openDialog('Add text note',field('speaker','Speaker','Unidentified speaker','text','required maxlength="80"')+'<div class="form-field"><label for="meeting-text-input">Spoken words</label><textarea id="meeting-text-input" name="content" required maxlength="6000"></textarea></div>',async fd=>{await api(`${base}/utterances`,'POST',{speaker:fd.get('speaker'),content:fd.get('content')});selectedRecording='notes';await refresh();if(!disposed)loadSelectedAudio();},'Add note');
+  $('#bot-join').onclick=()=>openDialog('Invite Echooo AI',`${field('meeting_url','Meeting link','','url','required maxlength="2048" placeholder="https://meet.google.com/…"')}${field('bot_name','Participant name','Echooo AI','text','required maxlength="60"')}<p>Echooo will appear as an independent AI participant and record the conversation silently. Inform the other participants and ask the host to admit it.</p>`,async fd=>{
+    botBusy=true;draw();
+    try{meeting.connector=await api(`${base}/bot`,'POST',{meeting_url:fd.get('meeting_url'),bot_name:fd.get('bot_name')});await refresh();}
+    finally{botBusy=false;draw();}
+  },'Join meeting');
+  $('#bot-leave').onclick=async()=>{
+    botBusy=true;draw();
+    try{meeting.connector=await api(`${base}/bot/leave`,'POST');await refresh();}
+    catch(e){toast(e.message);}finally{botBusy=false;draw();}
+  };
   $('#meeting-end').onclick=async()=>{try{await requestAnalysis();meeting=await api(`${base}/end`,'POST');status('Meeting ended');draw();}catch(e){toast(e.message);}};
   const timer=setInterval(()=>{if(socket&&!stopping&&!analysisTask&&captureRecording)updateRecording(captureRecording);},60000);
   const remoteTimer=setInterval(()=>{if(!disposed&&!analysisTask&&(!socket||meeting.recordings.some(r=>r.transcription?.phase==='verifying')))refresh().catch(()=>{});},3000);

@@ -95,6 +95,10 @@ class Settings:
     app_host: str = field(default_factory=lambda: os.getenv("APP_HOST", "127.0.0.1"))
     app_port: int = field(default_factory=lambda: _int("APP_PORT", 8000))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    attendee_base_url: str = field(default_factory=lambda: os.getenv("ATTENDEE_BASE_URL", ""))
+    attendee_api_key: str = field(default_factory=lambda: os.getenv("ATTENDEE_API_KEY", ""))
+    attendee_callback_url: str = field(default_factory=lambda: os.getenv("ATTENDEE_CALLBACK_URL", ""))
+    attendee_max_seconds: int = field(default_factory=lambda: _int("ATTENDEE_MAX_SECONDS", 7200))
 
     stt_provider: str = field(default_factory=lambda: os.getenv("STT_PROVIDER", "mock"))
     llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "mock"))
@@ -158,6 +162,16 @@ class Settings:
         return cls()
 
     def validate(self) -> None:
+        if self.attendee_base_url:
+            url = urlsplit(self.attendee_base_url)
+            if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.password or url.query or url.fragment:
+                raise ValueError('ATTENDEE_BASE_URL must be an HTTP(S) service URL without credentials or query')
+        if self.attendee_callback_url:
+            url = urlsplit(self.attendee_callback_url)
+            if url.scheme != 'wss' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in {'', '/'}:
+                raise ValueError('ATTENDEE_CALLBACK_URL must be a wss:// origin reachable by Attendee')
+        if not 60 <= self.attendee_max_seconds <= 14400:
+            raise ValueError('ATTENDEE_MAX_SECONDS must be between 60 and 14400')
         if self.tts_provider == "mock":
             self.tts_provider = "browser"  # Compatibility with the former local demo .env.
         for value, choices, label in ((self.stt_provider, {"mock", "assemblyai"}, "STT"),

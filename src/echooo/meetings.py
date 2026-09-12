@@ -94,6 +94,8 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     captures = set()
     transcriptions = RecordingTranscriptions(store, settings, locks)
     app.state.meeting_transcriptions = transcriptions
+    from echooo.meeting_bots import install_meeting_bots
+    bots = install_meeting_bots(app, store, settings, transcriptions, captures, owner)
 
     def get(r, mid, active=False):
         m = need(r.get(db.meetings, mid), "Meeting")
@@ -110,7 +112,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 rec['transcription'] = states.get(rec['id'], {'phase': 'unverified', 'verified_samples': 0})
                 if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
                     rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
-            return {**m, "recording": mid in captures, 'transcription_available': transcriptions.available,
+            return {**m, "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
                 "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
@@ -149,6 +151,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.delete("/api/meetings/{mid}/recordings/{rid}")
     async def delete_recording(request: Request, mid: str, rid: str):
         who = owner(request)
+        bots.require_detached(who, mid)
         if locks[mid].locked():
             raise Problem("Wait for the running summary before deleting a recording.", 409)
         with store.scope(who) as r:
@@ -230,6 +233,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.delete("/api/meetings/{mid}")
     async def delete(request: Request, mid: str):
         who = owner(request)
+        bots.require_detached(who, mid)
         result = view(who, mid)
         if mid in captures:
             raise Problem("Pause recording before deleting this meeting.", 409)
@@ -465,6 +469,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
 
     @app.post("/api/meetings/{mid}/end")
     async def end(request: Request, mid: str):
+        bots.require_detached(owner(request), mid)
         with store.scope(owner(request)) as r:
             get(r, mid)
             if mid in captures:
@@ -514,6 +519,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             if not same_origin(ws.headers.get("origin"), base):
                 raise AuthError("Cross-site connection")
             who = auth.resolve(token, "owner")["owner_id"]
+            bots.require_detached(who, mid)
             with store.scope(who) as r:
                 get(r, mid, True)
             if mid in captures:

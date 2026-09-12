@@ -7,7 +7,7 @@ A personal voice assistant for private conversations, domain-based memory, deleg
 - **Private chat:** start a text or voice conversation with **Talk with Echooo**. Quick chats use confirmed, unexpired memories in `default`; **Choose domains** lets you start a chat with other domains or no memory.
 - **Knowledge and memory:** organize information into domains, add memories, or import TXT, Markdown, CSV, JSON, PDF, and DOCX files. Review proposals before saving, control sharing and expiry, and inspect or restore versions.
 - **Delegation:** invite one guest into a time-limited conversation with an explicit audience, goal, and knowledge scope. Follow the transcript, approve commitments, and revoke access.
-- **Meetings:** record tab audio and microphone together, follow live transcripts, edit passages, play original audio, and generate notes linked to supporting passages. Saved audio can be checked to recover gaps in transcription.
+- **Meetings:** invite Echooo AI as an independent online meeting participant through self-hosted Attendee, or record tab audio and microphone together. Follow transcripts, edit passages, play original audio, and generate notes linked to supporting passages.
 
 Reading, disclosure, commitments, and memory updates have separate permissions. Guest replies are checked before publication and speech synthesis; proposed memories require review. Delegation currently supports one guest with owner supervision. External services such as calendars, email, telephony, and payments are not connected; approving a commitment does not execute a transaction.
 
@@ -48,6 +48,10 @@ The LLM endpoint must support streaming `/chat/completions` and reliable JSON in
 See [Operations](docs/OPERATIONS.md#configuration) for all settings and [DashScope setup](docs/OPERATIONS.md#alibaba-cloud-cosyvoice-setup) for cloud speech and custom voices. Model prompts live in [config/prompts.toml](config/prompts.toml).
 
 ## Record a meeting
+
+To have **Echooo AI join as a separate participant**, start the [self-hosted Attendee connector](docs/ATTENDEE.md), then use **Meetings → New meeting → Join online meeting**. It records silently and keeps participating when you close the page; the server and Docker must remain running. Use **Leave online meeting** to remove it.
+
+For browser capture:
 
 1. Open **Meetings → New meeting**.
 2. Choose **Tab + microphone** in desktop Chrome, select the meeting or video tab, and enable **Share tab audio**. Use **Microphone only** for in-person meetings.

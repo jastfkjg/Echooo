@@ -34,3 +34,10 @@
 
 .meeting-audio-source{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}.meeting-audio-source select{width:auto;max-width:100%;min-height:36px;font-size:12px;padding:6px 28px 6px 8px}.meeting-audio-help{font-size:12px;margin:8px 0;line-height:1.5}
 @media(max-width:800px){.meeting-audio-source{flex:1;min-width:150px}.meeting-audio-source select{width:100%}}
+
+.meeting-bot{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px 0;margin-bottom:16px;border-bottom:1px solid var(--border)}
+.meeting-bot h2{font-size:15px;margin:0 0 8px}
+.meeting-bot p{margin:5px 0;line-height:1.5;font-size:13px}
+.meeting-bot .actions{flex-shrink:0}
+.meeting-bot .meeting-warning{padding:0}
+@media(max-width:700px){.meeting-bot{align-items:flex-start;flex-direction:column}.meeting-bot .actions{width:100%}.meeting-bot .btn{min-height:44px}}

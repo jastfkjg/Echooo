@@ -148,8 +148,16 @@ meeting_minutes = owned_table("meeting_minutes", meeting_ref(),
     Column("status", String, nullable=False),
     constraints=(UniqueConstraint("meeting_id", "scope_key"),))
 
+meeting_bots = owned_table("meeting_bots", meeting_ref(),
+    Column("meeting_url", Text, nullable=False), Column("platform", String, nullable=False),
+    Column("bot_name", String, nullable=False), Column("provider_id", String),
+    Column("state", String, nullable=False), Column("desired_state", String, nullable=False),
+    Column("callback_hash", String, nullable=False), Column("error", Text, nullable=False),
+    Column("updated_at", Float, nullable=False), Column("deadline", Float, nullable=False),
+    constraints=(UniqueConstraint("meeting_id"),))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
-    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes]
+    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots]
 
 
 class Store:
