@@ -21,6 +21,29 @@ def test_builds_current_v3_streaming_url() -> None:
     assert query["speech_model"] == ["universal-3-5-pro"]
     assert "language_code" not in query
     assert query["agent_context"] == ["Echooo 刚刚说了你好"]
+    assert query['continuous_partials'] == ['true']
+    assert query['include_partial_turns'] == ['true']
+    assert query['interruption_delay'] == ['0']
+
+
+def test_diarization_keeps_partials_and_passes_language_hints_and_keyterms():
+    import json
+    provider = AssemblyAIStreamingSTT(Settings(assemblyai_language_codes=('zh', 'en'),
+        assemblyai_keyterms=('Echooo', '艾可'), assemblyai_prompt='A product meeting.'))
+    provider.speaker_labels = True
+    query = parse_qs(urlparse(provider._url()).query)
+    assert query['speaker_labels'] == ['true']
+    assert query['continuous_partials'] == ['true']
+    assert json.loads(query['language_codes'][0]) == ['zh', 'en']
+    assert json.loads(query['keyterms_prompt'][0]) == ['Echooo', '艾可']
+    assert query['prompt'] == ['A product meeting.']
+
+
+def test_speaker_revision_is_not_discarded():
+    raw = {'type': 'SpeakerRevision', 'revisions': [{'turn_order': 3, 'speaker_label': 'B'}]}
+    event = AssemblyAIStreamingSTT.map_message(raw)
+    assert event.type == STTEventType.SPEAKER_REVISION
+    assert event.raw == raw
 
 
 def test_maps_turn_events_to_partial_and_final() -> None:

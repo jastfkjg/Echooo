@@ -12,21 +12,25 @@ from typing import Literal
 
 import httpx
 from fastapi import Request, WebSocket, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import Field
 
 from echooo import database as db
 from echooo import meeting_minutes as minutes_rules
 from echooo.contracts import Input
 from echooo.models import STTEventType
+from echooo.meeting_live import TranscriptWriter, remember
 from echooo.meeting_transcription import RecordingTranscriptions, LiveTranscription
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
 from echooo.auth import AuthError
+from echooo.meeting_knowledge import MeetingKnowledge, KnowledgeInput
+from echooo.meeting_speech import speech_transcript
 
 
 class MeetingInput(Input):
     title: str = Field(min_length=1, max_length=120)
+    project_id: str | None = None
 
 
 class UtteranceInput(Input):
@@ -94,6 +98,11 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     captures = set()
     transcriptions = RecordingTranscriptions(store, settings, locks)
     app.state.meeting_transcriptions = transcriptions
+    knowledge = MeetingKnowledge(store, ai)
+    app.state.meeting_knowledge = knowledge
+    from echooo.meeting_bots import install_meeting_bots
+    bots = install_meeting_bots(app, store, settings, transcriptions, captures, owner)
+    bots.knowledge = knowledge
 
     def get(r, mid, active=False):
         m = need(r.get(db.meetings, mid), "Meeting")
@@ -110,8 +119,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 rec['transcription'] = states.get(rec['id'], {'phase': 'unverified', 'verified_samples': 0})
                 if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
                     rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
-            return {**m, "recording": mid in captures, 'transcription_available': transcriptions.available,
+            return {**m, 'knowledge': knowledge.view(who, mid), "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
                 "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
+                "assistant_utterances": speech_transcript(r, mid, recordings),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
                 "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
@@ -149,6 +159,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.delete("/api/meetings/{mid}/recordings/{rid}")
     async def delete_recording(request: Request, mid: str, rid: str):
         who = owner(request)
+        bots.require_detached(who, mid)
         if locks[mid].locked():
             raise Problem("Wait for the running summary before deleting a recording.", 409)
         with store.scope(who) as r:
@@ -175,6 +186,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for minutes in r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid):
                 if set(minutes["evidence_ids"]) & ids:
                     r.remove(db.meeting_minutes, minutes["id"])
+            app.state.service.purge_meeting_evidence(r, mid, ids)
             r.remove(db.recordings, rid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
         return view(who, mid)
@@ -182,15 +194,51 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings")
     async def listing(request: Request):
         with store.scope(owner(request)) as r:
-            return list(reversed(r.list(db.meetings)))
+            projects = {d['id']: d['name'] for d in r.list(db.domains)}
+            configs = {k['meeting_id']: k for k in r.list(db.meeting_knowledge)}
+            return [{**m, 'project_name': projects.get(configs.get(m['id'], {}).get('project_id'))}
+                for m in reversed(r.list(db.meetings))]
+
+    @app.get('/api/meetings/{mid}/knowledge')
+    async def meeting_knowledge(request: Request, mid: str):
+        return knowledge.view(owner(request), mid)
+
+    @app.put('/api/meetings/{mid}/knowledge')
+    async def configure_knowledge(request: Request, mid: str, data: KnowledgeInput):
+        who = owner(request)
+        result = knowledge.save(who, mid, data)
+        row = bots.row(who, mid)
+        agent = bots.agents.get(row['id']) if row else None
+        if agent:
+            await agent.stop(all_replies=True)
+        return result
+
+    @app.post('/api/meetings/{mid}/memory-proposals')
+    async def propose_meeting_memories(request: Request, mid: str):
+        try:
+            return await knowledge.propose(owner(request), mid)
+        except Problem:
+            raise
+        except Exception as exc:
+            logger.warning('Meeting memory extraction failed: error_type=%s', type(exc).__name__)
+            raise Problem('Could not prepare project updates. Your transcript is saved; try again.', 503) from exc
 
     @app.post("/api/meetings", status_code=201)
     async def create(request: Request, data: MeetingInput):
         with store.scope(owner(request)) as r:
-            return r.add(db.meetings, title=data.title, status="active", revision=1)
+            if data.project_id:
+                need(r.get(db.domains, data.project_id), 'Project')
+            meeting = r.add(db.meetings, title=data.title, status="active", revision=1)
+            if data.project_id:
+                r.add(db.meeting_knowledge, meeting_id=meeting['id'], project_id=data.project_id,
+                    goal='', reference_ids=[], grants=[], revision=1)
+                r.log('meeting.knowledge_changed', meeting_id=meeting['id'], revision=1, access='project')
+            return meeting
 
     @app.patch("/api/meetings/{mid}")
     async def rename(request: Request, mid: str, data: MeetingInput):
+        if 'project_id' in data.model_fields_set:
+            raise Problem('Use Project & knowledge to change the project.')
         with store.scope(owner(request)) as r:
             get(r, mid)
             r.change(db.meetings, mid, title=data.title)
@@ -199,7 +247,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'minutes')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})
@@ -213,6 +261,45 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 if rec['transcription']['phase'] in {'verifying', 'interrupted'}:
                     transcriptions.start(who, mid, rec['id'])
         return result
+
+    @app.get('/api/meetings/{mid}/events')
+    async def live_events(request: Request, mid: str):
+        who = owner(request)
+        with store.scope(who) as r:
+            get(r, mid)
+
+        async def stream():
+            queue = transcriptions.feed.subscribe(who, mid)
+            try:
+                yield 'data: {"type":"resync"}\n\n'
+                draft = transcriptions.feed.drafts.get((who, mid))
+                if draft:
+                    yield 'data: ' + json.dumps(draft, ensure_ascii=False) + '\n\n'
+                while not await request.is_disconnected():
+                    # Recheck revoked credentials and deleted meetings, including idle streams.
+                    try:
+                        owner(request)
+                        with store.scope(who) as r:
+                            get(r, mid)
+                    except (AuthError, Problem):
+                        return
+                    try:
+                        event = await asyncio.wait_for(queue.get(), 15)
+                    except TimeoutError:
+                        yield ': heartbeat\n\n'
+                    else:
+                        try:
+                            owner(request)
+                            with store.scope(who) as r:
+                                get(r, mid)
+                        except (AuthError, Problem):
+                            return
+                        yield 'data: ' + json.dumps(event, ensure_ascii=False) + '\n\n'
+            finally:
+                transcriptions.feed.unsubscribe(who, mid, queue)
+
+        return StreamingResponse(stream(), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no'})
 
     @app.post('/api/meetings/{mid}/recordings/{rid}/transcribe', status_code=202)
     async def repair_recording(request: Request, mid: str, rid: str):
@@ -230,6 +317,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.delete("/api/meetings/{mid}")
     async def delete(request: Request, mid: str):
         who = owner(request)
+        bots.require_detached(who, mid)
         result = view(who, mid)
         if mid in captures:
             raise Problem("Pause recording before deleting this meeting.", 409)
@@ -239,6 +327,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             get(r, mid)
             if mid in captures:
                 raise Problem("Pause recording before deleting this meeting.", 409)
+            app.state.service.purge_meeting_evidence(r, mid)
             r.remove(db.meetings, mid)
         return {"ok": True}
 
@@ -258,11 +347,20 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 if u["meeting_id"] != mid:
                     raise Problem("Utterance is outside this meeting.", 404)
                 r.change(db.utterances, uid, **data.model_dump())
+                sources = r.list(db.utterance_sources, db.utterance_sources.c.utterance_id == uid)
+                if not sources and u['recording_id']:
+                    remember(r, {**u, **data.model_dump()}, content_edited=True, speaker_edited=True)
+                for source in sources:
+                    state = source['state']
+                    r.change(db.utterance_sources, source['id'], state={**state,
+                        'content_edited': state.get('content_edited', False) or data.content != u['content'],
+                        'speaker_edited': state.get('speaker_edited', False) or data.speaker != u['speaker']})
                 r.change(db.meetings, mid, revision=m["revision"] + 1)
                 # Later sections may have used this utterance as context.
                 for s in r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid):
                     r.change(db.meeting_sections, s["id"], status="stale")
                 r.log("meeting.transcript_corrected", meeting_id=mid, utterance_id=uid)
+        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': {**u, **data.model_dump()}})
         return view(owner(request), mid)
 
     @app.post("/api/meetings/{mid}/minutes")
@@ -465,6 +563,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
 
     @app.post("/api/meetings/{mid}/end")
     async def end(request: Request, mid: str):
+        bots.require_detached(owner(request), mid)
         with store.scope(owner(request)) as r:
             get(r, mid)
             if mid in captures:
@@ -514,6 +613,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             if not same_origin(ws.headers.get("origin"), base):
                 raise AuthError("Cross-site connection")
             who = auth.resolve(token, "owner")["owner_id"]
+            bots.require_detached(who, mid)
             with store.scope(who) as r:
                 get(r, mid, True)
             if mid in captures:
@@ -525,10 +625,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         live = None
         rec = None
         samples = 0
-        last_end = 0
         rate = settings.assemblyai_sample_rate
         sequence = 0
-        seen_turns = set()
+        writer = None
         send_lock = asyncio.Lock()
 
         async def send(event):
@@ -541,48 +640,29 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 get(r, mid, True)
 
         async def live_state(phase, message):
+            if writer and phase != 'live':
+                writer.clear()
             state = transcriptions.state(who, mid, rec['id'], phase=phase, message=message)
             with contextlib.suppress(Exception):
                 await send({'type': 'transcription', 'recording_id': rec['id'], 'state': state})
 
         async def consume(event, offset_ms, session):
-            nonlocal last_end
             validate()
+            rows = writer.consume(event, offset_ms, session, round(samples * 1000 / rate))
+            # Keep capture sockets compatible; other viewers use the shared feed.
             if event.type == STTEventType.PARTIAL:
-                label = event.raw.get('speaker_label')
-                await send({'type': 'partial', 'text': event.transcript, 'speaker': speaker_label(label, session)})
-            elif event.type == STTEventType.FINAL and event.transcript:
-                turn = event.raw.get('turn_order')
-                key = (session, turn)
-                if turn is not None and key in seen_turns:
-                    return
-                end_ms = round(samples * 1000 / rate)
-                start_ms = max(last_end, offset_ms)
-                words = event.raw.get('words') or []
-                if words and isinstance(words[0], dict) and isinstance(words[-1], dict):
-                    start, finish = words[0].get('start'), words[-1].get('end')
-                    if isinstance(start, (int, float)) and isinstance(finish, (int, float)) and 0 <= start <= finish:
-                        start_ms, end_ms = min(offset_ms + round(start), end_ms), min(offset_ms + round(finish), end_ms)
-                with store.scope(who) as r:
-                    u = r.add(db.utterances, meeting_id=mid, recording_id=rec['id'],
-                        speaker=speaker_label(event.raw.get('speaker_label'), session), content=event.transcript[:6000],
-                        start_ms=start_ms, end_ms=max(start_ms, end_ms))
-                if turn is not None:
-                    seen_turns.add(key)
-                last_end = end_ms
+                draft = transcriptions.feed.drafts.get((who, mid))
+                if draft:
+                    await send(draft)
+            for u in rows:
                 with contextlib.suppress(Exception):
                     await send({'type': 'utterance', 'utterance': u})
-
-        def speaker_label(label, session):
-            if label is None or str(label).upper() in {'PENDING', 'UNKNOWN'}:
-                return 'Unknown speaker'
-            suffix = f' (connection {session})' if session > 1 else ''
-            return f"Speaker {str(label)[:20]}{suffix} · {rec['id'][:4]}"
 
         try:
             await ws.accept()
             with store.scope(who) as r:
                 rec = r.add(db.recordings, meeting_id=mid, sample_rate=rate, samples=0)
+            writer = TranscriptWriter(store, who, mid, rec['id'], transcriptions.feed)
             phase = 'connecting' if settings.stt_provider != 'mock' else 'unverified'
             rec['transcription'] = transcriptions.state(who, mid, rec['id'], phase=phase, message='')
             if settings.stt_provider != 'mock':
@@ -624,6 +704,8 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         finally:
             if live:
                 await live.finish()
+            if writer:
+                writer.clear()
             captures.discard(mid)
             if rec:
                 with contextlib.suppress(Exception):

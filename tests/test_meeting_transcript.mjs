@@ -87,3 +87,21 @@ test('minutes are scoped to the selected recording and warn about new or correct
   assert.equal(minutesContent({...meeting,utterances:[...meeting.utterances,row('3','New')]},'r1').current,false);
   assert.equal(minutesContent({...meeting,minutes:[{...meeting.minutes[0],status:'building'}]},'r1').current,false);
 });
+
+test('completed assistant speech interleaves with people and is searchable without altering human evidence',()=>{
+  const human=row('h','What is the repo?',1000,{speaker:'Alice'});
+  const assistant=row('a','https://github.com/example/assembly',6000,{speaker:'Echooo AI',assistant:true});
+  const meeting={utterances:[human],assistant_utterances:[assistant],sections:[],overviews:[{scope_key:'r1',revision:1,evidence_ids:['h']}],revision:1};
+  const content=recordingContent(meeting,'r1');
+  assert.deepEqual(content.records.map(u=>u.id),['h','a']);
+  assert.deepEqual(transcriptMatches(content.records,'github'),['a']);
+  assert.equal(content.overviewCurrent,true);
+  assert.equal(playingUtterance(content.records,6500),null); // Outbound TTS may be absent from the recording.
+  assert.deepEqual(meeting.utterances,[human]);
+  assert.equal(recordingContent(meeting,'notes').records.length,0);
+});
+
+test('assistant responses retain individual turns even when consecutive',()=>{
+  const rows=[row('a','First reply',1000,{speaker:'Echooo AI',assistant:true}),row('b','Second reply',4500,{speaker:'Echooo AI',assistant:true})];
+  assert.equal(groupTranscript(rows).length,2);
+});

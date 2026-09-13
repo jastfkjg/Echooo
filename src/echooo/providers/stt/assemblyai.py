@@ -29,6 +29,16 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
         }
         if self.speaker_labels:
             params["speaker_labels"] = "true"
+        params["include_partial_turns"] = "true"
+        if self.settings.assemblyai_speech_model == "universal-3-5-pro":
+            params["continuous_partials"] = "true"
+            params["interruption_delay"] = self.settings.assemblyai_interruption_delay
+            if self.settings.assemblyai_language_codes:
+                params["language_codes"] = json.dumps(self.settings.assemblyai_language_codes)
+            if self.settings.assemblyai_prompt:
+                params["prompt"] = self.settings.assemblyai_prompt
+        if self.settings.assemblyai_keyterms:
+            params["keyterms_prompt"] = json.dumps(self.settings.assemblyai_keyterms, ensure_ascii=False)
         if self.settings.assemblyai_min_turn_silence is not None:
             params["min_turn_silence"] = self.settings.assemblyai_min_turn_silence
         if self.settings.assemblyai_max_turn_silence is not None:
@@ -93,6 +103,8 @@ class AssemblyAIStreamingSTT(SpeechToTextProvider):
             )
         if kind == "Termination":
             return STTEvent(type=STTEventType.TERMINATED, raw=message)
+        if kind == "SpeakerRevision":
+            return STTEvent(type=STTEventType.SPEAKER_REVISION, raw=message)
         if kind in {"Error", "SessionError"}:
             return STTEvent(
                 type=STTEventType.ERROR,

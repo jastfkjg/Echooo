@@ -89,7 +89,7 @@ Choose a [voice compatible with the model and region](https://help.aliyun.com/zh
 For supported Qwen-Audio-TTS and CosyVoice models, the conversation's **Voice options**
 menu offers model-matched presets and saves the selection for that conversation. The session API can also
 override the cloud voice with `voice: {"dashscope_voice": "longanhuan"}`;
-the self-hosted `speaker_id` (such as `中文女`) is not sent to DashScope.
+the self-hosted `speaker_id` for a locally configured voice is not sent to DashScope.
 Existing sessions without this override use `DASHSCOPE_TTS_VOICE`.
 
 Echooo can upload a WAV, MP3, or M4A sample from **Voice options → Manage custom voices**,
@@ -168,11 +168,41 @@ Automated tests use simulated provider events or HTTP transports to verify proto
 
 Live audio saving does not wait for the STT socket. Reconnects use absolute audio
 sample offsets and connection-scoped turn IDs. When a recording stops, a durable
-verification job checks the saved audio and fills uncovered word intervals;
-existing text and edits remain intact. Summary refresh happens after verification.
+verification job checks the saved audio, refines machine-generated text and speaker
+labels, and fills uncovered word intervals. Human-edited fields remain intact;
+legacy records without provenance retain their text. Passage IDs and audio anchors
+survive correction, and affected notes become stale. Summary refresh happens after verification.
 The `meeting_recording_transcriptions` table is created on startup without a
 recordings-table rewrite. In-flight jobs resume at startup or when the meeting is
 opened. Run only one application worker, including recovery workers.
+
+The additive `meeting_utterance_sources` table stores session/turn references,
+word timestamps, and field-level edit provenance. Streaming `SpeakerRevision`
+events are applied before termination; word-level speaker changes split passages.
+Speaker labels remain connection-scoped during live reconnects; full-recording
+verification reconciles them afterward. No participant identity is guessed from
+an unknown/short utterance, and independent recordings are not voiceprint-matched.
+
+Both recording paths publish temporary text and durable corrections over the
+owner-authenticated `GET /api/meetings/{mid}/events` SSE endpoint. Configure proxies
+to stream this endpoint without response buffering (the response also sets
+`X-Accel-Buffering: no`). Heartbeats keep idle streams alive; reconnect/overflow
+reloads saved state. The existing 3-second refresh remains a status/fallback path
+and continues while notes are generated. Temporary text is not stored as evidence.
+
+The live provider example uses `balanced`, 160ms minimum silence, 1000ms maximum
+silence and `ASSEMBLYAI_INTERRUPTION_DELAY=0`, with continuous partials explicitly
+enabled even during diarization. `ASSEMBLYAI_LANGUAGE_CODES=zh,en` steers Chinese/
+English recognition; leave it empty for unrestricted supported languages.
+`ASSEMBLYAI_KEYTERMS` is a comma-separated vocabulary (up to 100 terms), and
+`ASSEMBLYAI_PROMPT` optionally describes the meeting domain (up to 1750 characters).
+Restart the app after changing environment settings. AssemblyAI still controls
+partial emission cadence; these settings do not promise word-by-word output.
+
+`STT delivery` logs report the first partial/final events, queued frame count, and
+the gap between received audio samples and the last recognized word. These are
+server-side diagnostics, not a measured microphone-to-browser latency. Use real
+recordings to compare first-text latency, update intervals and final latency.
 
 Use `POST /api/meetings/{mid}/recordings/{rid}/transcribe` to check a saved recording
 or retry a failed check. It returns 202 with meeting state; poll the existing

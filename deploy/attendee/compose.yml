@@ -1,0 +1,79 @@
+name: echooo-attendee
+x-app: &app
+  image: echooo-attendee:60e885df
+  platform: linux/amd64
+  env_file: ../../.local/attendee.env
+  environment:
+    DJANGO_SETTINGS_MODULE: attendee.settings.echooo
+    POSTGRES_HOST: postgres
+    REDIS_URL: redis://redis:6379/5
+    DISABLE_SIGNUP: 'true'
+    CHARGE_CREDITS_FOR_BOTS: 'false'
+    CONCURRENT_BOTS_LIMIT: '1'
+  volumes:
+    - ./settings.py:/attendee/attendee/settings/echooo.py:ro
+    - ./bootstrap.py:/attendee/echooo_bootstrap.py:ro
+    - ./worker.sh:/echooo-worker.sh:ro
+    - ./local_debug.py:/attendee/attendee/echooo_debug.py:ro
+    - ./urls.py:/attendee/attendee/echooo_urls.py:ro
+    - ./audio_bridge.py:/attendee/attendee/echooo_audio.py:ro
+    - ../../.local/attendee-overlay/bots/zoom_web_bot_adapter/zoom_web_chromedriver_page.js:/attendee/bots/zoom_web_bot_adapter/zoom_web_chromedriver_page.js:ro
+    - ../../.local/attendee-overlay/bots/web_bot_adapter/shared_chromedriver_payload.js:/attendee/bots/web_bot_adapter/shared_chromedriver_payload.js:ro
+    - ../../.local/attendee-overlay/bots/bot_controller/bot_controller.py:/attendee/bots/bot_controller/bot_controller.py:ro
+    - ../../.local/attendee-overlay/bots/bot_controller/realtime_audio_output_manager.py:/attendee/bots/bot_controller/realtime_audio_output_manager.py:ro
+    - debug:/attendee/local-debug
+    - ../../.local/attendee-tls/server.crt:/echooo-ca.crt:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+services:
+  postgres:
+    image: postgres:15.3-alpine
+    env_file: ../../.local/attendee.env
+    environment:
+      POSTGRES_DB: attendee
+      POSTGRES_USER: attendee
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U attendee']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  api:
+    <<: *app
+    entrypoint: []
+    command: python manage.py runserver 0.0.0.0:8000 --noreload
+    ports: ['127.0.0.1:8011:8000']
+  worker:
+    <<: *app
+    entrypoint: ['/tini', '--', '/bin/bash', '/echooo-worker.sh']
+    command: ['celery', '-A', 'attendee', 'worker', '-l', 'WARNING', '--concurrency=1']
+    shm_size: 2gb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      echooo-gateway:
+        condition: service_started
+  echooo-gateway:
+    image: caddy:2.10.2-alpine
+    environment:
+      ECHOOO_PORT: ${ECHOOO_PORT:-8000}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../.local/attendee-tls:/tls:ro
+    extra_hosts: ['host.docker.internal:host-gateway']
+volumes:
+  postgres:
+  debug:

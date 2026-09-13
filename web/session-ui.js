@@ -13,15 +13,15 @@ export function domainControl(s, {icon, esc, domainName}) {
 }
 
 export function privateContextForm(domains, memories, initial, learning, {esc, icon}) {
-  return `<p class="picker-intro">Choose the knowledge Echooo can use. Your chat stays private.</p>
+  return `
     <fieldset class="domain-picker"><legend>Conversation domains</legend>
-      ${domains.map(d=>`<label class="domain-option"><input type="checkbox" name="domains" value="${esc(d.id)}" ${initial.includes(d.id)?'checked':''}><i class="domain-dot ${esc(d.color)}"></i><span class="domain-option-copy"><strong>${esc(d.name)}</strong><small>${esc(d.description||'Personal knowledge and memories')}</small></span><span class="domain-memory-count">${memories.filter(m=>m.domain_id===d.id).length} memories</span></label>`).join('')}
-      <label class="domain-option domainless-option"><input type="checkbox" id="without-memory" ${initial.length?'':'checked'}>${icon('chat')}<span class="domain-option-copy"><strong>Chat without memory</strong><small>No domains or personal knowledge are used.</small></span></label>
+      ${domains.map(d=>`<label class="domain-option"><input type="checkbox" name="domains" value="${esc(d.id)}" ${initial.includes(d.id)?'checked':''}><i class="domain-dot ${esc(d.color)}"></i><span class="domain-option-copy"><strong>${esc(d.name)}</strong>${d.description?`<small>${esc(d.description)}</small>`:''}</span><span class="domain-memory-count">${memories.filter(m=>m.domain_id===d.id).length} memories</span></label>`).join('')}
+      <label class="domain-option domainless-option"><input type="checkbox" id="without-memory" ${initial.length?'':'checked'}>${icon('chat')}<span class="domain-option-copy"><strong>Chat without memory</strong></span></label>
     </fieldset>
     <details class="picker-section" id="memory-access"><summary><span>Memory access</span><span id="memory-selection-count">No memories selected</span></summary><p class="dialog-help">Only checked memories can be read in this chat.</p><div id="private-fact-picker"></div></details>
     <details class="learning-section picker-section"><summary><span>Memory suggestions</span><span id="learning-summary">${learning?'On · review required':'Off'}</span></summary><label class="check"><input type="checkbox" name="allow_learning" ${learning?'checked':''}><span><strong>Suggest memories after the chat</strong><small>You review every suggestion before it is saved.</small></span></label><div class="form-field learning-destination"><label for="f-write">Send suggestions to</label><select name="write_domain_id" id="f-write"></select></div></details>
     <details class="picker-section advanced-options"><summary><span>Advanced settings</span><span>Conversation goal</span></summary><div class="form-field"><label for="f-goal">Conversation goal <small>Optional · do not include secrets</small></label><textarea id="f-goal" name="goal" rows="2" maxlength="2000" placeholder="What would you like to work on?"></textarea></div></details>
-    <p class="picker-note">${icon('info')}<span>Starts a new chat with these permissions. Your current conversation stays in history.</span></p>`;
+    <p class="picker-note">${icon('info')}<span>Starts a new chat. Previous conversations stay saved.</span></p>`;
 }
 
 export function bindPrivateContext(modal, domains, memories, readIds, {esc, domainName}) {

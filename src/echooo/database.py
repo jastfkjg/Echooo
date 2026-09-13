@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import (
-    JSON, LargeBinary, Column, Float, ForeignKey, Integer, MetaData, String, Table, Text,
+    JSON, Boolean, LargeBinary, Column, Float, ForeignKey, Integer, MetaData, String, Table, Text,
     UniqueConstraint, create_engine, delete, event, insert, select, text, update,
 )
 from sqlalchemy.pool import StaticPool
@@ -125,6 +125,10 @@ utterances = owned_table("meeting_utterances", meeting_ref(),
     Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE")),
     Column("speaker", String, nullable=False), Column("content", Text, nullable=False),
     Column("start_ms", Integer, nullable=False), Column("end_ms", Integer, nullable=False))
+utterance_sources = owned_table("meeting_utterance_sources", meeting_ref(),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="CASCADE"), nullable=False),
+    Column("utterance_id", String, ForeignKey("meeting_utterances.id", ondelete="CASCADE"), nullable=False),
+    Column("state", JSON, nullable=False), constraints=(UniqueConstraint("utterance_id"),))
 meeting_sections = owned_table("meeting_sections", meeting_ref(),
     Column("evidence_ids", JSON, nullable=False), Column("summary", Text, nullable=False),
     Column("items", JSON, nullable=False), Column("revision", Integer, nullable=False),
@@ -148,8 +152,50 @@ meeting_minutes = owned_table("meeting_minutes", meeting_ref(),
     Column("status", String, nullable=False),
     constraints=(UniqueConstraint("meeting_id", "scope_key"),))
 
+meeting_bots = owned_table("meeting_bots", meeting_ref(),
+    Column("meeting_url", Text, nullable=False), Column("platform", String, nullable=False),
+    Column("bot_name", String, nullable=False), Column("provider_id", String),
+    Column("state", String, nullable=False), Column("desired_state", String, nullable=False),
+    Column("callback_hash", String, nullable=False), Column("error", Text, nullable=False),
+    Column("updated_at", Float, nullable=False), Column("deadline", Float, nullable=False),
+    constraints=(UniqueConstraint("meeting_id"),))
+
+meeting_agent_settings = owned_table("meeting_agent_settings", meeting_ref(),
+    Column("connection_id", String, ForeignKey("meeting_bots.id", ondelete="CASCADE"), nullable=False),
+    Column("chat_enabled", Boolean, nullable=False), Column("voice_enabled", Boolean, nullable=False),
+    constraints=(UniqueConstraint("connection_id"),))
+
+# Private chat is deliberately separate from meeting utterances and minutes.
+meeting_agent_events = owned_table("meeting_agent_events", meeting_ref(),
+    Column("connection_id", String, nullable=False), Column("source_key", String, nullable=False),
+    Column("audience", String, nullable=False), Column("sender", String, nullable=False),
+    Column("request", Text, nullable=False), Column("response", Text, nullable=False),
+    Column("status", String, nullable=False), Column("error", Text, nullable=False),
+    constraints=(UniqueConstraint("connection_id", "source_key"),))
+
+meeting_knowledge = owned_table("meeting_knowledge", meeting_ref(),
+    Column("project_id", String, ForeignKey("domains.id", ondelete="SET NULL")),
+    Column("goal", Text, nullable=False), Column("reference_ids", JSON, nullable=False),
+    Column("grants", JSON, nullable=False), Column("revision", Integer, nullable=False),
+    constraints=(UniqueConstraint("meeting_id"),))
+meeting_answer_sources = owned_table("meeting_answer_sources", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("scope", JSON, nullable=False), Column("citations", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
+meeting_speech = owned_table("meeting_speech", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="SET NULL")),
+    Column("timing", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
+meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
+    Column("proposal_id", String, ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False),
+    Column("evidence", JSON, nullable=False),
+    constraints=(UniqueConstraint("proposal_id"),))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
-    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes]
+    meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
+    meeting_agent_settings, meeting_agent_events, utterance_sources,
+    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech]
 
 
 class Store:
