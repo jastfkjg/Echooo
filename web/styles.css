@@ -11,3 +11,13 @@
 /* Global chat stays discoverable alongside knowledge navigation. */
 .sidebar > .btn[data-action="quick-chat"]{width:100%;margin-bottom:16px;justify-content:center}
 .composer .foot > .actions{flex-shrink:0}
+
+/* Keep routine guidance secondary; preserve readable labels and status feedback. */
+.inline-help,.settings-details{margin:1rem 0;color:var(--muted)}
+.inline-help>summary,.settings-details>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:.5rem;font-size:.875rem;list-style:none}
+.inline-help>summary::before,.settings-details>summary::before{content:'›';display:inline-block;transition:transform .15s}
+.inline-help[open]>summary::before,.settings-details[open]>summary::before{transform:rotate(90deg)}
+.inline-help .form-field{margin-top:1rem;color:var(--fg)}
+.review-prompt{display:flex;align-items:center;gap:.75rem;min-height:44px;padding:.5rem 0 1rem;color:var(--accent)}
+.review-prompt svg{width:16px;height:16px}
+.settings-details .settings-section{padding:1rem 0}

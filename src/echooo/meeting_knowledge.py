@@ -1,4 +1,4 @@
-"""Explicit meeting disclosure grants and evidence-backed project updates.
+"""Live project knowledge and evidence-backed meeting updates.
 
 Domains are project containers. A meeting never inherits the default domain or a
 private-chat identity. Retrieval is restricted before a model sees any facts.
@@ -25,9 +25,7 @@ class KnowledgeInput(Input):
     project_id: str | None = None
     goal: str = Field(default='', max_length=2000)
     reference_ids: list[str] = Field(default_factory=list, max_length=12)
-    memory_ids: list[str] = Field(default_factory=list, max_length=100)
     revision: int = Field(ge=0)
-    share_with_meeting: bool = False
 
 
 LEARN_SYSTEM = """Prepare project memory updates from the supplied human meeting passages.
@@ -77,16 +75,11 @@ class MeetingKnowledge:
         with self.store.scope(who) as r:
             cfg = self.config(r, mid)
             project = r.get(db.domains, cfg['project_id']) if cfg['project_id'] else None
-            facts, stale = [], []
             allowed = {cfg['project_id'], *cfg['reference_ids']} if project else set()
-            memories = {m['id']: m for m in r.list(db.memories,
-                db.memories.c.id.in_([g['id'] for g in cfg['grants']]))} if cfg['grants'] else {}
-            for grant in cfg['grants']:
-                m = memories.get(grant['id'])
-                if (not m or m['domain_id'] not in allowed or m['version'] != grant['version']
-                    or not eligible(m)):
-                    stale.append(grant['id']); continue
-                facts.append(m)
+            facts = [m for m in r.list(db.memories, db.memories.c.domain_id.in_(allowed))
+                if eligible(m)] if allowed else []
+            facts.sort(key=lambda m: m['id'])
+            stale = []
             scope = {'revision': cfg['revision'], 'project_id': cfg['project_id'],
                 'goal': cfg['goal'], 'grants': [{'id': m['id'], 'version': m['version']} for m in facts]}
             return cfg, project, facts, stale, scope
@@ -114,8 +107,8 @@ class MeetingKnowledge:
                 r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid))
         return {'project_id': cfg['project_id'], 'project_name': project['name'] if project else None,
             'goal': cfg['goal'], 'reference_ids': cfg['reference_ids'], 'revision': cfg['revision'],
-            'memory_ids': [g['id'] for g in cfg['grants']], 'stale_count': len(stale),
-            'shared_count': len(facts), 'project_locked': locked, 'proposals': drafts}
+            'memory_ids': [m['id'] for m in facts], 'stale_count': 0, 'access': 'project',
+            'shared_count': len(facts), 'available_count': len(facts), 'project_locked': locked, 'proposals': drafts}
 
     def save(self, who, mid, data):
         with self.store.scope(who) as r:
@@ -125,21 +118,13 @@ class MeetingKnowledge:
             if data.project_id != cfg['project_id'] and any(r.list(t, t.c.meeting_id == mid)
                 for t in (db.recordings, db.utterances, db.meeting_bots, db.meeting_agent_events, db.meeting_proposal_links)):
                 raise Problem('Start a new meeting to change projects after recording or participation begins.', 409)
-            refs, mids = list(dict.fromkeys(data.reference_ids)), list(dict.fromkeys(data.memory_ids))
-            if not data.project_id and (refs or mids):
-                raise Problem('Choose a project before sharing knowledge.')
+            refs = list(dict.fromkeys(data.reference_ids))
+            if not data.project_id and refs:
+                raise Problem('Choose a project before adding reference domains.')
             for did in {data.project_id, *refs} - {None}:
                 need(r.get(db.domains, did), 'Project or reference domain')
-            if mids and not data.share_with_meeting:
-                raise Problem('Confirm that selected knowledge may be shared with everyone in this meeting.')
-            grants = []
-            for mid_ in mids:
-                m = need(r.get(db.memories, mid_), 'Memory')
-                if m['domain_id'] not in {data.project_id, *refs} or not eligible(m):
-                    raise Problem('Select unexpired, shareable memories with no audience restriction from the chosen domains.', 403)
-                grants.append({'id': m['id'], 'version': m['version']})
             values = dict(project_id=data.project_id, goal=data.goal, reference_ids=refs,
-                grants=grants, revision=cfg['revision'] + 1)
+                grants=[], revision=cfg['revision'] + 1)
             if cfg.get('id'):
                 changed = r.c.execute(update(db.meeting_knowledge).where(
                     db.meeting_knowledge.c.owner_id == who, db.meeting_knowledge.c.id == cfg['id'],
@@ -163,7 +148,10 @@ class MeetingKnowledge:
                 continue
             size += len(m['content'])
             selected.append({k: m[k] for k in ('id', 'title', 'content', 'version')})
-        return {'project': project['name'] if project else None, 'goal': cfg['goal'],
+        status = ('No project selected.' if not project else
+            'This project has no eligible shareable memories. Private, restricted, expired and unreviewed knowledge is excluded.' if not facts else
+            'Using current shareable project memories. New and updated memories are included automatically.')
+        return {'project': project['name'] if project else None, 'goal': cfg['goal'], 'knowledge_status': status,
             'knowledge': selected}, scope
 
     def receipt(self, who, mid, event_id, scope, citations):

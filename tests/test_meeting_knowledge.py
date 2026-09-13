@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 from echooo import database as db
 from echooo.meeting_agent import MeetingAgent
-from echooo.meeting_knowledge import KnowledgeInput
 from test_meeting_agent import app, client, Socket
 from test_meeting_bots import invite
 
@@ -24,11 +23,10 @@ def meeting(client, did=None):
     return client.post('/api/meetings', json={'title': 'Project review', 'project_id': did}).json()
 
 
-def configure(client, mid, did, memories=(), **extra):
+def configure(client, mid, did, **extra):
     base=f'/api/meetings/{mid}/knowledge'
     revision=client.get(base).json()['revision']
-    return client.put(base,json={'revision':revision,'project_id':did,
-        'memory_ids':[m['id'] for m in memories],'share_with_meeting':True,**extra})
+    return client.put(base,json={'revision':revision,'project_id':did,**extra})
 
 
 def connect_agent(client, app, mid):
@@ -40,18 +38,13 @@ def connect_agent(client, app, mid):
     return agent
 
 
-def test_project_selection_default_isolation_and_explicit_disclosure(client, app):
+def test_project_selection_automatically_includes_only_eligible_project_knowledge(client, app):
     a,b=domain(client,'Project A'),domain(client,'Project B')
     approved=memory(client,a,'A release is Friday.')
     private=memory(client,a,'Private budget',visibility='private')
     restricted=memory(client,a,'Internal only',audiences=['Engineering'])
     other=memory(client,b,'B release is secret.')
     m=meeting(client,a);mid=m['id']; k=app.state.meeting_knowledge
-    assert not k.context(m['owner_id'],mid,'release')[0]['knowledge']
-    for fact in [private,restricted,other]:
-        assert configure(client,mid,a,[fact]).status_code==403
-    assert configure(client,mid,a,[approved],share_with_meeting=False).status_code==400
-    assert configure(client,mid,a,[approved]).status_code==200
     context,scope=k.context(m['owner_id'],mid,'secret budget release')
     assert [x['id'] for x in context['knowledge']]==[approved['id']]
     assert other['content'] not in str(context) and private['content'] not in str(context)
@@ -64,18 +57,18 @@ def test_project_selection_default_isolation_and_explicit_disclosure(client, app
 def test_project_lock_reference_grants_and_optimistic_revision(client):
     a,b=domain(client,'A'),domain(client,'B'); ref=memory(client,b)
     m=meeting(client,a);mid=m['id']
-    cfg=configure(client,mid,a,[ref],reference_ids=[b]).json()
+    cfg=configure(client,mid,a,reference_ids=[b]).json()
     assert cfg['shared_count']==1
     assert client.put(f'/api/meetings/{mid}/knowledge',json={'project_id':a,'revision':0}).status_code==409
     client.post(f'/api/meetings/{mid}/utterances',json={'content':'Started discussion.'})
     assert configure(client,mid,b).status_code==409
-    assert configure(client,mid,a,[]).status_code==200  # Revocation stays available.
+    assert configure(client,mid,a).json()['shared_count']==0  # Removing references revokes their access.
     assert client.patch(f'/api/meetings/{mid}',json={'title':'Rename','project_id':b}).status_code==400
 
 
 async def test_cited_answers_use_selected_knowledge_and_revoke_old_history(client,app):
     did=domain(client,'A'); fact=memory(client,did)
-    m=meeting(client,did);configure(client,m['id'],did,[fact])
+    m=meeting(client,did)
     agent=connect_agent(client,app,m['id'])
     await agent.accept('first','When do we release?','public','')
     event=agent.queue.get_nowait();await agent.answer(event)
@@ -86,18 +79,18 @@ async def test_cited_answers_use_selected_knowledge_and_revoke_old_history(clien
     client.put('/api/memories/'+fact['id'],json={'title':'Changed','content':'Now Monday.',
         'visibility':'shareable','expected_version':1})
     assert not agent.manager.knowledge.valid(agent.who,agent.mid,old_scope)
-    assert not agent.manager.knowledge.context(agent.who,agent.mid,'release')[0]['knowledge']
+    assert agent.manager.knowledge.context(agent.who,agent.mid,'release')[0]['knowledge'][0]['content']=='Now Monday.'
     assert not agent.context({'id':'next','request':'When?','audience':'voice'})['recent_questions']
     assert agent.events()[0]['citations'][0]['changed']
 
 
 async def test_revocation_during_generation_prevents_send_and_foreign_citations_fail(client,app):
     did=domain(client,'A'); fact=memory(client,did); m=meeting(client,did)
-    configure(client,m['id'],did,[fact]);agent=connect_agent(client,app,m['id'])
+    agent=connect_agent(client,app,m['id'])
     agent.settings=replace(agent.settings,llm_provider='openai_compatible')
     async def revoke(*args,**kwargs):
-        cfg=agent.manager.knowledge.view(agent.who,agent.mid)
-        agent.manager.knowledge.save(agent.who,agent.mid,KnowledgeInput(project_id=did,revision=cfg['revision']))
+        with agent.store.scope(agent.who) as r:
+            r.change(db.memories,fact['id'],visibility='private')
         return {'reply':'Friday','citations':[fact['id']]}
     agent.intelligence.json_call=revoke
     await agent.accept('first','When?','public','');event=agent.queue.get_nowait()
@@ -114,7 +107,7 @@ async def test_revocation_during_generation_prevents_send_and_foreign_citations_
 
 async def test_revocation_stops_audio_but_allows_remote_stop(client,app):
     did=domain(client,'A');fact=memory(client,did);m=meeting(client,did)
-    configure(client,m['id'],did,[fact]);agent=connect_agent(client,app,m['id'])
+    agent=connect_agent(client,app,m['id'])
     agent.speech_scope=agent.manager.knowledge.snapshot(agent.who,agent.mid)[4]
     socket=agent.manager.sockets[agent.cid]=Socket(agent)
     await agent.playback.start(24000)
@@ -138,10 +131,11 @@ def test_meeting_memory_review_and_next_meeting_cycle(client,app):
         'content':p['content'],'visibility':'shareable'}).json()
     saved=result['memory'];assert saved['domain_id']==did
     assert saved['provenance']['meeting_id']==m['id']
-    next_meeting=meeting(client,did);configure(client,next_meeting['id'],did,[saved])
+    next_meeting=meeting(client,did)
     context,_=app.state.meeting_knowledge.context(m['owner_id'],next_meeting['id'],'release')
     assert context['knowledge'][0]['content']==passage['content']
-    assert configure(client,meeting(client,other)['id'],other,[saved]).status_code==403
+    other_meeting=meeting(client,other)
+    assert not app.state.meeting_knowledge.context(m['owner_id'],other_meeting['id'],'release')[0]['knowledge']
     assert client.delete(base).status_code==200
     assert client.get(f'/api/domains/{did}/memories').json()==[]
     assert client.get('/api/proposals').json()==[]
@@ -190,7 +184,7 @@ def test_foreign_owner_project_and_memory_cannot_be_selected(client,app):
             visibility='shareable',audiences=[],expires_at=None,source_id=None,provenance={},version=1,updated_at=time.time())
     assert client.post('/api/meetings',json={'title':'Forbidden','project_id':d['id']}).status_code==404
     own=domain(client,'Own project');m=meeting(client,own)
-    assert configure(client,m['id'],own,[fact]).status_code==404
+    assert not app.state.meeting_knowledge.context(m['owner_id'],m['id'],'Foreign owner content')[0]['knowledge']
     assert configure(client,m['id'],own,reference_ids=[d['id']]).status_code==404
 
 
@@ -234,12 +228,13 @@ def test_additive_schema_upgrade_preserves_existing_meetings_and_memories(tmp_pa
         d=r.add(db.domains,name='Legacy',description='',color='sage')
         m=r.add(db.meetings,title='Existing meeting',status='ended',revision=1)
         u=r.add(db.utterances,meeting_id=m['id'],recording_id=None,speaker='Alice',content='Preserve this passage.',start_ms=0,end_ms=0)
-    db.metadata.drop_all(store.engine,tables=[db.meeting_answer_sources,db.meeting_proposal_links,db.meeting_knowledge])
+    db.metadata.drop_all(store.engine,tables=[db.meeting_answer_sources,db.meeting_proposal_links,db.meeting_knowledge,db.meeting_speech])
     store.engine.dispose();upgraded=db.Store(url)
     with upgraded.scope(who) as r:
         assert r.get(db.meetings,m['id'])['title']=='Existing meeting'
         assert r.get(db.utterances,u['id'])['content']=='Preserve this passage.'
         assert not r.list(db.meeting_knowledge)
+        assert not r.list(db.meeting_speech)
         assert r.get(db.domains,d['id'])['name']=='Legacy'
     upgraded.engine.dispose()
 
@@ -255,3 +250,92 @@ async def test_transcript_citations_show_corrections_instead_of_replacing_eviden
     client.patch(base+'/utterances/'+u['id'],json={'speaker':'Alice','content':'Monday is only a proposal.'})
     source=agent.events()[0]['citations'][0]
     assert source['changed'] and not source['content']
+
+
+def test_creation_can_share_current_project_memories_without_hidden_second_setup(client, app):
+    did, other = domain(client, 'Assembly.AI'), domain(client, 'Other')
+    repo = memory(client, did, 'Repo link: https://github.com/example/assembly')
+    private = memory(client, did, 'Private roadmap', visibility='private')
+    restricted = memory(client, did, 'Internal repo', audiences=['Engineering'])
+    expired = memory(client, did, 'Old repo')
+    with app.state.meeting_knowledge.store.scope(expired['owner_id']) as r:
+        r.change(db.memories, expired['id'], expires_at=1)
+    foreign = memory(client, other, 'Other repo')
+    m = client.post('/api/meetings', json={'title': 'Repo review', 'project_id': did}).json()
+    k = app.state.meeting_knowledge
+    cfg = k.view(m['owner_id'], m['id'])
+    assert cfg['shared_count'] == cfg['available_count'] == 1
+    context, _ = k.context(m['owner_id'], m['id'], 'What is our GitHub repo link?')
+    assert [x['id'] for x in context['knowledge']] == [repo['id']]
+    assert all(x['content'] not in str(context) for x in (private, restricted, expired, foreign))
+    # Later eligible additions are picked up without reopening meeting settings.
+    memory(client, did, 'Another shareable fact')
+    assert k.view(m['owner_id'], m['id'])['shared_count'] == 2
+    assert k.view(m['owner_id'], m['id'])['available_count'] == 2
+    assert client.post('/api/meetings', json={'title': 'Invalid', 'share_project_knowledge': True}).status_code == 422
+
+
+async def test_repo_question_reaches_model_with_shared_memory_and_returns_citation(client, app):
+    did = domain(client, 'Assembly.AI')
+    repo = memory(client, did, 'Repo link: https://github.com/example/assembly')
+    m = client.post('/api/meetings', json={'title': 'Repo review', 'project_id': did}).json()
+    agent = connect_agent(client, app, m['id'])
+    agent.settings = replace(agent.settings, llm_provider='openai_compatible')
+    async def answer(system, context, **kwargs):
+        assert context['project'] == 'Assembly.AI'
+        assert context['knowledge'][0]['content'] == repo['content']
+        return {'reply': repo['content'], 'citations': [repo['id']]}
+    agent.intelligence.json_call = answer
+    await agent.accept('repo', 'What is our GitHub repo link?', 'public', '')
+    event = agent.queue.get_nowait()
+    await agent.answer(event)
+    assert agent.manager.client.chats[-1][0] == repo['content']
+    assert agent.events()[-1]['citations'][0]['id'] == repo['id']
+
+
+def test_legacy_empty_or_partial_grants_do_not_block_live_project_access(client, app):
+    did = domain(client, 'Assembly.AI')
+    repo = memory(client, did, 'Repo link: https://github.com/example/assembly')
+    m = meeting(client, did)
+    context, _ = app.state.meeting_knowledge.context(m['owner_id'], m['id'], 'repo')
+    assert context['knowledge'][0]['id'] == repo['id']
+    with app.state.store.scope(m['owner_id']) as r:
+        cfg=app.state.meeting_knowledge.config(r,m['id'])
+        r.change(db.meeting_knowledge,cfg['id'],grants=[{'id':repo['id'],'version':0}])
+    assert app.state.meeting_knowledge.view(m['owner_id'],m['id'])['shared_count']==1
+    assert app.state.meeting_knowledge.view(m['owner_id'],m['id'])['stale_count']==0
+
+
+def test_project_settings_reject_removed_manual_grant_fields(client):
+    did=domain(client,'A');m=meeting(client,did)
+    assert configure(client,m['id'],did,memory_ids=[]).status_code==422
+    assert configure(client,m['id'],did,share_with_meeting=False).status_code==422
+
+
+def test_changing_visibility_restrictions_expiry_or_deleting_revokes_live_access(client,app):
+    import time
+    did=domain(client,'A');fact=memory(client,did);m=meeting(client,did)
+    k=app.state.meeting_knowledge;who=m['owner_id'];mid=m['id']
+    for change in ({'visibility':'private'},{'audiences':['Team']},{'expires_at':time.time()-1}):
+        scope=k.snapshot(who,mid)[4]
+        with app.state.store.scope(who) as r:r.change(db.memories,fact['id'],**change)
+        assert not k.context(who,mid,'release')[0]['knowledge']
+        assert not k.valid(who,mid,scope)
+        with app.state.store.scope(who) as r:r.change(db.memories,fact['id'],visibility='shareable',audiences=[],expires_at=None)
+        assert k.view(who,mid)['shared_count']==1
+    client.delete('/api/memories/'+fact['id'])
+    assert k.view(who,mid)['shared_count']==0
+
+
+def test_large_projects_have_no_manual_selection_limit_and_retrieve_relevant_facts(client,app):
+    import time
+    did=domain(client,'Large');m=meeting(client,did)
+    with app.state.store.scope(m['owner_id']) as r:
+        for n in range(125):
+            r.add(db.memories,domain_id=did,title=f'Fact {n}',content=f'Generic unrelated fact {n}',visibility='shareable',audiences=[],expires_at=None,source_id=None,provenance={},version=1,updated_at=time.time())
+    target=memory(client,did,'GitHub repository link is https://github.com/example/assembly')
+    k=app.state.meeting_knowledge
+    assert k.view(m['owner_id'],m['id'])['shared_count']==126
+    context,_=k.context(m['owner_id'],m['id'],'GitHub repository link')
+    assert target['id'] in [x['id'] for x in context['knowledge']]
+    assert len(context['knowledge'])<=12

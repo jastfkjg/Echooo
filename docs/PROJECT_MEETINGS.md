@@ -1,138 +1,86 @@
 # Project meetings
 
-Echooo is a personally managed project meeting assistant. In a meeting it is an
-independent AI participant, using the discussion and explicitly selected project
-knowledge. Personal advice and private knowledge remain in the private workspace.
-This release does not provide shared team administration or verified attendee groups.
+Echooo is a personally managed assistant that joins a meeting as an independent AI
+participant. Selecting a project makes its current shareable knowledge available to
+that meeting. There is no separate memory-selection or disclosure checkbox.
 
-## Before the meeting
+## Set up a project meeting
 
-1. Create a knowledge domain for the project in **My domains**. Existing domains
-   already work as projects; there is no duplicate project catalogue.
-2. Add confirmed memories, or import a document and review its extracted memories.
-   Only unexpired memories marked **Shareable**, with no audience restriction, are
-   eligible for meeting disclosure in this version. Raw uploads and pending proposals
-   are not included automatically.
-3. Create a meeting and optionally select its project. Existing meetings start with
-   no project or shared knowledge. The meeting URL never determines the project.
-4. Open **Project & knowledge**, add an optional meeting goal, and select the memories
-   that everyone in this meeting may hear. **Reference domains** provides optional
-   additional sources. Confirm the disclosure checkbox and save.
+1. Create a project in **My domains**, or use an existing domain.
+2. Add confirmed memories. Mark information **Shareable** if it may be used in project
+   meetings. Private, audience-restricted, expired and unreviewed information is excluded.
+3. Create a meeting and select the project. Its eligible memories are available immediately.
+4. Open the project name to set an optional meeting goal. **Knowledge** previews available
+   memories; **More options** adds reference projects.
 
-A project association alone grants no knowledge access. No project means the bot uses
-only the meeting discussion; it does not fall back to the `default` domain. The goal
-is public assistant context, so it must not contain private supervision instructions.
-A private message to the meeting bot does not authenticate someone as the owner or
-unlock private knowledge.
+New shareable memories and edits become available automatically on the next request.
+Marking a memory private, restricting it, expiring it or deleting it removes access.
+The meeting header shows the current available count. Projects with more than 100
+memories are supported; there is no per-meeting selection limit.
 
-The main project is fixed once recording, transcript entry, or bot participation
-begins. Start another meeting to change it. Knowledge selections and the goal can
-still be revised, including revoking all shared knowledge. Saving settings cancels
-pending bot replies. Changing or expiring a selected memory invalidates its grant;
-reopen settings to review its current version before sharing again.
+Existing project meetings adopt this behavior too, including meetings whose legacy
+selection was empty or partial. No-project meetings still use only their discussion;
+they never inherit the `default` domain. The main project is fixed after the meeting
+starts. Reference projects are read-only; reviewed updates go to the main project.
 
-## During the meeting
+Raw source documents are currently private. Import a source, extract memories and review
+them before making them shareable. This release does not infer attendee group membership
+or give private knowledge to someone who sends the bot a private message.
 
-The bot retrieves only from the selected, still-valid memories. Retrieval uses the
-existing lexical ranking with a bounded fallback for paraphrases: at most 12 memories
-and 30,000 content characters. There is no global search or vector index in this release.
-Public replies and private meeting-chat replies use the same approved project scope;
-private replies may additionally use only that sender's private chat history.
+## During a meeting
 
-Open **Assistant activity → Sources** to inspect the memories and transcript passages
-cited by a reply. Memory references carry a version; changed sources are labelled
-instead of displaying new text as if it supported the old answer. Transcript references
-can open the supporting conversation. References persist after the bot leaves.
+**Transcript** includes completed spoken replies under **Echooo AI**. Older reply times
+are approximate (`~`); new replies have recording-clock anchors. Outbound speech may
+not be in the mixed recording, so these entries do not offer **Play original**. They
+are searchable and export as `assistant_utterances`, separately from human evidence.
 
-Citation IDs are checked against the exact input supplied to the model. This validates
-source membership, not whether every claim is entailed by a source. Answers and
-attribution still need evaluation. The audio transport, wake word, follow-up model,
-and interruption controls continue to work as before.
+Use **… → Messages & activity** for private chat, delivery errors and reply sources.
+Interrupted or failed output stays there rather than appearing as completed speech.
+Memory citations retain their version and show when the source changed. Passage
+citations open the supporting conversation.
 
-Grants are revalidated after generation and on outgoing audio commands. Earlier
-knowledge-bearing replies are excluded from model history after their scope changes.
-Revocation cannot retract speech already heard, an in-flight chat delivery, or words
-that participants have repeated into the public transcript.
+All eligible project memories participate in retrieval. Each answer receives a relevant
+subset of at most 12 memories and 30,000 content characters, using lexical ranking and
+a bounded fallback. Access is checked before generation, after generation and during
+outgoing audio. Changes during a reply can stop that reply; the next request uses
+current knowledge. Older answers with an obsolete knowledge scope are excluded from
+model history. Revocation cannot retract words already heard or repeated publicly.
 
-## After the meeting
+Citation validation checks that supplied sources exist in the model input; it does
+not prove every claim is supported. Meeting summaries and answers still need review.
+
+## Save meeting outcomes
 
 1. End the meeting.
-2. In **Summary & notes → Project updates**, select **Prepare updates**.
-3. Review each draft's wording and supporting passages. It may add a memory or propose
-   replacing one in the main project. Reference domains are never write destinations.
-4. Choose **Confirm & save**, or **Dismiss**. New memories default to private. The
-   optional **Make available for future meeting sharing** checkbox makes them eligible
-   for explicit selection in a future meeting; it does not automatically share them.
+2. In **Summary & notes → Project updates**, choose **Prepare updates**.
+3. Review wording, attribution and supporting passages.
+4. **Confirm & save**, or **Dismiss**.
 
-Extraction processes the transcript in bounded batches and compares it with relevant
-memories from the main project. This owner-only review process may read private
-project memories for comparison; they never enter public bot replies through that
-path. Private meeting chat is excluded. Known assistant speakers and text matching
-recorded bot answers are excluded conservatively; mixed-audio attribution is imperfect,
-so review the speaker and original evidence before accepting a draft.
+New memories default to private. Choosing **Shareable in project meetings** makes the
+saved memory available to meetings using that project. Assistant replies and private
+chat are excluded from human evidence. Changes to evidence or replacement targets
+block stale approvals. Drafts preserve proposals, decisions and uncertainties as
+separate concepts; approving a memory does not authorize an external action.
 
-Proposals retain passage IDs, speaker attribution, recording positions, and a content
-fingerprint. Corrected or removed evidence blocks approval. A changed replacement
-version also blocks saving over the newer memory. Dismiss stale drafts before preparing
-new ones. Repeated preparation returns existing unreviewed or approved drafts rather
-than adding duplicates. If every previous draft was dismissed, an explicit preparation
-request can create a fresh set.
+Extraction processes the full transcript in bounded batches. Later statements can
+change earlier conclusions, so review the source context. Deleting a meeting or
+recording also removes linked proposals and reviewed memory derivatives. Existing
+recording and provider retention policies continue to apply.
 
-Approving a memory confirms a record; it does not approve a business commitment or
-execute an external action. Statements of possibility, personal promises, adopted
-decisions and unresolved conflicts must remain distinct. Model classification is not
-proof of consensus. Compare related passages across the meeting during review,
-especially when a later discussion reverses an earlier proposal.
+## API and upgrade
 
-Deleting a meeting or recording removes its linked proposals and reviewed memory
-derivatives, including dependent conversation copies handled by the existing deletion
-logic. Recording deletion can therefore affect project memories. Original audio,
-transcript retention, backups and provider retention follow the existing operations
-policies. Knowledge-source revocation does not delete the public meeting recording.
+- `POST /api/meetings`: `title` and optional `project_id`.
+- `GET /api/meetings/{id}/knowledge`: current settings, eligible memories and drafts.
+- `PUT /api/meetings/{id}/knowledge`: `project_id`, `goal`, `reference_ids`, `revision`.
+- `POST /api/meetings/{id}/memory-proposals`: prepare updates after ending.
+- `POST /api/proposals/{id}/review`: approve or reject a draft.
 
-## Implementation
+The former `memory_ids`, `share_with_meeting` and `share_project_knowledge` input fields
+are no longer accepted. Legacy stored grants remain for schema compatibility but no
+longer restrict project retrieval. Per-answer receipts still record the exact scope
+and source versions used. All reads remain owner-scoped; private-chat and delegation
+permissions are unchanged.
 
-The upgrade adds three owner-scoped tables without changing existing recording tables:
-
-| Table | Purpose |
-| --- | --- |
-| `meeting_knowledge` | Primary domain, references, public goal, versioned disclosure grants and settings revision |
-| `meeting_answer_sources` | Reply scope and validated source references |
-| `meeting_proposal_links` | Meeting provenance and fingerprints for reviewed memory proposals |
-
-`meeting_knowledge.py` owns scope validation, restricted retrieval and draft extraction.
-`meeting_agent.py` integrates project context and playback revalidation. The existing
-proposal review and memory-version machinery handles approved writes.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/meetings` | Optional `project_id` on creation |
-| `GET /api/meetings/{id}/knowledge` | Project settings, grant health and linked drafts |
-| `PUT /api/meetings/{id}/knowledge` | Revision-checked settings and explicit disclosure consent |
-| `POST /api/meetings/{id}/memory-proposals` | Owner-triggered extraction after the meeting ends |
-| `POST /api/proposals/{id}/review` | Existing approval/rejection route, with meeting-evidence validation |
-
-The detail/export response includes `knowledge`; the meeting library includes project
-names. All new tables participate in owner scoping and PostgreSQL RLS. Project/domain
-and disclosure restrictions are application checks in addition to owner-level RLS.
-
-Restart Echooo after upgrading. The new tables are created on startup. Existing meetings
-retain all recordings and remain unscoped until configured; meetings that have already
-started cannot acquire a different project retrospectively. No Attendee rebuild is
-required for this feature.
-
-## Validation and limits
-
-Integration tests cover project isolation, explicit disclosure, reference-only domains,
-project locking, revision conflicts, cited answers, revoked generation/playback,
-source changes, draft review, evidence correction, assistant-text exclusion, foreign
-citations, and a two-meeting memory cycle. Mock extraction is explicitly a local demo;
-it is not a semantic quality evaluation. Multi-owner collaboration, automatic sharing,
-verified meeting identities, automatic writes, external actions and raw-document
-retrieval are outside this first version.
-
-Release checks: 224 Python tests passed (one optional PostgreSQL test skipped), and
-66 JavaScript tests passed. The isolated browser walkthrough covered creation, sharing,
-review and citations on desktop/mobile in light/dark themes. A synthetic live-model
-check exercised grounded answers and updates. The existing meeting transport was not
-retested in a new external call for this release.
+Restart the local app and refresh browser tabs after upgrading. No Attendee rebuild
+is required. Regression tests cover live additions, updates, permission revocation,
+large projects, references, citations, cross-owner isolation and reviewed writes.

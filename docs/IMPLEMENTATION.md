@@ -171,3 +171,54 @@ not a broad model-quality benchmark or a new live Zoom/Google Meet integration t
 
 The local application was started with the new schema after a SQLite backup. No
 Attendee rebuild or new external service is required for project knowledge.
+
+
+## Meeting transcript and project setup fixes — 2026-09-13
+
+Completed Echooo speech now appears in the transcript as separate AI entries, including
+historical replies beyond the recent activity limit. New playback anchors use recording
+samples; historical positions are visibly approximate. Search includes AI replies;
+private chat and uncompleted output remain in activity. AI entries are not human memory
+evidence and do not offer misleading original-audio playback controls.
+
+The new-meeting form exposes sharing alongside project selection, with an eligible
+memory count and a clear disclosure checkbox. Settings include a select-all control;
+empty grants and stale knowledge have visible feedback. The model receives the actual
+access limitation instead of being left to infer why project knowledge is missing.
+
+Verification: 231 Python tests passed, with one optional PostgreSQL test skipped;
+68 JavaScript tests passed. Regression coverage includes repo retrieval and citations,
+project isolation, expiration, legacy transcript recovery, completed audio anchors,
+private/interrupted output exclusion and recording deletion.
+
+The browser walkthrough verified creation-time sharing, repairing an empty selection,
+and interleaved spoken replies on desktop/mobile and in dark mode. The configured
+live model returned the expected repo URL with its authorized memory citation. The
+running local app also returned historical spoken replies and the repaired knowledge
+selection. No new external meeting call was made for this fix.
+
+
+## Simplified project access and workspace UI — 2026-09-13
+
+This update supersedes the manual selection and creation-time sharing checkbox above.
+Choosing a meeting project now authorizes all its current eligible shareable memories.
+Additions and edits apply automatically; visibility, restrictions, expiry and deletion
+remain enforced before model access and during playback. Legacy empty or partial
+selections no longer block project knowledge. Private chats and delegations retain
+their existing permissions.
+
+Project settings show the project, optional goal and a collapsed knowledge preview;
+reference projects live under More options. Messages & activity moves from the main
+meeting heading to the overflow menu, retaining private messages, errors and citations.
+Home, domain, conversation, review and settings pages remove repeated explanatory copy.
+Memory editing moves audience/expiry fields behind an expandable section, opened when
+existing restrictions need attention. Essential disclosure and destructive-action
+consequences remain visible. All interface text stays in English.
+
+Validation: 234 Python tests passed (one optional PostgreSQL test skipped), and
+68 JavaScript tests passed. The updated private-context presentation also passed its
+10-test JavaScript suite. Browser checks covered project settings on desktop/mobile,
+creation without sharing checkboxes, newly reviewed knowledge appearing in an existing
+meeting, the secondary activity menu and focus return, and simplified home/domain/
+review/conversation/settings pages in light and dark mode. The running local API
+confirmed automatic project access. No external meeting call was started for this update.

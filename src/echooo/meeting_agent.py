@@ -55,6 +55,8 @@ distinguish documented facts from current discussion and general suggestions. Ci
 the IDs of knowledge or discussion passages actually supporting your answer. Never
 claim access to another project or private knowledge. Briefly name the source in
 spoken answers when useful; never read internal IDs aloud.
+If knowledge is missing, use knowledge_status to explain the actual access limitation.
+Only eligible shareable project memories are available; private or unreviewed sources are excluded.
 Do not say your own wake name in a spoken reply. Return JSON: {"reply": "...", "citations": ["source id"]}."""
 
 
@@ -467,6 +469,7 @@ class MeetingAgent:
         await ws.send_json(packet)
 
     async def speak(self, text, event):
+        from echooo.meeting_speech import mark_speech
         if self.settings.tts_provider == 'browser':
             raise ValueError('Server speech synthesis is not configured')
         # Let the addressed speaker finish, and discard a stale answer if discussion continues.
@@ -496,17 +499,22 @@ class MeetingAgent:
                     self.phase = 'speaking'
                 if not streamed:
                     self.change(event, status='speaking')
-                streamed = True
                 await self.playback.chunk(bytes(pending[:size]))
+                if not streamed:
+                    mark_speech(self, event)
+                streamed = True
                 del pending[:size]
         if pending and rate and len(pending) % 2 == 0:
             if self.phase != 'paused':
                 self.phase = 'speaking'
             await self.playback.chunk(bytes(pending))
+            if not streamed:
+                mark_speech(self, event)
             streamed = True
         if not streamed or (pending and len(pending) % 2):
             raise ValueError('Speech provider returned incomplete audio')
         await self.playback.finish()
+        mark_speech(self, event, complete=True)
         self.echo_until = time.monotonic() + 2
         if self.conversation_until:
             self.conversation_until = time.monotonic() + 15

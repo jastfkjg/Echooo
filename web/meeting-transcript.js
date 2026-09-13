@@ -8,7 +8,7 @@ export function groupTranscript(records) {
   const groups = [];
   for (const record of records) {
     const last = groups.at(-1), speaker = speakerName(record.speaker);
-    if (last && last.speaker === speaker && last.recordingId === record.recording_id &&
+    if (last && !record.assistant && !last.records[0].assistant && last.speaker === speaker && last.recordingId === record.recording_id &&
         record.start_ms - last.records.at(-1).end_ms <= 12000 &&
         record.start_ms - last.records[0].start_ms <= 45000 &&
         last.length + record.content.length <= 450) {
@@ -21,13 +21,16 @@ export function groupTranscript(records) {
   return groups;
 }
 
+export const transcriptRecords = meeting => [...meeting.utterances,...(meeting.assistant_utterances||[])];
+
 export function recordingContent(meeting, recordingId) {
-  const records = meeting.utterances.filter(u=>u.recording_id === (recordingId==='notes'?null:recordingId)).sort((a,b)=>a.start_ms-b.start_ms||a.end_ms-b.end_ms||(a.created_at||0)-(b.created_at||0));
-  const ids = new Set(records.map(u=>u.id));
+  const records = transcriptRecords(meeting).filter(u=>u.recording_id === (recordingId==='notes'?null:recordingId)).sort((a,b)=>a.start_ms-b.start_ms||a.end_ms-b.end_ms||(a.created_at||0)-(b.created_at||0));
+  const humanRecords=records.filter(u=>!u.assistant);
+  const ids = new Set(humanRecords.map(u=>u.id));
   const sections = meeting.sections.filter(s=>s.status!=='stale' && s.evidence_ids.length && s.evidence_ids.every(id=>ids.has(id)));
   const overview = [...(meeting.overviews||[])].reverse().find(s=>s.scope_key===recordingId);
   const covered = new Set(overview?.evidence_ids||[]);
-  return {records, sections, overview, overviewCurrent:!!overview && overview.revision===meeting.revision && records.every(u=>covered.has(u.id))};
+  return {records, sections, overview, overviewCurrent:!!overview && overview.revision===meeting.revision && humanRecords.every(u=>covered.has(u.id))};
 }
 
 export function transcriptMatches(records, query) {
@@ -52,7 +55,7 @@ export function searchParts(text, query) {
 
 export function playingUtterance(records, ms) {
   // Half-open intervals prevent the preceding sentence winning at a boundary.
-  return records.find(u=>u.recording_id && u.start_ms<=ms && ms<u.end_ms)?.id || null;
+  return records.find(u=>!u.assistant && u.recording_id && u.start_ms<=ms && ms<u.end_ms)?.id || null;
 }
 
 export const findingTypes = [

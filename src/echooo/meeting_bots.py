@@ -175,6 +175,9 @@ class BotRecording:
             self.rec = r.add(db.recordings, meeting_id=self.mid, sample_rate=RATE, samples=0)
         manager.transcriptions.state(self.who, self.mid, self.rec['id'], phase='connecting' if manager.settings.stt_provider != 'mock' else 'unverified', message='')
         self.writer = TranscriptWriter(manager.store, self.who, self.mid, self.rec['id'], manager.transcriptions.feed)
+        agent = manager.agents.get(row['id'])
+        if agent:
+            agent.recording_id = self.rec['id']
         self.live = None
         if manager.settings.stt_provider != 'mock':
             stt_settings = replace(manager.settings, assemblyai_sample_rate=RATE)

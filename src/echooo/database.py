@@ -182,6 +182,11 @@ meeting_answer_sources = owned_table("meeting_answer_sources", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("scope", JSON, nullable=False), Column("citations", JSON, nullable=False),
     constraints=(UniqueConstraint("event_id"),))
+meeting_speech = owned_table("meeting_speech", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="SET NULL")),
+    Column("timing", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
 meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
     Column("proposal_id", String, ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False),
     Column("evidence", JSON, nullable=False),
@@ -190,7 +195,7 @@ meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
-    meeting_knowledge, meeting_answer_sources, meeting_proposal_links]
+    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech]
 
 
 class Store:

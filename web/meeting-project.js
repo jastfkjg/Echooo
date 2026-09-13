@@ -1,39 +1,45 @@
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const available = m => m.visibility === 'shareable' && !m.audiences.length && (!m.expires_at || m.expires_at > Date.now()/1000);
-export const projectOptions = (domains, selected) => '<option value="">No project · this meeting only</option>' + domains.map(d=>`<option value="${esc(d.id)}" ${d.id===selected?'selected':''}>${esc(d.name)}</option>`).join('');
+export const projectOptions = (domains, selected) => '<option value="">No project</option>' + domains.map(d=>`<option value="${esc(d.id)}" ${d.id===selected?'selected':''}>${esc(d.name)}</option>`).join('');
+
+export function newProjectMeeting({api,openDialog,field,projects,onCreate}) {
+  const modal=openDialog('New meeting',field('title','Meeting title','','text','required maxlength="120"')+`
+    <div class="form-field"><label for="new-project">Project <span class="muted">(optional)</span></label><select id="new-project" name="project_id">${projectOptions(projects,null)}</select><p id="new-project-sharing" class="muted" hidden>Uses all shareable project knowledge.</p></div>`,async fd=>{
+      onCreate(await api('/meetings','POST',{title:fd.get('title'),project_id:fd.get('project_id')||null}));
+    },'Create meeting');
+  modal.querySelector('#new-project').onchange=e=>{modal.querySelector('#new-project-sharing').hidden=!e.target.value;};
+  return modal;
+}
 
 export async function editMeetingKnowledge({api,openDialog,meeting,onSave}) {
   const base=`/meetings/${meeting.id}`;
   const [cfg,domains]=await Promise.all([api(`${base}/knowledge`),api('/domains')]);
-  let selected=new Set(cfg.memory_ids), referenceIds=new Set(cfg.reference_ids), pending=false, loadVersion=0;
-  const modal=openDialog('Project & knowledge',`
-    <div class="form-field"><label for="project-choice">Project</label><select id="project-choice" ${cfg.project_locked?'disabled':''}>${projectOptions(domains,cfg.project_id)}</select><p class="muted">${cfg.project_locked?'The project is fixed once recording or participation begins.':'Uses your existing knowledge domains.'}</p></div>
-    <div class="form-field"><label for="project-goal">Meeting goal <span class="muted">(optional)</span></label><input id="project-goal" maxlength="2000" value="${esc(cfg.goal)}" placeholder="What should this meeting resolve?"><p class="muted">Shared with the meeting assistant.</p></div>
-    <details class="project-references"><summary>Reference domains</summary><p class="muted">Optional sources to read from. Updates are saved only to the main project.</p>${domains.map(d=>`<label class="project-choice"><input type="checkbox" data-reference="${esc(d.id)}" ${referenceIds.has(d.id)?'checked':''}>${esc(d.name)}</label>`).join('')}</details>
-    <fieldset class="project-knowledge-list"><legend>Knowledge to share</legend><p class="muted">Only shareable memories without audience restrictions appear here.</p><div id="project-memory-options" role="status"></div></fieldset>
-    <label class="project-choice project-consent"><input id="project-share-consent" type="checkbox" ${cfg.memory_ids.length?'checked':''}>Allow selected knowledge in replies to everyone in this meeting.</label>`,async()=>{
-      if(pending)throw new Error('Wait for the knowledge list to finish loading.');
-      const result=await api(`${base}/knowledge`,'PUT',{project_id:modal.querySelector('#project-choice').value||null,
-        goal:modal.querySelector('#project-goal').value, reference_ids:[...referenceIds],memory_ids:[...selected],
-        revision:cfg.revision,share_with_meeting:modal.querySelector('#project-share-consent').checked});
-      await onSave(result);
-    },'Save settings');
-  const list=modal.querySelector('#project-memory-options'),project=modal.querySelector('#project-choice');
+  let referenceIds=new Set(cfg.reference_ids),loadVersion=0;
+  const modal=openDialog('Project settings',`
+    <div class="form-field"><label for="project-choice">Project</label><select id="project-choice" ${cfg.project_locked?'disabled title="Fixed after the meeting starts"':''}>${projectOptions(domains,cfg.project_id)}</select></div>
+    <div class="form-field"><label for="project-goal">Meeting goal <span class="muted">(optional)</span></label><input id="project-goal" maxlength="2000" value="${esc(cfg.goal)}" placeholder="What should this meeting resolve?"></div>
+    <p class="muted" id="project-access-note">Uses all shareable project knowledge, kept up to date.</p>
+    <details class="project-knowledge-preview"><summary id="project-knowledge-count">Knowledge</summary><div id="project-memory-options"></div></details>
+    <details class="project-references"><summary>More options</summary><p class="project-group-name">Reference projects</p>${domains.map(d=>`<label class="project-choice"><input type="checkbox" data-reference="${esc(d.id)}" ${referenceIds.has(d.id)?'checked':''}>${esc(d.name)}</label>`).join('')}<p class="muted">Updates save to the main project. Private, restricted and unreviewed knowledge stays excluded.</p>${cfg.project_locked?'<p class="muted">The main project is fixed after the meeting starts.</p>':''}</details>`,async()=>{
+      await onSave(await api(`${base}/knowledge`,'PUT',{project_id:modal.querySelector('#project-choice').value||null,
+        goal:modal.querySelector('#project-goal').value,reference_ids:[...referenceIds],revision:cfg.revision}));
+    },'Save');
+  const list=modal.querySelector('#project-memory-options'),project=modal.querySelector('#project-choice'),count=modal.querySelector('#project-knowledge-count');
   async function load(){
-    const version=++loadVersion;pending=true;list.textContent='Loading knowledge…';
+    const version=++loadVersion;count.textContent='Knowledge · Loading…';
     const ids=project.value?[...new Set([project.value,...referenceIds])]:[];
+    modal.querySelector('#project-access-note').textContent=project.value?'Uses all shareable project knowledge, kept up to date.':'Uses this meeting’s discussion only.';
     modal.querySelectorAll('[data-reference]').forEach(c=>{c.disabled=!project.value||c.dataset.reference===project.value;});
     try{
-      const groups=await Promise.all(ids.map(async id=>({domain:domains.find(d=>d.id===id),memories:await api(`/domains/${id}/memories`)})));
+      const groups=await Promise.all(ids.map(async id=>({domain:domains.find(d=>d.id===id),memories:(await api(`/domains/${id}/memories`)).filter(available)})));
       if(version!==loadVersion||!modal.open)return;
-      const eligible=groups.flatMap(g=>g.memories.filter(available));
-      selected=new Set([...selected].filter(id=>eligible.some(m=>m.id===id)));
-      list.innerHTML=groups.map(g=>{const memories=g.memories.filter(available);return memories.length?`<div class="project-memory-group"><p class="project-group-name">${esc(g.domain.name)}</p>${memories.map(m=>`<label class="project-memory-option"><input type="checkbox" data-memory="${esc(m.id)}" ${selected.has(m.id)?'checked':''}><span><strong>${esc(m.title)}</strong><span class="muted">Version ${m.version} · ${esc(m.content.slice(0,150))}${m.content.length>150?'…':''}</span></span></label>${m.content.length>150?`<details class="project-memory-full"><summary>Read full memory</summary><p>${esc(m.content)}</p></details>`:''}`).join('')}</div>`:'';}).join('')||`<p class="muted">${ids.length?'No eligible knowledge yet. Mark a confirmed memory as shareable with no audience restriction to make it available.':'Choose a project to select knowledge.'}</p>`;
-      list.querySelectorAll('[data-memory]').forEach(c=>c.onchange=()=>{c.checked?selected.add(c.dataset.memory):selected.delete(c.dataset.memory);modal.querySelector('#project-share-consent').required=selected.size>0;});
-      modal.querySelector('#project-share-consent').required=selected.size>0;pending=false;
-    }catch(e){if(version===loadVersion){list.textContent=e.message;pending=true;}}
+      const n=groups.reduce((sum,g)=>sum+g.memories.length,0);
+      count.textContent=`Knowledge · ${n} ${n===1?'memory':'memories'}`;
+      list.innerHTML=groups.filter(g=>g.memories.length).map(g=>`<div class="project-memory-group"><a href="#domain/${encodeURIComponent(g.domain.id)}/memories" data-open-project>${esc(g.domain.name)}</a>${g.memories.map(m=>`<div class="project-memory-preview"><strong>${esc(m.title)}</strong><p class="muted">${esc(m.content.slice(0,150))}${m.content.length>150?'…':''}</p></div>`).join('')}</div>`).join('')||'<p class="muted">No shareable memories yet.</p>';
+      list.querySelectorAll('[data-open-project]').forEach(a=>a.onclick=()=>modal.close());
+    }catch(e){if(version===loadVersion){count.textContent='Knowledge unavailable';list.textContent=e.message;}}
   }
-  project.onchange=()=>{selected.clear();if(!project.value){referenceIds.clear();modal.querySelectorAll('[data-reference]').forEach(c=>c.checked=false);}modal.querySelector('#project-share-consent').checked=false;load();};
+  project.onchange=()=>{if(!project.value){referenceIds.clear();modal.querySelectorAll('[data-reference]').forEach(c=>c.checked=false);}load();};
   modal.querySelectorAll('[data-reference]').forEach(c=>c.onchange=()=>{c.checked?referenceIds.add(c.dataset.reference):referenceIds.delete(c.dataset.reference);load();});
   load();
 }
@@ -42,11 +48,10 @@ export async function reviewMeetingUpdate({api,openDialog,proposal,onSave}) {
   const memories=await api(`/domains/${proposal.domain_id}/memories`);
   const targets=memories.map(m=>`<option value="${esc(m.id)}" ${m.id===proposal.target_id?'selected':''}>Replace: ${esc(m.title)} · v${m.version}</option>`).join('');
   const modal=openDialog('Review project update',`
-    <p class="muted">Check the facts and attribution before saving. This does not approve actions or commitments.</p>
     <div class="form-field"><label for="update-title">Title</label><input id="update-title" name="title" required maxlength="150" value="${esc(proposal.title)}"></div>
     <div class="form-field"><label for="update-content">Memory</label><textarea id="update-content" name="content" required maxlength="12000" rows="5">${esc(proposal.content)}</textarea></div>
     <div class="form-field"><label for="update-target">Save as</label><select id="update-target"><option value="">New memory</option>${targets}</select><p id="update-previous" class="muted"></p></div>
-    <label class="project-choice"><input id="update-shareable" type="checkbox">Make available for future meeting sharing</label>
+    <label class="project-choice"><input id="update-shareable" type="checkbox">Shareable in project meetings</label>
     <details class="project-evidence"><summary>Supporting conversation</summary>${proposal.evidence.map(e=>`<blockquote><p>${esc(e.content)}</p><footer>${esc(e.speaker||'Unidentified speaker')} · ${Math.floor((e.start_ms||0)/60000)}:${String(Math.floor((e.start_ms||0)/1000)%60).padStart(2,'0')}</footer></blockquote>`).join('')}</details>`,async fd=>{
       const target=memories.find(m=>m.id===modal.querySelector('#update-target').value);
       await api(`/proposals/${proposal.id}/review`,'POST',{decision:'approve',title:fd.get('title'),content:fd.get('content'),
