@@ -89,7 +89,7 @@ Choose a [voice compatible with the model and region](https://help.aliyun.com/zh
 For supported Qwen-Audio-TTS and CosyVoice models, the conversation's **Voice options**
 menu offers model-matched presets and saves the selection for that conversation. The session API can also
 override the cloud voice with `voice: {"dashscope_voice": "longanhuan"}`;
-the self-hosted `speaker_id` (such as `中文女`) is not sent to DashScope.
+the self-hosted `speaker_id` for a locally configured voice is not sent to DashScope.
 Existing sessions without this override use `DASHSCOPE_TTS_VOICE`.
 
 Echooo can upload a WAV, MP3, or M4A sample from **Voice options → Manage custom voices**,

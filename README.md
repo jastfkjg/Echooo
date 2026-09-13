@@ -7,6 +7,7 @@ A personal voice assistant for private conversations, domain-based memory, deleg
 - **Private chat:** start a text or voice conversation with **Talk with Echooo**. Quick chats use confirmed, unexpired memories in `default`; **Choose domains** lets you start a chat with other domains or no memory.
 - **Knowledge and memory:** organize information into domains, add memories, or import TXT, Markdown, CSV, JSON, PDF, and DOCX files. Review proposals before saving, control sharing and expiry, and inspect or restore versions.
 - **Delegation:** invite one guest into a time-limited conversation with an explicit audience, goal, and knowledge scope. Follow the transcript, approve commitments, and revoke access.
+- **Project meetings:** associate meetings with a knowledge domain, explicitly select shareable memories, inspect answer sources, and review evidence-backed project updates after the meeting. See [Project meetings](docs/PROJECT_MEETINGS.md).
 - **Meetings:** invite Echooo AI as an independent online meeting participant through self-hosted Attendee, or record tab audio and microphone together. Follow transcripts, edit passages, play original audio, and generate notes linked to supporting passages.
 
 Reading, disclosure, commitments, and memory updates have separate permissions. Guest replies are checked before publication and speech synthesis; proposed memories require review. Delegation currently supports one guest with owner supervision. External services such as calendars, email, telephony, and payments are not connected; approving a commitment does not execute a transaction.
@@ -50,6 +51,8 @@ See [Operations](docs/OPERATIONS.md#configuration) for all settings and [DashSco
 ## Record a meeting
 
 To have **Echooo AI join as a separate participant**, start the [self-hosted Attendee connector](docs/ATTENDEE.md), then use **Meetings → New meeting → Join online meeting**. It records, replies to Zoom private messages, answers public questions addressed to Echooo, and speaks when called “Echooo”. Use the chat/voice toggles or **Stop speaking** to control it. It keeps participating when you close the page; the server and Docker must remain running. Use **Leave online meeting** to remove it.
+
+Before inviting Echooo, use **Project & knowledge** to choose what everyone in the meeting may hear. No knowledge is shared automatically. After ending the meeting, use **Summary & notes → Project updates** to review proposed memory changes.
 
 For browser capture:
 

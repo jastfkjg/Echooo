@@ -2,17 +2,17 @@
 
 Echooo can invite **Echooo AI** into an online meeting as a visible, independent participant. The browser sends a join request to Echooo; a self-hosted Attendee worker joins the meeting, and sends live audio back to Echooo over an authenticated TLS WebSocket. Closing the Echooo page does not remove the participant.
 
-Echooo now answers meeting chat and speaks when explicitly addressed. It is an independent meeting assistant: it uses this meeting's discussion, has no access to personal memory, and cannot make commitments or execute external tools.
+Echooo now answers meeting chat and speaks when explicitly addressed. It is an independent meeting assistant: it uses this meeting's discussion, reads only explicitly shared project memories, and cannot make commitments or execute external tools.
 
 ## Chat and voice
 
 - **Zoom private chat:** send Echooo a message; the reply is addressed to that sender only. Private messages never enter the shared transcript, notes, or public/voice response context.
-- **Public chat:** address `Echooo` (for example `@Echooo 总结一下`). Ordinary discussion is observed without an unsolicited reply.
-- **Voice:** start with `Echooo, …` (pronounced Echo; `艾可` also works). Replies use server TTS and the bot's virtual microphone. Browser speech synthesis cannot speak into a remote meeting.
+- **Public chat:** address `Echooo` (for example `@Echooo summarize the discussion`). Ordinary discussion is observed without an unsolicited reply.
+- **Voice:** start with `Echooo, …` (pronounced Echo; Mandarin aliases are also supported). Replies use server TTS and the bot's virtual microphone. Browser speech synthesis cannot speak into a remote meeting.
 - **Continuous follow-ups:** after speech finishes playing, a 15-second attention window allows follow-ups without repeating Echooo. A fast LLM call decides `respond`, `listen`, or `end` using public meeting context and prior public/voice questions. It handles requests, corrections and answers without keyword gates. Zoom activity and STT speaker labels are imperfect hints, never authorization credentials; unknown identity alone does not reject a continuation. Clear human discussion/closure can end the window. Explicit Stop and expiry also end it. Classification runs independently of transcription; newer speech and Stop invalidate stale results. Model errors stay silent and suggest addressing Echooo explicitly. Private chat never enters this classifier.
-- **Interrupt:** explicit `停止`, `等一下`, or `stop` cancels promptly. Noise-only activity and short acknowledgements such as `嗯`, `对`, `okay` are ignored. Other interim speech pauses playback first: a single fragment resumes after about 550 ms; sustained developing speech or a substantive finalized turn yields the floor. A canceled answer never resumes automatically. Detection depends on live transcription; noisy/overlapping speech may delay it.
+- **Interrupt:** explicit `stop`, `wait`, or their Mandarin equivalents cancels promptly. Noise-only activity and short acknowledgements such as `mhm`, `yes`, `okay` are ignored. Other interim speech pauses playback first: a single fragment resumes after about 550 ms; sustained developing speech or a substantive finalized turn yields the floor. A canceled answer never resumes automatically. Detection depends on live transcription; noisy/overlapping speech may delay it.
 - **Controls:** disable chat or spoken replies independently. The participant keeps recording. **Assistant activity** shows questions, replies and failures to the workspace owner; private exchanges are labelled. “Submitted to meeting chat” means Attendee accepted the request, not an SDK delivery receipt.
-- **Context:** public replies use only this meeting's public discussion; private replies can additionally use the same sender's private thread. No personal domains, other meetings, web search, or action tools are provided.
+- **Context:** public replies use only this meeting's public discussion; private replies can additionally use the same sender's private thread. Selected project memories may be used through [Project & knowledge](PROJECT_MEETINGS.md). Unselected domains, raw records from other meetings, web search, and action tools are not provided.
 
 Zoom is the first live-tested interactive platform. The pinned Google Meet and Teams adapters post to the shared meeting chat and do not support targeted private delivery; Echooo refuses to answer a private event on those adapters. Their public chat and audio paths share the implementation but still need live platform validation.
 
@@ -173,7 +173,7 @@ Two closure cases returned `listen` rather than `end`, so those still rely on th
 attention timeout. This small check is not a general accuracy guarantee.
 
 The subsequent Google Meet retest completed the opening voice reply plus the unnamed
-follow-ups “用英文说一下” and “后续回答都用英文”. Both were accepted by the model
+follow-ups “Say that in English” and “Use English for future answers” (spoken in Mandarin). Both were accepted by the model
 (`respond`) and acknowledged as fully played, with zero reported underruns. The user
 reported the test was working. Desktop (1280 px) and mobile (390 px) status text and
 layout were checked; Google Meet private-chat replies remain unsupported.

@@ -136,3 +136,38 @@ isolation, deletion without restoration, and idempotent startup backfill. The
 browser flow on a disposable database confirmed initial provisioning, one-click
 chat, visible default scope, and end-of-chat proposals. Existing local services
 and workspace data were not restarted or migrated during validation.
+
+## Project meeting first version — September 12, 2026
+
+Added optional project association using existing knowledge domains, a compact
+Project & knowledge dialog, explicit versioned disclosure grants, restricted meeting
+retrieval, and answer citations in Assistant activity. The project is fixed after
+capture/participation begins; knowledge can be revoked independently. Private meeting
+messages do not grant personal-workspace access.
+
+Project updates now reuse the existing proposal review and versioned memory writes.
+Extraction covers bounded transcript batches, excludes private chat and known bot
+output, checks evidence IDs, and restricts replacement targets to the primary project.
+Reviewed writes validate transcript fingerprints and target versions. Deleting source
+meeting evidence removes linked drafts and reviewed derivatives. New tables are added
+on startup without rewriting existing recordings. See [Project meetings](PROJECT_MEETINGS.md)
+for the complete user flow, API surface and remaining limitations.
+
+Validation: 224 Python tests passed; one optional PostgreSQL test was skipped. All
+66 JavaScript tests passed. New integration tests cover default/foreign-owner/project
+isolation, sharing consent, references, fixed projects, stale settings, reply citations,
+revocation during generation and audio output, changed sources, reviewed learning,
+replacement conflicts, provider failure, and an additive schema upgrade. A two-meeting
+case confirms that an approved update is available only when explicitly shared into
+the next meeting.
+
+Browser checks used an isolated workspace with synthetic Atlas/Beacon projects:
+meeting creation, knowledge selection, draft preparation, evidence review, confirmation,
+and saved-answer source inspection passed. The UI was checked at desktop and 375 px
+mobile widths, with light/dark themes and reduced motion. A live model check with
+synthetic project context returned a valid memory citation and three evidence-backed
+update drafts, preserving that a revised release date had not been promised. This is
+not a broad model-quality benchmark or a new live Zoom/Google Meet integration test.
+
+The local application was started with the new schema after a SQLite backup. No
+Attendee rebuild or new external service is required for project knowledge.

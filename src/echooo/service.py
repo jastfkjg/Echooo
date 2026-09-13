@@ -105,6 +105,18 @@ class Service:
                 r.change(db.sessions, s["id"], status="revoked")
                 r.log("session.revoked", session_id=s["id"], reason="knowledge_changed")
 
+    def purge_meeting_evidence(self, r, mid, ids=None):
+        """Remove reviewed derivatives and drafts when their meeting evidence is deleted."""
+        links = r.list(db.meeting_proposal_links, db.meeting_proposal_links.c.meeting_id == mid)
+        affected = {link['proposal_id'] for link in links
+            if ids is None or any(e['id'] in ids for e in link['evidence'])}
+        memory_ids = {m['id'] for m in r.list(db.memories) if m['provenance'].get('proposal_id') in affected}
+        memory_ids.update(v['memory_id'] for v in r.list(db.versions)
+            if v['snapshot'].get('provenance', {}).get('proposal_id') in affected)
+        self._purge(r, memory_ids=memory_ids)
+        for pid in affected:
+            r.remove(db.proposals, pid)
+
     def memories(self, owner: str, domain: str) -> list[dict]:
         with self.store.scope(owner) as r:
             need(r.get(db.domains, domain), "Domain")
@@ -471,6 +483,17 @@ class Service:
             p = need(r.get(db.proposals, pid), "Proposed update")
             if p["status"] != "pending":
                 raise Problem("This update has already been reviewed.", 409)
+            meeting_links = r.list(db.meeting_proposal_links, db.meeting_proposal_links.c.proposal_id == pid)
+            if meeting_links and data.decision == 'approve':
+                from echooo.meeting_knowledge import evidence_valid
+                link = meeting_links[0]
+                if not evidence_valid(r, link['evidence']):
+                    raise Problem('The supporting transcript changed or was deleted. Dismiss this draft and prepare a new update.', 409)
+                configs = r.list(db.meeting_knowledge, db.meeting_knowledge.c.meeting_id == link['meeting_id'])
+                if not configs or configs[0]['project_id'] != p['domain_id']:
+                    raise Problem('The destination project is no longer available.', 409)
+                if data.target_id and data.target_id == p['target_id'] and data.expected_version != p['expected_version']:
+                    raise Problem('The proposed target has changed. Review the conflict before saving a new memory.', 409)
             status = "approved" if data.decision == "approve" else "rejected"
             claim = r.c.execute(update(db.proposals).where(db.proposals.c.owner_id == owner,
                 db.proposals.c.id == pid, db.proposals.c.status == "pending").values(status=status))
@@ -481,6 +504,8 @@ class Service:
                 content = MemoryInput(**data.model_dump(exclude={"decision", "target_id"}))
                 provenance = {"kind": "reviewed", "proposal_id": pid, "evidence": p["evidence"],
                     "session_id": p["session_id"], "source_id": p["source_id"]}
+                if meeting_links:
+                    provenance['meeting_id'] = meeting_links[0]['meeting_id']
                 if data.target_id:
                     current = need(r.get(db.memories, data.target_id), "Target memory")
                     if current["domain_id"] != p["domain_id"]:

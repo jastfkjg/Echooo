@@ -24,10 +24,12 @@ from echooo.meeting_transcription import RecordingTranscriptions, LiveTranscript
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
 from echooo.auth import AuthError
+from echooo.meeting_knowledge import MeetingKnowledge, KnowledgeInput
 
 
 class MeetingInput(Input):
     title: str = Field(min_length=1, max_length=120)
+    project_id: str | None = None
 
 
 class UtteranceInput(Input):
@@ -95,8 +97,11 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     captures = set()
     transcriptions = RecordingTranscriptions(store, settings, locks)
     app.state.meeting_transcriptions = transcriptions
+    knowledge = MeetingKnowledge(store, ai)
+    app.state.meeting_knowledge = knowledge
     from echooo.meeting_bots import install_meeting_bots
     bots = install_meeting_bots(app, store, settings, transcriptions, captures, owner)
+    bots.knowledge = knowledge
 
     def get(r, mid, active=False):
         m = need(r.get(db.meetings, mid), "Meeting")
@@ -113,7 +118,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 rec['transcription'] = states.get(rec['id'], {'phase': 'unverified', 'verified_samples': 0})
                 if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
                     rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
-            return {**m, "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
+            return {**m, 'knowledge': knowledge.view(who, mid), "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
                 "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
@@ -179,6 +184,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for minutes in r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid):
                 if set(minutes["evidence_ids"]) & ids:
                     r.remove(db.meeting_minutes, minutes["id"])
+            app.state.service.purge_meeting_evidence(r, mid, ids)
             r.remove(db.recordings, rid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
         return view(who, mid)
@@ -186,15 +192,50 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings")
     async def listing(request: Request):
         with store.scope(owner(request)) as r:
-            return list(reversed(r.list(db.meetings)))
+            projects = {d['id']: d['name'] for d in r.list(db.domains)}
+            configs = {k['meeting_id']: k for k in r.list(db.meeting_knowledge)}
+            return [{**m, 'project_name': projects.get(configs.get(m['id'], {}).get('project_id'))}
+                for m in reversed(r.list(db.meetings))]
+
+    @app.get('/api/meetings/{mid}/knowledge')
+    async def meeting_knowledge(request: Request, mid: str):
+        return knowledge.view(owner(request), mid)
+
+    @app.put('/api/meetings/{mid}/knowledge')
+    async def configure_knowledge(request: Request, mid: str, data: KnowledgeInput):
+        who = owner(request)
+        result = knowledge.save(who, mid, data)
+        row = bots.row(who, mid)
+        agent = bots.agents.get(row['id']) if row else None
+        if agent:
+            await agent.stop(all_replies=True)
+        return result
+
+    @app.post('/api/meetings/{mid}/memory-proposals')
+    async def propose_meeting_memories(request: Request, mid: str):
+        try:
+            return await knowledge.propose(owner(request), mid)
+        except Problem:
+            raise
+        except Exception as exc:
+            logger.warning('Meeting memory extraction failed: error_type=%s', type(exc).__name__)
+            raise Problem('Could not prepare project updates. Your transcript is saved; try again.', 503) from exc
 
     @app.post("/api/meetings", status_code=201)
     async def create(request: Request, data: MeetingInput):
         with store.scope(owner(request)) as r:
-            return r.add(db.meetings, title=data.title, status="active", revision=1)
+            if data.project_id:
+                need(r.get(db.domains, data.project_id), 'Project')
+            meeting = r.add(db.meetings, title=data.title, status="active", revision=1)
+            if data.project_id:
+                r.add(db.meeting_knowledge, meeting_id=meeting['id'], project_id=data.project_id,
+                    goal='', reference_ids=[], grants=[], revision=1)
+            return meeting
 
     @app.patch("/api/meetings/{mid}")
     async def rename(request: Request, mid: str, data: MeetingInput):
+        if 'project_id' in data.model_fields_set:
+            raise Problem('Use Project & knowledge to change the project.')
         with store.scope(owner(request)) as r:
             get(r, mid)
             r.change(db.meetings, mid, title=data.title)
@@ -203,7 +244,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'minutes')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'minutes', 'knowledge')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})
@@ -283,6 +324,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             get(r, mid)
             if mid in captures:
                 raise Problem("Pause recording before deleting this meeting.", 409)
+            app.state.service.purge_meeting_evidence(r, mid)
             r.remove(db.meetings, mid)
         return {"ok": True}
 

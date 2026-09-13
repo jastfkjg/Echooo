@@ -188,3 +188,29 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
   .meeting-search-controls #search-clear { display:none; }
   .meeting-recording-tools { gap:2px; }
 }
+
+/* Project knowledge stays behind one settings control; notes contain review drafts. */
+#meeting-project{margin-top:.35rem;text-align:left;max-width:100%;overflow-wrap:anywhere}
+.project-choice{display:flex;align-items:center;gap:.65rem;min-height:44px;padding:.35rem 0}
+.project-choice input,.project-memory-option input{flex:0 0 auto;accent-color:var(--accent)}
+.project-references,.project-evidence{margin:1rem 0}
+.project-references summary,.project-evidence summary,.project-answer-sources summary{cursor:pointer;padding:.65rem 0;min-height:44px}
+.project-knowledge-list{border:0;padding:0;margin:1.25rem 0 .5rem;min-width:0}
+.project-knowledge-list legend{font-weight:600}
+#project-memory-options{max-height:320px;overflow:auto;overscroll-behavior:contain}
+.project-memory-group{margin:.75rem 0}
+.project-group-name{font-size:.875rem;font-weight:600}
+.project-memory-option{display:flex;gap:.7rem;align-items:flex-start;padding:.75rem .25rem;border-bottom:1px solid var(--line);cursor:pointer;min-height:44px}
+.project-memory-option input{margin-top:.25rem}
+.project-memory-option span{min-width:0;overflow-wrap:anywhere}
+.project-memory-option strong,.project-memory-option .muted{display:block}
+.project-memory-option .muted{margin-top:.25rem;font-size:.875rem;line-height:1.5}
+.project-consent{align-items:flex-start;font-size:.9rem;line-height:1.5}
+.project-consent input{margin-top:.3rem}
+.meeting-project-updates{margin-top:2.5rem;padding-top:1.5rem;border-top:1px solid var(--line)}
+.project-update{padding:1.25rem 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.project-update h3{margin:.4rem 0;font-size:1rem}
+.project-update .actions{margin-top:.75rem}
+.project-evidence blockquote,.project-answer-sources blockquote{margin:.6rem 0;padding:.5rem 1rem;border-left:2px solid var(--line);overflow-wrap:anywhere}
+.project-evidence footer{font-size:.85rem;color:var(--muted)}
+@media(max-width:600px){.meeting-project-updates .meeting-section-heading{align-items:flex-start;flex-wrap:wrap;gap:.75rem}.project-consent{font-size:1rem}}

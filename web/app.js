@@ -1,5 +1,5 @@
 import { Voice } from './voice.js';
-import {showMeetings, leaveMeeting} from './meetings.js?v=live-transcript-1';
+import {showMeetings, leaveMeeting} from './meetings.js?v=project-meetings-1';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js';
 import {enhanceSelects} from './select.js';
@@ -540,9 +540,9 @@ async function sessionDialog(mode, changingContext=false) {
 async function proposalDialog(pid) {
   const p=state.proposals.find(x=>x.id===pid);
   const memories=await api(`/domains/${p.domain_id}/memories`);
-  openDialog('Review memory update',`<p class="dialog-help">Save to domain: ${esc(domainName(p.domain_id))}. Check the speaker and facts, and edit as needed. Updates stay in this domain.</p>`+memoryFields({...p,visibility:'private',audiences:[]})+`<div class="form-field"><label for="f-target">Save as</label><select name="target_id" id="f-target"><option value="">Add a new memory</option>${memories.map(m=>`<option value="${m.id}">Replace: ${esc(m.title)} · v${m.version}</option>`).join('')}</select></div><details><summary>Evidence</summary>${p.evidence.map(e=>`<div class="evidence">${esc(e.speaker||'Imported source')}: ${esc(e.content)}</div>`).join('')}</details>`,async fd=>{
+  openDialog('Review memory update',`<p class="dialog-help">Save to domain: ${esc(domainName(p.domain_id))}. Check the speaker and facts, and edit as needed. Updates stay in this domain.</p>`+memoryFields({...p,visibility:'private',audiences:[]})+`<div class="form-field"><label for="f-target">Save as</label><select name="target_id" id="f-target"><option value="">Add a new memory</option>${memories.map(m=>`<option value="${m.id}" ${m.id===p.target_id?'selected':''}>Replace: ${esc(m.title)} · v${m.version}</option>`).join('')}</select></div><details><summary>Evidence</summary>${p.evidence.map(e=>`<div class="evidence">${esc(e.speaker||'Imported source')}: ${esc(e.content)}${e.meeting_id?` <a href="#meetings/${encodeURIComponent(e.meeting_id)}">Open source meeting</a>`:''}</div>`).join('')}</details>`,async fd=>{
     const target=memories.find(m=>m.id===fd.get('target_id'));
-    await api(`/proposals/${pid}/review`,'POST',{...memoryData(fd),decision:'approve',target_id:target?.id||null,expected_version:target?.version||null});
+    await api(`/proposals/${pid}/review`,'POST',{...memoryData(fd),decision:'approve',target_id:target?.id||null,expected_version:target?.id===p.target_id?p.expected_version:target?.version||null});
     toast('Update confirmed and saved.');await renderRoute();
   },'Confirm and save');
 }

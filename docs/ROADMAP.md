@@ -2,6 +2,15 @@
 
 Domains remain user-managed. The product focus is a controllable personal representative: communicate within the right information scope, know when to involve the owner, and leave memories that can be inspected and corrected.
 
+## Project meeting first version
+
+Implemented: optional project association using existing domains, explicit versioned
+meeting disclosure grants, cited project answers, and owner-reviewed meeting memory
+updates. See [Project meetings](PROJECT_MEETINGS.md) for scope and limitations.
+Next: evaluate retrieval and cross-batch decision changes on real project meetings,
+improve speaker attribution, and measure the usefulness of remembered decisions.
+Shared team administration and verified attendee identities remain future work.
+
 ## Priority 1: Live speech pilot
 
 Connect the current text, permission, and approval flow to live STT, LLM, and TTS providers. Start with one-to-one project discussions, including Mandarin. Build a repeatable evaluation set covering cross-domain probing, prompt injection, implicit commitments, noise, and revocation during a turn. Measure first-audio latency, incorrect disclosure, unapproved commitments, owner takeover, and memory correction rates.

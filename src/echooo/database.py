@@ -173,9 +173,24 @@ meeting_agent_events = owned_table("meeting_agent_events", meeting_ref(),
     Column("status", String, nullable=False), Column("error", Text, nullable=False),
     constraints=(UniqueConstraint("connection_id", "source_key"),))
 
+meeting_knowledge = owned_table("meeting_knowledge", meeting_ref(),
+    Column("project_id", String, ForeignKey("domains.id", ondelete="SET NULL")),
+    Column("goal", Text, nullable=False), Column("reference_ids", JSON, nullable=False),
+    Column("grants", JSON, nullable=False), Column("revision", Integer, nullable=False),
+    constraints=(UniqueConstraint("meeting_id"),))
+meeting_answer_sources = owned_table("meeting_answer_sources", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("scope", JSON, nullable=False), Column("citations", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
+meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
+    Column("proposal_id", String, ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False),
+    Column("evidence", JSON, nullable=False),
+    constraints=(UniqueConstraint("proposal_id"),))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
-    meeting_agent_settings, meeting_agent_events, utterance_sources]
+    meeting_agent_settings, meeting_agent_events, utterance_sources,
+    meeting_knowledge, meeting_answer_sources, meeting_proposal_links]
 
 
 class Store:

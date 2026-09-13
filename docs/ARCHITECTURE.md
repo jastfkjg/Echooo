@@ -89,6 +89,9 @@ This is application-level deletion propagation. Already heard, captured, or expo
 
 `meetings.py` registers a separate owner-only HTTP and WebSocket surface. Meetings
 do not change private/delegated conversation permissions or inherit domain memories.
+Project meetings can explicitly select versioned shareable memories through a separate
+meeting disclosure grant; no default-domain or private-chat authorization is inherited.
+See [Project meetings](PROJECT_MEETINGS.md) for retrieval, citations and reviewed updates.
 New owned tables hold meetings, recording metadata, binary PCM parts, utterances,
 versioned analysis sections, and recording-level rolling overviews. Foreign keys cascade meeting deletion through all
 audio and derived records. The existing owner RLS installer includes these tables.
@@ -179,3 +182,15 @@ owner's domain. Scoped chats only allow destinations in their selected domains;
 a general chat can target any domain the owner explicitly chooses. Creating the
 proposal does not change the chat's permissions. Manual proposals do not prevent
 normal end-of-chat extraction in sessions where it was separately enabled.
+
+## Project meeting boundaries
+
+The personally managed bot serves the public meeting discussion. Meeting knowledge
+grants select confirmed shareable memories with no audience restriction. The main
+project is immutable after participation or capture starts. References are read-only
+inputs; reviewed updates can write only to the main project. Public generation checks
+source membership and revalidates the scope after generation and during playback.
+Private bot chat never authenticates an owner or enters project-memory extraction.
+Owner-only extraction compares meeting evidence with project memories and creates
+reviewable proposals. Evidence fingerprints and expected target versions guard approval.
+Deleting source meeting evidence purges linked drafts and reviewed derivatives.
