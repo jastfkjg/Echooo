@@ -17,8 +17,27 @@ test('untrusted model statements, names and quotes are escaped in review and fin
 });
 
 test('stale evidence and in-flight review disable approval; approved items cannot be approved twice',()=>{
-  assert.match(decisionListHTML([{...item,evidence_current:false}]), /data-approve-finding="finding-1" disabled/);
+  assert.ok(!decisionListHTML([{...item,evidence_current:false}]).includes('data-approve-finding'));
+  assert.match(decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:true}]), /Review changes/);
   assert.match(decisionListHTML([item],true), /data-approve-finding="finding-1" disabled/);
   assert.ok(!decisionListHTML([{...item,status:'approved'}]).includes('data-approve-finding'));
-  assert.ok(approvedRecordHTML({decisions:[]}).includes('No approved decisions'));
+  assert.ok(approvedRecordHTML({decisions:[]}).includes('No approved findings'));
+});
+
+test('action metadata is escaped and all approved finding categories render',()=>{
+  const action={...item,kind:'action_item',details:{owner:'<img onerror=x>',deadline_text:'Friday & Monday'}};
+  const question={...item,kind:'unresolved_question',statement:'Who owns launch?'};
+  const html=approvedRecordHTML({title:'Meeting',decisions:[item],action_items:[action],unresolved_questions:[question]});
+  assert.ok(html.includes('Action items')&&html.includes('Unresolved questions'));
+  assert.ok(html.includes('&lt;img onerror=x&gt;'));
+  assert.ok(!html.includes('<img'));
+  assert.ok(html.includes('Friday &amp; Monday'));
+});
+
+test('review controls include edit and reject and permit explicit re-review',()=>{
+  assert.ok(decisionListHTML([item]).includes('data-reject-finding'));
+  assert.ok(decisionListHTML([item]).includes('data-edit-finding'));
+  const html=decisionListHTML([{...item,status:'approved',evidence_current:false,can_refresh_evidence:true}]);
+  assert.ok(html.includes('Review changes'));
+  assert.ok(!html.includes('data-approve-finding'));
 });

@@ -12,8 +12,11 @@ Added a decision-only review path:
 - The meeting page shows provisional decisions, evidence, approval controls, and an approved record. A live LLM is required; mock mode does not pretend to extract decisions.
 - Existing generated minutes remain separate. No new voice participation or proactive intervention behavior was added.
 
-Validation: backend lifecycle/permissions/evidence tests, frontend escaping/control tests, browser approval-to-record flow with synthetic data, and a live configured-LLM check using a synthetic proposal followed by an explicit decision. These do not constitute live two-person AssemblyAI/Attendee acceptance.
+## 15 September 2026 — Remaining Milestone 1 implementation
 
-Remaining Milestone 1 work: action items and unresolved questions, edit/reject UI, complete re-review workflow for corrected evidence, stronger cross-batch reconciliation/recovery and end-of-meeting flush, then the continuous live acceptance demo. Currently stale evidence is visibly flagged and excluded from newly generated approved records; re-approval of a corrected finding is not yet implemented.
-
-Contributors: Zilong (technical), Fahmi Al Mughairy (product).
+- Added action items with optional owner/deadline and unresolved questions. Ambiguous dates remain text; unsupported owners and normalized dates stay empty.
+- Added edit-and-approve/reject controls, review history, and an explicit re-review dialog showing original/current evidence. Confirmation uses an evidence token so newer corrections cannot be approved from an outdated dialog.
+- Later changes and answered questions reconcile with existing findings. Approved content is preserved until a host approves its replacement; approved resolution removes a question from the unresolved section. Revision chains and original signatures prevent repeat input from restoring replaced items.
+- Added bounded retries, startup recovery, and a final extraction flush. Final record generation checks that capture has stopped and saved-audio transcription is ready, without waiting for unrelated generated notes.
+- Added an additive metadata migration. Existing review data is preserved, and the old decision-only processing checkpoint is reset once so action items/questions can be extracted from saved text.
+- Validated automated tests, real configured-LLM extraction with synthetic three-type dialogue, and local browser edit/reject/record flows. Live two-person AssemblyAI/Attendee acceptance remains a separate verification step; no new voice intervention functionality was added.

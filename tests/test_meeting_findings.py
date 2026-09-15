@@ -168,3 +168,237 @@ def test_evidence_validation_requires_all_references_and_new_input():
     assert clean_decisions({'decisions':[item]}, [u], {'other'}) == []
     with pytest.raises(ValueError):
         clean_decisions({'decisions':[{**item, 'evidence':item['evidence']+[{'utterance_id':'missing','quote':'yes'}]}]}, [u], {'u'})
+
+class FindingsModel:
+    async def json_call(self, prompt, data, fast=False):
+        items=[]
+        for u in data['new_records']:
+            text=u['content']
+            if text.startswith('Alice will'):
+                item=dict(kind='action_item', statement='Send the report', owner='Alice', deadline='2026-09-18', deadline_text='2026-09-18')
+            elif text.startswith('Who will'):
+                item=dict(kind='unresolved_question', statement=text)
+            elif text.startswith('Bob will own'):
+                target=next(f for f in data['existing_findings'] if f['kind']=='unresolved_question')
+                item=dict(kind='unresolved_question',statement=target['statement'],supersedes=target['id'],resolved=True)
+            elif text.startswith('Change deadline'):
+                target=next(f for f in data['existing_findings'] if f['kind']=='action_item')
+                item=dict(kind='action_item',statement=target['statement'],owner='Alice',deadline='2026-09-21',deadline_text='2026-09-21',supersedes=target['id'])
+            elif text.startswith('We decided'):
+                item=dict(kind='decision',statement=text)
+            else:
+                continue
+            item['evidence']=[dict(utterance_id=u['id'],quote=text)]
+            items.append(item)
+        return {'findings':items}
+
+
+def add_and_wait(client,path,content,count):
+    client.post(path+'/utterances',json={'speaker':'Alice','content':content})
+    return await_findings(client,path,count=count)
+
+
+def approve(client,path,f):
+    result=client.post(path+f"/findings/{f['id']}/review",json={'action':'approve','revision':f['revision']})
+    assert result.status_code==200,result.text
+    return result.json()
+
+
+def test_three_types_metadata_replacement_and_resolution(client,app):
+    path,manager=setup(client,app)
+    manager.ai=FindingsModel()
+    add_and_wait(client,path,'We decided to use SQLite.',1)
+    add_and_wait(client,path,'Alice will send the report by 2026-09-18.',2)
+    data=add_and_wait(client,path,'Who will own the launch?',3)
+    for f in data['findings']:approve(client,path,f)
+    record=client.post(path+'/approved-record').json()
+    assert len(record['decisions'])==len(record['action_items'])==len(record['unresolved_questions'])==1
+    assert record['action_items'][0]['details']['owner']=='Alice'
+    assert record['action_items'][0]['details']['deadline']=='2026-09-18'
+    data=add_and_wait(client,path,'Change deadline for Alice to 2026-09-21.',4)
+    revision=data['findings'][-1]
+    assert revision['status']=='provisional'
+    assert data['approved_record']['action_items'][0]['details']['deadline']=='2026-09-18'
+    approve(client,path,revision)
+    data=add_and_wait(client,path,'Bob will own the launch.',5)
+    assert len(data['approved_record']['unresolved_questions'])==1
+    data=approve(client,path,data['findings'][-1])
+    assert data['approved_record']['unresolved_questions']==[]
+    assert len(data['approved_record']['action_items'])==1
+    assert data['approved_record']['action_items'][0]['details']['deadline']=='2026-09-21'
+    # Duplicate new utterances do not resurrect replaced or rejected items.
+    client.post(path+'/utterances',json={'speaker':'Alice','content':'We decided to use SQLite.'})
+    client.post(path+'/approved-record')
+    assert len(client.get(path+'/findings').json()['findings'])==5
+
+
+def test_rereview_requires_exact_current_evidence_and_preserves_original(client,app):
+    path,manager=setup(client,app)
+    u=client.post(path+'/utterances',json={'speaker':'Alice','content':'We decided to ship Friday.'}).json()
+    f=await_findings(client,path)['findings'][0]
+    approve(client,path,f)
+    manager.enabled=False
+    client.patch(path+'/utterances/'+u['id'],json={'speaker':'Bob','content':'We decided to ship Monday.'})
+    f=client.get(path+'/findings').json()['findings'][0]
+    url=path+f"/findings/{f['id']}/review"
+    body=dict(action='edit',revision=f['revision'],statement='Ship Monday.')
+    assert client.post(url,json=body).status_code==409
+    token=f['evidence_token']
+    client.patch(path+'/utterances/'+u['id'],json={'speaker':'Bob','content':'We decided to ship Tuesday.'})
+    assert client.post(url,json={**body,'evidence_token':token}).status_code==409
+    f=client.get(path+'/findings').json()['findings'][0]
+    result=client.post(url,json={**body,'statement':'Ship Tuesday.','evidence_token':f['evidence_token']})
+    assert result.status_code==200,result.text
+    data=result.json()
+    assert data['findings'][0]['evidence_current']
+    assert data['findings'][0]['original']['statement']=='We decided to ship Friday.'
+    assert data['finding_reviews'][-1]['before']['evidence'][0]['speaker']=='Alice'
+    assert data['approved_record']['decisions'][0]['statement']=='Ship Tuesday.'
+
+
+def test_action_validation_keeps_unknown_and_ambiguous_deadlines_empty():
+    row=dict(id='a',recording_id='r',speaker='Unknown speaker',content='I will do this next Friday.',start_ms=0,end_ms=1)
+    output={'findings':[dict(kind='action_item',statement='Do this',owner='Alice',deadline='2026-09-18',deadline_text='next Friday',evidence=[dict(utterance_id='a',quote=row['content'])])]}
+    result=clean_decisions(output,[row],{'a'})[0]
+    assert result['details']['owner'] is None
+    assert result['details']['deadline'] is None
+    assert result['details']['deadline_text']=='next Friday'
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_pending_input_and_flush_waits_for_it(client,app):
+    path,old=setup(client,app)
+    old.enabled=False
+    u=client.post(path+'/utterances',json={'content':'We decided to finish now.'}).json()
+    from echooo.meeting_findings import MeetingFindings
+    manager=MeetingFindings(app.state.store,DecisionModel(),app.state.meeting_transcriptions.feed)
+    manager.delay=0
+    manager.resume()
+    assert (u['owner_id'],u['meeting_id']) in manager.tasks
+    await manager.flush(u['owner_id'],u['meeting_id'])
+    assert len(manager.view(u['owner_id'],u['meeting_id'])['findings'])==1
+    await manager.close()
+    old.feed.on_utterance=old.notify
+
+
+def test_end_triggers_remaining_extraction_and_record_waits(client,app):
+    path,manager=setup(client,app)
+    manager.delay=.05
+    client.post(path+'/utterances',json={'content':'We decided to finish with SQLite.'})
+    assert client.post(path+'/end').status_code==200
+    result=client.post(path+'/approved-record')
+    assert result.status_code==200,result.text
+    data=client.get(path+'/findings').json()
+    assert data['finding_progress']['pending']==0
+    assert len(data['findings'])==1
+    assert result.json()['decisions']==[]  # Processing does not approve anything.
+
+
+def test_additive_finding_migration_preserves_old_reviewed_rows(tmp_path):
+    from sqlalchemy import create_engine,text,inspect
+    from echooo.migrations import add_finding_details
+    engine=create_engine('sqlite:///'+str(tmp_path/'old.db'))
+    with engine.begin() as c:
+        c.execute(text('CREATE TABLE meeting_findings (id TEXT PRIMARY KEY, statement TEXT)'))
+        c.execute(text("INSERT INTO meeting_findings VALUES ('old','Reviewed decision')"))
+    add_finding_details(engine)
+    add_finding_details(engine)
+    with engine.connect() as c:
+        row=c.execute(text('SELECT statement,details FROM meeting_findings')).one()
+        assert row==('Reviewed decision','{}')
+    engine.dispose()
+
+
+def test_later_revision_can_restore_old_value_without_restoring_old_record(client,app):
+    path,manager=setup(client,app)
+    class RevertingModel(FindingsModel):
+        async def json_call(self,prompt,data,fast=False):
+            result=await super().json_call(prompt,data,fast)
+            if any('back to' in u['content'] for u in data['new_records']):
+                for item in result['findings']:
+                    item.update(deadline='2026-09-18',deadline_text='2026-09-18')
+            return result
+    manager.ai=RevertingModel()
+    f=add_and_wait(client,path,'Alice will send the report by 2026-09-18.',1)['findings'][0]
+    approve(client,path,f)
+    f=add_and_wait(client,path,'Change deadline for Alice to 2026-09-21.',2)['findings'][-1]
+    approve(client,path,f)
+    f=add_and_wait(client,path,'Change deadline for Alice back to 2026-09-18.',3)['findings'][-1]
+    data=approve(client,path,f)
+    assert len(data['approved_record']['action_items'])==1
+    assert data['approved_record']['action_items'][0]['id']==f['id']
+    assert data['approved_record']['action_items'][0]['details']['deadline']=='2026-09-18'
+
+
+def test_failed_final_flush_never_returns_a_completed_record(client,app):
+    path,manager=setup(client,app)
+    manager.retry_delay=.01
+    manager.ai.invalid=True
+    client.post(path+'/utterances',json={'content':'We decided to ship Friday.'})
+    assert client.post(path+'/approved-record').status_code==409
+    assert client.get(path+'/findings').json()['finding_progress']['pending']==1
+
+
+@pytest.mark.asyncio
+async def test_finalization_waits_for_transcript_but_not_legacy_notes(client,app):
+    path,manager=setup(client,app)
+    m=client.get(path).json()
+    transcriptions=app.state.meeting_transcriptions
+    with app.state.store.scope(m['owner_id']) as r:
+        rec=r.add(db.recordings,meeting_id=m['id'],sample_rate=16000,samples=32000)
+    transcriptions.state(m['owner_id'],m['id'],rec['id'],phase='verifying')
+    notes_gate=asyncio.Event()
+    async def verify_then_build_notes():
+        await asyncio.sleep(.02)
+        with app.state.store.scope(m['owner_id']) as r:
+            u=r.add(db.utterances,meeting_id=m['id'],recording_id=rec['id'],speaker='Alice',content='We decided to keep the last sentence.',start_ms=0,end_ms=1000)
+        transcriptions.state(m['owner_id'],m['id'],rec['id'],phase='complete',summary_phase='building')
+        transcriptions.feed.publish(m['owner_id'],m['id'],{'type':'utterance','utterance':u})
+        await notes_gate.wait()
+    task=asyncio.create_task(verify_then_build_notes())
+    transcriptions.tasks[rec['id']]=task
+    try:
+        await asyncio.wait_for(manager.before_record(m['owner_id'],m['id']),1)
+        assert not task.done()
+        await manager.flush(m['owner_id'],m['id'])
+        assert manager.view(m['owner_id'],m['id'])['findings'][0]['statement']=='We decided to keep the last sentence.'
+    finally:
+        notes_gate.set()
+        await task
+        transcriptions.tasks.pop(rec['id'],None)
+
+
+def test_finalization_rechecks_capture_after_model_wait(client,app):
+    from echooo.service import Problem
+    path,manager=setup(client,app)
+    calls=[]
+    async def capture_check(who,mid):
+        calls.append(mid)
+        if len(calls)==2:
+            raise Problem('Recording restarted.',409)
+    manager.before_record=capture_check
+    assert client.post(path+'/approved-record').status_code==409
+    assert len(calls)==2
+
+
+def test_legacy_decision_checkpoint_replay_preserves_review_with_paraphrased_output(client,app):
+    from echooo.meeting_findings import digest
+    from echooo.meeting_minutes import normalized
+    path,manager=setup(client,app)
+    f=add_and_wait(client,path,'We decided to ship Friday.',1)['findings'][0]
+    approve(client,path,f)
+    with app.state.store.scope(f['owner_id']) as r:
+        r.change(db.meeting_findings,f['id'],fingerprint=digest(sorted((e['utterance_id'],normalized(e['quote'])) for e in f['evidence'])))
+        progress=r.list(db.meeting_finding_progress)[0]
+        r.change(db.meeting_finding_progress,progress['id'],processed={})
+    class ParaphraseModel(DecisionModel):
+        async def json_call(self,*args,**kwargs):
+            output=await super().json_call(*args,**kwargs)
+            output['decisions'][0]['statement']='Ship this Friday.'
+            return output
+    manager.ai=ParaphraseModel()
+    result=client.post(path+'/approved-record')
+    assert result.status_code==200,result.text
+    data=client.get(path+'/findings').json()
+    assert len(data['findings'])==1
+    assert data['findings'][0]['status']=='approved'

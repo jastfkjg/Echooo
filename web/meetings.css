@@ -238,3 +238,13 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .meeting-findings [role="alert"] { color: var(--danger); }
 .meeting-findings .btn { min-height: 44px; }
 @media (max-width: 600px) { .meeting-findings .meeting-section-heading { flex-wrap: wrap; } }
+.finding-editor { width: min(640px, calc(100vw - 32px)); max-height: 85vh; overflow-y: auto; }
+.finding-editor label { display: grid; gap: .5rem; margin-block: 1rem; }
+.finding-editor input, .finding-editor textarea { width: 100%; box-sizing: border-box; }
+.finding-editor .finding-confirm { display: flex; align-items: start; }
+.finding-editor .finding-confirm input { width: auto; }
+.finding-editor blockquote { margin-inline: 0; padding-inline-start: 1rem; border-inline-start: 2px solid var(--line); }
+.finding-row .actions { flex-wrap: wrap; gap: .5rem; }
+.finding-editor { padding: 24px; box-sizing: border-box; }
+.finding-editor h3 { margin-top: 0; }
+.finding-editor .finding-confirm { min-height: 44px; align-items: center; }

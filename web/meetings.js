@@ -1,4 +1,4 @@
-import {mountFindings} from './meeting-findings.js?v=1';
+import {mountFindings} from './meeting-findings.js?v=2';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
 import {MeetingAudio} from './meeting-audio.js?v=tab-audio-1';
@@ -85,6 +85,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
         phrase.classList.toggle('selected',u.id===selectedPassage&&selectedView==='full');
         phrase.classList.toggle('search-current',u.id===searchIds[searchIndex]);
         phrase.setAttribute('aria-pressed',String(u.id===selectedPassage&&selectedView==='full'));
+        phrase.setAttribute('aria-label',`${meetingTime(u.start_ms)}: ${textOf(u)}`);
       }
       const selected=selectedView==='full'?g.records.find(u=>u.id===selectedPassage):null,actions=node.querySelector('.meeting-passage-actions');
       setHTML(actions,actionsHTML(selected));actions.hidden=!selected;

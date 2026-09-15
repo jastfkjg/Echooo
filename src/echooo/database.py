@@ -196,6 +196,7 @@ meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
 meeting_findings = owned_table("meeting_findings", meeting_ref(),
     Column("kind", String, nullable=False), Column("statement", Text, nullable=False),
     Column("original", JSON, nullable=False), Column("evidence", JSON, nullable=False),
+    Column("details", JSON, nullable=False, default=dict),
     Column("fingerprint", String, nullable=False), Column("status", String, nullable=False),
     Column("revision", Integer, nullable=False),
     constraints=(UniqueConstraint("meeting_id", "fingerprint"),))
@@ -233,8 +234,9 @@ class Store:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA secure_delete=ON")
         metadata.create_all(self.engine)
-        from echooo.migrations import allow_unscoped_private_chats
+        from echooo.migrations import allow_unscoped_private_chats, add_finding_details
         allow_unscoped_private_chats(self.engine)
+        add_finding_details(self.engine)
         # Upgrade existing empty workspaces without moving their data or scopes.
         with self.engine.begin() as c:
             empty_owners = c.execute(select(users.c.id).where(~select(domains.c.id).where(

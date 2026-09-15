@@ -108,6 +108,32 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     bots = install_meeting_bots(app, store, settings, transcriptions, captures, owner)
     bots.knowledge = knowledge
 
+    async def prepare_approved_record(who, mid):
+        bots.require_detached(who, mid)
+        if mid in captures:
+            raise Problem('Stop recording before generating the final record.', 409)
+        queue = transcriptions.feed.subscribe(who, mid)
+        deadline = asyncio.get_running_loop().time() + 40
+        try:
+            while True:
+                with store.scope(who) as r:
+                    need(r.get(db.meetings, mid), 'Meeting')
+                    states = r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid)
+                if any(row['state'].get('phase') == 'error' for row in states):
+                    raise Problem('Retry the saved-audio transcript check before finalizing.', 409)
+                if not any(row['state'].get('phase') == 'verifying' for row in states):
+                    return  # Old generated notes may still run; they do not gate the approved record.
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise Problem('Saved audio is still being processed. Try again shortly.', 409)
+                try:
+                    await asyncio.wait_for(queue.get(), 1)
+                except TimeoutError:
+                    pass
+        finally:
+            transcriptions.feed.unsubscribe(who, mid, queue)
+
+    findings.before_record = prepare_approved_record
+
     def get(r, mid, active=False):
         m = need(r.get(db.meetings, mid), "Meeting")
         if active and m["status"] != "active":
@@ -576,6 +602,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             if mid in captures:
                 raise Problem("Pause recording before ending the meeting.", 409)
             r.change(db.meetings, mid, status="ended")
+        findings.notify(owner(request), mid, None)
         return view(owner(request), mid)
 
     @app.get("/api/meetings/{mid}/recordings/{rid}/audio")

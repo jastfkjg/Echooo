@@ -38,6 +38,7 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     @asynccontextmanager
     async def lifespan(app):
         app.state.meeting_transcriptions.resume()
+        app.state.meeting_findings.resume()
         app.state.meeting_bots.start()
         yield
         for clients in list(rooms.clients.values()):

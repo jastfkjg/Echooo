@@ -57,3 +57,15 @@ def allow_unscoped_private_chats(engine):
     finally:
         connection.execute('PRAGMA foreign_keys=ON')
         connection.close()
+
+
+def add_finding_details(engine):
+    """Add nullable action metadata without rebuilding existing reviewed findings."""
+    with engine.begin() as c:
+        if engine.dialect.name == 'postgresql':
+            c.execute(text('SELECT pg_advisory_xact_lock(76823917)'))
+        if 'details' not in {v['name'] for v in inspect(c).get_columns('meeting_findings')}:
+            c.execute(text("ALTER TABLE meeting_findings ADD COLUMN details JSON NOT NULL DEFAULT '{}'"))
+            # The former extractor only processed decisions; replay saved text for the new types.
+            if inspect(c).has_table('meeting_finding_progress'):
+                c.execute(text("UPDATE meeting_finding_progress SET processed = '{}', phase = 'idle', error = ''"))
