@@ -36,3 +36,35 @@ Before implementation, agree whether directly addressed questions require a sepa
 | --- | --- |
 | **Consistent live speaker separation:** the STT model's diarization accuracy alone is insufficient for reliable speaker attribution. The current input lacks separate participant audio streams and their identity mappings, making it difficult to determine accurately who said what from mixed audio. | For bot-joined meetings, first validate Attendee's per-participant audio and UUID-to-display-name mapping on the deployed adapter; Echooo currently consumes mixed audio. If validated, transcribe participants separately and merge by timestamp. Use diarization with host corrections and Unknown labels for mixed audio or shared microphones. |
 | **Detecting important contradictions or omissions and deciding when to intervene:** “important” is subjective, and apparent gaps or conflicts may be resolved by the next utterance. | Maintain structured task/decision state, use rules to flag missing owners or conflicting deadlines, and use the LLM to distinguish unresolved conflicts from explicit decision changes. Recheck after a few completed turns, suppress resolved or repeated suggestions, and privately show an evidence-backed question for the host to approve, defer, or dismiss. Recheck relevance before speaking. |
+
+
+## 6. Milestone 1 implementation plan
+
+### Confirmed product decisions
+
+- Use AssemblyAI diarization. Separate participant audio does not block Milestone 1.
+- Direct host questions need no extra approval; clarify or decline when evidence is insufficient. Proactive speech always requires private review and explicit approval.
+
+### Implementation tasks
+
+First complete **live transcript → one evidence-linked decision → host approval → final record**, then extend to all required finding types.
+
+| ID | Task and completion check |
+| --- | --- |
+| M1-1 | Verify two-speaker live transcription, timestamps, Unknown labels, and host name corrections. |
+| M1-2 | Add persistent findings, evidence snapshots, and review history; verify data survives reload. |
+| M1-3 | Extract one decision from final transcripts, display its evidence, approve it, and generate an approved-only record. |
+| M1-4 | Add action items and unresolved questions, short-batch extraction, deduplication, and end-of-meeting processing. |
+| M1-5 | Add evidence navigation, edit-and-approve, and reject. Preserve original evidence and exclude unapproved items. |
+| M1-6 | Add retries and error states; prevent duplicate findings and overwritten reviews; flag corrected evidence for re-review. |
+| M1-7 | Run local tests, and complete the live two-person acceptance demo. |
+
+### Deployment approach
+
+Start and test the existing application locally. Validate live capture, the full review flow, and data persistence. Cloud deployment can be considered after the local flow is reliable; it is not required for Milestone 1. Attendee is also not required.
+
+### Technical risks and mitigations
+
+- **Speaker errors:** leave uncertain owners unspecified.
+- **Extraction errors or latency:** batch final transcripts, validate evidence, retry failures, and show processing status.
+- **Duplicates or stale evidence:** preserve review history and snapshots, deduplicate retries, and require re-review after relevant corrections.
