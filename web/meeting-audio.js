@@ -39,13 +39,20 @@ export class MeetingAudio {
         }
         // This must be the first permission request, while the click is active.
         const shared = this.keep(await this.mediaDevices.getDisplayMedia({
-          video: true,
+          video: {displaySurface: 'browser'},
           audio: {suppressLocalAudioPlayback: false},
           preferCurrentTab: false,
           selfBrowserSurface: 'exclude',
           systemAudio: 'exclude',
+          windowAudio: 'exclude',
+          monitorTypeSurfaces: 'exclude',
           surfaceSwitching: 'exclude',
         }));
+        // Picker preferences are hints; reject unsupported sources before asking for the mic.
+        const surface = shared.getVideoTracks()[0]?.getSettings?.().displaySurface;
+        if (surface && surface !== 'browser') {
+          throw new Error('Window and entire-screen recording are not supported. Choose a Chrome tab and enable “Share tab audio”, then try again.');
+        }
         if (!shared.getAudioTracks().length) {
           throw new Error('No shared audio. Choose the meeting or video tab and enable “Share tab audio”, then try again.');
         }

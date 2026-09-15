@@ -402,3 +402,70 @@ def test_legacy_decision_checkpoint_replay_preserves_review_with_paraphrased_out
     data=client.get(path+'/findings').json()
     assert len(data['findings'])==1
     assert data['findings'][0]['status']=='approved'
+
+
+def test_unchanged_pending_finding_refreshes_evidence_after_speaker_correction(client, app):
+    path, manager = setup(client, app)
+    u = client.post(path + '/utterances', json={'speaker': 'Alice', 'content': 'We decided to ship Friday.'}).json()
+    f = await_findings(client, path)['findings'][0]
+    client.patch(path + '/utterances/' + u['id'], json={'speaker': 'Bob', 'content': u['content']})
+    client.post(path + '/approved-record')
+    data = client.get(path + '/findings').json()
+    assert len(data['findings']) == 1
+    refreshed = data['findings'][0]
+    assert refreshed['id'] == f['id']
+    assert refreshed['evidence_current']
+    assert refreshed['status'] == 'provisional'
+    assert refreshed['evidence'][0]['speaker'] == 'Bob'
+    assert refreshed['original']['evidence'][0]['speaker'] == 'Alice'
+    assert data['finding_reviews'][-1]['action'] == 'extraction_revision'
+    approve(client, path, refreshed)
+    # The same change to an approved finding must still require explicit host review.
+    client.patch(path + '/utterances/' + u['id'], json={'speaker': 'Carol', 'content': u['content']})
+    client.post(path + '/approved-record')
+    data = client.get(path + '/findings').json()
+    assert not data['findings'][0]['evidence_current']
+    assert data['approved_record']['decisions'] == []
+
+
+def test_manual_recheck_recovers_previously_processed_stale_pending_item(client, app):
+    from echooo.meeting_findings import source_hash
+    path, manager = setup(client, app)
+    u = client.post(path + '/utterances', json={'speaker': 'Alice', 'content': 'We decided to ship Friday.'}).json()
+    f = await_findings(client, path)['findings'][0]
+    client.post(path + '/approved-record')
+    with manager.store.scope(f['owner_id']) as r:
+        r.change(db.utterances, u['id'], speaker='Bob')
+        changed = r.get(db.utterances, u['id'])
+        p = manager.progress(r, f['meeting_id'])
+        r.change(db.meeting_finding_progress, p['id'], processed={u['id']: source_hash(changed)})
+    assert not client.get(path + '/findings').json()['findings'][0]['evidence_current']
+    client.post(path + '/findings/extract')
+    client.post(path + '/approved-record')
+    assert client.get(path + '/findings').json()['findings'][0]['evidence_current']
+
+
+def test_corrected_statement_and_evidence_are_updated_together(client, app):
+    path, manager = setup(client, app)
+    u = client.post(path + '/utterances', json={'speaker': 'Alice', 'content': 'We decided to ship Friday.'}).json()
+    old = await_findings(client, path)['findings'][0]
+    client.post(path + '/approved-record')
+
+    class CorrectionModel:
+        async def json_call(self, prompt, data, fast=False):
+            previous = data['existing_findings'][0]
+            assert previous['evidence_ids'] == [u['id']]
+            assert not previous['evidence_current']
+            row = data['new_records'][0]
+            return {'findings': [{'kind': 'decision', 'statement': 'Ship Monday.',
+                'supersedes': previous['id'], 'evidence': [{'utterance_id': row['id'], 'quote': row['content']}]}]}
+
+    manager.ai = CorrectionModel()
+    client.patch(path + '/utterances/' + u['id'], json={'speaker': 'Bob', 'content': 'We decided to ship Monday.'})
+    client.post(path + '/approved-record')
+    data = client.get(path + '/findings').json()
+    assert len(data['findings']) == 1
+    f = data['findings'][0]
+    assert f['id'] == old['id'] and f['statement'] == 'Ship Monday.'
+    assert f['evidence_current'] and f['evidence'][0]['quote'] == 'We decided to ship Monday.'
+    assert f['original']['statement'] == old['statement']

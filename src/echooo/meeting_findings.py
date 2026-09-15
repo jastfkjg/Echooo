@@ -31,10 +31,24 @@ request or commitment; never infer a named owner from an unknown speaker. Owner
 must be named in the cited text or a known cited speaker's explicit first-person
 commitment. Preserve ambiguous deadlines as exact deadline_text; normalize only
 explicit calendar dates to ISO, otherwise deadline=null. Questions must remain
-unresolved in supplied context. Empty findings is valid. At most 8 items.
+unresolved in supplied context AND matter to a meeting outcome, task, blocker or
+follow-up. Omit small talk, rhetorical questions, transcription fragments and
+questions answered in the supplied context. Summarize each finding in one short,
+self-contained sentence; keep verbatim speech only in evidence. Evaluate all three
+kinds independently; do not force a kind that is absent. Empty findings is valid.
+At most 8 items.
 For the SAME task/decision/question, use its supplied existing finding ID in
 supersedes when new evidence changes its content, owner, deadline or resolution.
 Do not repeat unchanged or rejected findings, even with different wording.
+Exception: when evidence_current=false on a provisional finding, reassess it
+against current records. If still supported, emit it with supersedes set to its ID
+and fresh evidence, even if the statement is unchanged. If corrected transcription
+changes the wording or meaning of that SAME finding, revise its statement and use
+supersedes with that ID; do not retain the old statement merely for deduplication.
+Use evidence_ids to associate the existing finding with its corrected sources.
+If the corrected speech is unintelligible or no longer supports a meeting finding,
+omit it; do not invent an interpretation. Never refresh reviewed
+findings automatically.
 When a question is answered, emit the question with resolved=true, supersedes
 pointing to that question, and evidence of both the question and answer.
 Resolved is only valid for unresolved_question. Changes are proposals for human
@@ -298,6 +312,9 @@ class MeetingFindings:
                     new_ids = {u['id'] for u in batch}
                     first = all_rows.index(batch[0])
                     context = all_rows[max(0, first - 8):first]
+                    # Existing later passages can answer questions in an earlier upload batch.
+                    last = all_rows.index(batch[-1])
+                    context += all_rows[last + 1:last + 9]
                     existing = r.list(db.meeting_findings, db.meeting_findings.c.meeting_id == mid)
                     # Include the evidence of existing items so later answers/changes can cite both sides.
                     context_ids = {u['id'] for u in context + batch}
@@ -314,7 +331,9 @@ class MeetingFindings:
                 value = await asyncio.wait_for(self.ai.json_call(PROMPT, {
                     'new_records': [{k: u[k] for k in ('id', 'speaker', 'content')} for u in batch],
                     'context': [{k: u[k] for k in ('id', 'speaker', 'content')} for u in context],
-                    'existing_findings': [{k: f[k] for k in ('id', 'kind', 'statement', 'status', 'details', 'revision')} for f in existing[-80:]],
+                    'existing_findings': [{**{k: f[k] for k in ('id', 'kind', 'statement', 'status', 'details', 'revision')},
+                        'evidence_ids': [e['utterance_id'] for e in f['evidence']],
+                        'evidence_current': evidence_current(f, {u['id']: u for u in all_rows})} for f in existing[-80:]],
                 }, fast=True), 40)
                 candidates = clean_decisions(value, context + batch, new_ids)
                 with self.store.scope(who) as r:
@@ -334,9 +353,17 @@ class MeetingFindings:
                     for c in candidates:
                         signature = finding_signature(c)
                         target = c['details'].get('supersedes')
+                        # Revalidate an unchanged pending item instead of discarding fresh evidence
+                        # as a duplicate. Reviewed items retain their explicit re-review barrier.
+                        if not target:
+                            match = next((f for f in existing if f['status'] == 'provisional'
+                                and finding_signature(f) == signature and not evidence_current(f, current)), None)
+                            if match:
+                                target = match['id']
+                        refreshing = target in by_id and by_id[target]['status'] == 'provisional' and not evidence_current(by_id[target], current)
                         fingerprint = digest([signature, target, sorted((e['utterance_id'], normalized(e['quote'])) for e in c['evidence'])])
                         legacy_fingerprint = digest(sorted((e['utterance_id'], normalized(e['quote'])) for e in c['evidence']))
-                        if fingerprint in fingerprints or (not target and (signature in signatures or legacy_fingerprint in fingerprints)):
+                        if (fingerprint in fingerprints and not refreshing) or (not target and (signature in signatures or legacy_fingerprint in fingerprints)):
                             continue
                         if target:
                             prior = by_id.get(target)
@@ -352,7 +379,7 @@ class MeetingFindings:
                                 if not children:
                                     break
                                 prior = children[-1]
-                            if finding_signature(prior) == signature:
+                            if finding_signature(prior) == signature and not (prior['status'] == 'provisional' and not evidence_current(prior, current)):
                                 continue
                             # Retain the unchanged antecedent evidence for a task update or answer.
                             cited = {e['utterance_id'] for e in c['evidence']}
@@ -463,6 +490,13 @@ def install_finding_routes(app, manager, owner):
         manager.view(who, mid)  # Ownership and existence check before scheduling.
         if not manager.enabled:
             raise Problem('Configure a live LLM to extract findings.', 409)
+        # Explicit recheck also recovers pending findings skipped by older deduplication.
+        with manager.store.scope(who) as r:
+            sources = {u['id']: u for u in r.list(db.utterances, db.utterances.c.meeting_id == mid)}
+            stale_ids = {e['utterance_id'] for f in r.list(db.meeting_findings, db.meeting_findings.c.meeting_id == mid)
+                if f['status'] == 'provisional' and not evidence_current(f, sources) for e in f['evidence']}
+            p = manager.progress(r, mid)
+            r.change(db.meeting_finding_progress, p['id'], processed={k: v for k, v in p['processed'].items() if k not in stale_ids})
         manager.notify(who, mid, None)
         return manager.view(who, mid)
 

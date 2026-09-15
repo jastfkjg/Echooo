@@ -9,14 +9,14 @@ class Track extends EventTarget {
 }
 const stream=(...kinds)=>{
   const tracks=kinds.map(kind=>new Track(kind));
-  return {getTracks:()=>tracks,getAudioTracks:()=>tracks.filter(t=>t.kind==='audio')};
+  return {getTracks:()=>tracks,getVideoTracks:()=>tracks.filter(t=>t.kind==='video'),getAudioTracks:()=>tracks.filter(t=>t.kind==='audio')};
 };
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 
 test('tab permission is first; audio missing from a shared screen fails before microphone capture',async()=>{
   const shared=stream('video');let micCalls=0;
   const input=new MeetingAudio({mediaDevices:{getDisplayMedia:async options=>{
-    assert.equal(options.video,true);assert.equal(options.audio.suppressLocalAudioPlayback,false);
+    assert.equal(options.video.displaySurface,'browser');assert.equal(options.monitorTypeSurfaces,'exclude');assert.equal(options.windowAudio,'exclude');assert.equal(options.systemAudio,'exclude');assert.equal(options.audio.suppressLocalAudioPlayback,false);
     assert.equal(options.selfBrowserSurface,'exclude');return shared;
   },getUserMedia:async()=>{micCalls++;}}});
   await assert.rejects(input.open(),/Share tab audio/);
@@ -72,5 +72,15 @@ test('microphone-only mode works without display capture; mixed sources have mon
     assert.deepEqual(sources.map(s=>s.stream),includeTab?[shared,mic]:[mic]);
     for(const gain of gains){assert.equal(gain.channelCount,1);assert.equal(gain.channelCountMode,'explicit');assert.equal(gain.gain.value,includeTab?0.5:1);assert.equal(gain.target,destination);}
     input.close();assert.ok([...sources,...gains].every(n=>n.disconnected));
+  }
+});
+
+test('unsupported surfaces release all tracks before requesting microphone, even with audio',async()=>{
+  for(const surface of ['window','monitor']) {
+    const shared=stream('video','audio');let micCalls=0;
+    shared.getVideoTracks()[0].getSettings=()=>({displaySurface:surface});
+    const input=new MeetingAudio({mediaDevices:{getDisplayMedia:async()=>shared,getUserMedia:async()=>{micCalls++;}}});
+    await assert.rejects(input.open(),/Window and entire-screen recording are not supported/);
+    assert.equal(micCalls,0);assert.ok(shared.getTracks().every(t=>t.stops===1));
   }
 });

@@ -18,7 +18,7 @@ test('untrusted model statements, names and quotes are escaped in review and fin
 
 test('stale evidence and in-flight review disable approval; approved items cannot be approved twice',()=>{
   assert.ok(!decisionListHTML([{...item,evidence_current:false}]).includes('data-approve-finding'));
-  assert.match(decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:true}]), /Review changes/);
+  assert.match(decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:true}]), /Review &amp; approve/);
   assert.match(decisionListHTML([item],true), /data-approve-finding="finding-1" disabled/);
   assert.ok(!decisionListHTML([{...item,status:'approved'}]).includes('data-approve-finding'));
   assert.ok(approvedRecordHTML({decisions:[]}).includes('No approved findings'));
@@ -38,6 +38,36 @@ test('review controls include edit and reject and permit explicit re-review',()=
   assert.ok(decisionListHTML([item]).includes('data-reject-finding'));
   assert.ok(decisionListHTML([item]).includes('data-edit-finding'));
   const html=decisionListHTML([{...item,status:'approved',evidence_current:false,can_refresh_evidence:true}]);
-  assert.ok(html.includes('Review changes'));
+  assert.ok(html.includes('Review &amp; approve'));
   assert.ok(!html.includes('data-approve-finding'));
+});
+
+test('compact queue folds reviewed items and combines evidence and history',()=>{
+  const html=decisionListHTML([item,{...item,id:'done',status:'approved'}]);
+  assert.match(html,/<summary>Evidence<\/summary>/);
+  assert.ok(!html.includes('<summary>Review history</summary>'));
+  assert.match(html,/<details class="finding-reviewed"[^>]*><summary>Reviewed · 1/);
+  const deleted=decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:false}]);
+  assert.match(deleted,/Source deleted/);
+  assert.match(deleted,/data-edit-finding="finding-1" disabled/);
+  assert.match(deleted,/data-reject-finding="finding-1" >Reject/);
+});
+
+test('outdated statement is paired with its original evidence, never substituted current text',()=>{
+  const f={...item,evidence_current:false,can_refresh_evidence:true,current_evidence:[{...item.evidence[0],quote:'Corrected speech'}]};
+  const html=decisionListHTML([f]);
+  assert.ok(html.includes('Original evidence'));
+  assert.ok(html.includes('We decided &lt;b&gt;yes&lt;/b&gt;'));
+  assert.ok(!html.includes('Corrected speech'));
+  assert.ok(!html.includes('The transcript changed'));
+  assert.match(html,/<footer><span>.*?<button[^>]+data-source-utterance="u"/);
+});
+
+test('re-review shows current evidence first and save is the single confirmation',async()=>{
+  const {findingEditorHTML}=await import('../web/meeting-findings.js');
+  const html=findingEditorHTML({...item,evidence_current:false,current_evidence:[{...item.evidence[0],quote:'Corrected speech'}]});
+  assert.ok(html.indexOf('Corrected speech')<html.indexOf('<textarea'));
+  assert.match(html,/<details><summary>Previous evidence<\/summary>/);
+  assert.ok(!html.includes('checkbox'));
+  assert.ok(!html.includes('name="confirmed"'));
 });

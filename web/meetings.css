@@ -225,26 +225,43 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 #project-memory-options{max-height:240px}
 
 /* Meeting-wide reviewed decisions reuse the existing reader and control styles. */
-.meeting-findings { margin-block: 1.5rem; padding-block: 1rem; border-block: 1px solid var(--line); }
-.finding-row { padding-block: 1rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.finding-meta { display: flex; flex-wrap: wrap; gap: .75rem; }
-.finding-row details { margin-block: .75rem; }
-.finding-row summary { cursor: pointer; padding-block: .5rem; }
-.finding-row blockquote { margin: .75rem 0; padding-inline-start: 1rem; border-inline-start: 2px solid var(--line); }
-.finding-row footer { color: var(--muted); }
-.meeting-findings [data-generate-record] { margin-top: 1rem; }
-.meeting-findings [data-approved-record] { margin-top: 1rem; overflow-wrap: anywhere; }
-
-.meeting-findings [role="alert"] { color: var(--danger); }
-.meeting-findings .btn { min-height: 44px; }
-@media (max-width: 600px) { .meeting-findings .meeting-section-heading { flex-wrap: wrap; } }
-.finding-editor { width: min(640px, calc(100vw - 32px)); max-height: 85vh; overflow-y: auto; }
-.finding-editor label { display: grid; gap: .5rem; margin-block: 1rem; }
-.finding-editor input, .finding-editor textarea { width: 100%; box-sizing: border-box; }
-.finding-editor .finding-confirm { display: flex; align-items: start; }
-.finding-editor .finding-confirm input { width: auto; }
-.finding-editor blockquote { margin-inline: 0; padding-inline-start: 1rem; border-inline-start: 2px solid var(--line); }
-.finding-row .actions { flex-wrap: wrap; gap: .5rem; }
-.finding-editor { padding: 24px; box-sizing: border-box; }
-.finding-editor h3 { margin-top: 0; }
-.finding-editor .finding-confirm { min-height: 44px; align-items: center; }
+/* Findings: readable statements, nearby actions, and secondary source panels. */
+.meeting-findings{max-width:1000px;margin-block:24px;padding-block:20px;border-block:1px solid var(--line)}
+.meeting-findings .meeting-section-heading{gap:16px;flex-wrap:wrap}
+.meeting-findings [data-finding-count]{font-size:14px;color:var(--muted);margin:4px 0 16px}
+.meeting-findings [role="status"]:empty,.meeting-findings [role="alert"]:empty{display:none}
+.meeting-findings [role="alert"]{color:var(--danger)}
+.meeting-findings .btn{min-height:44px}
+.meeting-findings .finding-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 24px;padding:20px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.finding-main{min-width:0}
+.meeting-findings .finding-meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;font-size:14px;color:var(--muted)}
+.finding-status{font-size:13px;padding:2px 8px;border-radius:4px;background:var(--soft);color:var(--fg)}
+.meeting-findings .finding-statement{margin:8px 0 4px;font-size:18px;line-height:1.6;font-weight:600;max-width:65ch}
+.finding-main>.muted{margin:6px 0;font-size:14px;line-height:1.6}
+.meeting-findings .finding-actions{display:flex;flex-wrap:wrap;margin:0;align-self:start;align-items:center;gap:8px;padding-top:26px}
+.finding-actions .meeting-text-button{min-height:44px;padding:8px}
+.meeting-findings .finding-details{grid-column:1/-1;margin:0;min-width:0}
+.meeting-findings .finding-details>summary,.finding-reviewed>summary,.finding-editor details>summary{cursor:pointer;min-height:44px;box-sizing:border-box;padding:12px 0;font-size:14px;color:var(--muted)}
+.meeting-findings .finding-details blockquote{margin:0 0 8px;padding:14px 20px;background:var(--soft);border:0;border-radius:6px;max-width:760px;box-sizing:border-box}
+.meeting-findings .finding-details blockquote p,.finding-editor blockquote p{font-size:16px;line-height:1.75;margin:0;white-space:pre-wrap}
+.finding-details footer,.finding-editor footer{display:flex;align-items:center;flex-wrap:wrap;gap:4px 16px;color:var(--muted);font-size:14px;margin-top:8px}
+.finding-details footer .meeting-text-button,.finding-editor footer .meeting-text-button{display:inline-flex;align-items:center;min-height:44px;padding:4px 0;font-size:14px}
+.finding-details [data-history-for]>details{margin:0}
+.finding-details [data-history-for] summary{cursor:pointer;min-height:44px;padding:12px 0;box-sizing:border-box;font-size:14px;color:var(--muted)}
+.finding-details [data-history-for] p{font-size:14px;line-height:1.6;margin:8px 0;max-width:70ch}
+.finding-reviewed{margin-top:16px}
+.finding-reviewed>summary{font-size:15px;font-weight:600;color:var(--fg)}
+.meeting-findings [data-generate-record],.meeting-findings [data-approved-record]{margin-top:16px}
+.meeting-findings [data-approved-record]{overflow-wrap:anywhere}
+.finding-editor{width:min(640px,calc(100vw - 32px));max-height:85vh;overflow-y:auto;padding:24px;box-sizing:border-box}
+.finding-editor h3{margin-top:0}
+.finding-editor label{display:grid;gap:8px;margin-block:16px}
+.finding-editor input,.finding-editor textarea{width:100%;box-sizing:border-box;font-size:16px;line-height:1.6}
+.finding-editor blockquote{margin:12px 0;padding:12px 16px;background:var(--soft);border:0;border-radius:6px}
+.finding-editor [data-editor-fields]>h4:first-child{margin-top:12px}
+@media(max-width:700px){
+ .meeting-findings .finding-row{grid-template-columns:minmax(0,1fr);gap:4px;padding-block:16px}
+ .meeting-findings .finding-actions{grid-row:2;justify-content:flex-start;padding-top:4px}
+ .meeting-findings .finding-statement{font-size:17px}
+ .meeting-findings .finding-details blockquote{padding:12px 14px}
+}
