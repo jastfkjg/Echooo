@@ -16,6 +16,7 @@ class TranscriptFeed:
     def __init__(self):
         self.listeners = defaultdict(set)
         self.drafts = {}
+        self.on_utterance = None
 
     def subscribe(self, who, mid):
         queue = asyncio.Queue(maxsize=64)
@@ -29,6 +30,8 @@ class TranscriptFeed:
             self.listeners.pop((who, mid), None)
 
     def publish(self, who, mid, event):
+        if event['type'] == 'utterance' and self.on_utterance:
+            self.on_utterance(who, mid, event['utterance'])
         key = (who, mid)
         event = {**event, 'emitted_at': time.time()}
         if event['type'] == 'partial':

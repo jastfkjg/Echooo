@@ -223,3 +223,18 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .project-memory-preview p{font-size:.875rem;line-height:1.5;margin:.35rem 0 0}
 #project-access-note{font-size:.875rem;line-height:1.5}
 #project-memory-options{max-height:240px}
+
+/* Meeting-wide reviewed decisions reuse the existing reader and control styles. */
+.meeting-findings { margin-block: 1.5rem; padding-block: 1rem; border-block: 1px solid var(--line); }
+.finding-row { padding-block: 1rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.finding-meta { display: flex; flex-wrap: wrap; gap: .75rem; }
+.finding-row details { margin-block: .75rem; }
+.finding-row summary { cursor: pointer; padding-block: .5rem; }
+.finding-row blockquote { margin: .75rem 0; padding-inline-start: 1rem; border-inline-start: 2px solid var(--line); }
+.finding-row footer { color: var(--muted); }
+.meeting-findings [data-generate-record] { margin-top: 1rem; }
+.meeting-findings [data-approved-record] { margin-top: 1rem; overflow-wrap: anywhere; }
+
+.meeting-findings [role="alert"] { color: var(--danger); }
+.meeting-findings .btn { min-height: 44px; }
+@media (max-width: 600px) { .meeting-findings .meeting-section-heading { flex-wrap: wrap; } }

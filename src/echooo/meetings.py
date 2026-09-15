@@ -26,6 +26,7 @@ from echooo.service import Problem, need
 from echooo.auth import AuthError
 from echooo.meeting_knowledge import MeetingKnowledge, KnowledgeInput
 from echooo.meeting_speech import speech_transcript
+from echooo.meeting_findings import MeetingFindings, install_finding_routes, purge_findings
 
 
 class MeetingInput(Input):
@@ -98,6 +99,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     captures = set()
     transcriptions = RecordingTranscriptions(store, settings, locks)
     app.state.meeting_transcriptions = transcriptions
+    findings = MeetingFindings(store, ai, transcriptions.feed, settings.llm_provider != "mock")
+    app.state.meeting_findings = findings
+    install_finding_routes(app, findings, owner)
     knowledge = MeetingKnowledge(store, ai)
     app.state.meeting_knowledge = knowledge
     from echooo.meeting_bots import install_meeting_bots
@@ -125,7 +129,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
                 "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
-                "recordings": recordings}
+                "recordings": recordings, **findings.view(who, mid)}
 
     def scoped_records(r, mid, recording_id):
         if recording_id and recording_id != "notes":
@@ -186,6 +190,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for minutes in r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid):
                 if set(minutes["evidence_ids"]) & ids:
                     r.remove(db.meeting_minutes, minutes["id"])
+            purge_findings(r, mid, ids)
             app.state.service.purge_meeting_evidence(r, mid, ids)
             r.remove(db.recordings, rid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
@@ -247,7 +252,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})
@@ -335,8 +340,10 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     async def add_text(request: Request, mid: str, data: UtteranceInput):
         with store.scope(owner(request)) as r:
             get(r, mid, True)
-            return r.add(db.utterances, meeting_id=mid, recording_id=None,
+            u = r.add(db.utterances, meeting_id=mid, recording_id=None,
                 start_ms=0, end_ms=0, **data.model_dump())
+        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': u})
+        return u
 
     @app.patch("/api/meetings/{mid}/utterances/{uid}")
     async def correct(request: Request, mid: str, uid: str, data: UtteranceInput):

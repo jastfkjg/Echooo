@@ -192,10 +192,26 @@ meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
     Column("evidence", JSON, nullable=False),
     constraints=(UniqueConstraint("proposal_id"),))
 
+# Independent reviewed decisions; create_all adds these tables to existing databases.
+meeting_findings = owned_table("meeting_findings", meeting_ref(),
+    Column("kind", String, nullable=False), Column("statement", Text, nullable=False),
+    Column("original", JSON, nullable=False), Column("evidence", JSON, nullable=False),
+    Column("fingerprint", String, nullable=False), Column("status", String, nullable=False),
+    Column("revision", Integer, nullable=False),
+    constraints=(UniqueConstraint("meeting_id", "fingerprint"),))
+meeting_finding_reviews = owned_table("meeting_finding_reviews", meeting_ref(),
+    Column("finding_id", String, ForeignKey("meeting_findings.id", ondelete="CASCADE"), nullable=False),
+    Column("action", String, nullable=False), Column("before", JSON, nullable=False),
+    Column("after", JSON, nullable=False))
+meeting_finding_progress = owned_table("meeting_finding_progress", meeting_ref(),
+    Column("processed", JSON, nullable=False), Column("phase", String, nullable=False),
+    Column("error", Text, nullable=False),
+    constraints=(UniqueConstraint("meeting_id"),))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
-    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech]
+    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress]
 
 
 class Store:
