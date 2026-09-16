@@ -19,7 +19,7 @@ sudo install -d -m 700 -o deploy -g deploy /opt/echooo/releases /opt/echooo/back
 
 Skip user creation if that user already exists. Install the deployment public key in `/home/deploy/.ssh/authorized_keys` with directory mode 700 and file mode 600, owned by deploy. Reconnect after changing group membership. Confirm `docker info` works as deploy without sudo.
 
-For HTTP IP testing, no domain or certificate is needed; allow inbound TCP 80. For HTTPS, point a domain's A record to the server. Only set AAAA if IPv6 routing actually works. Allow inbound TCP 80/443 and your SSH port in the cloud firewall. GitHub-hosted runners must be able to reach SSH; a firewall allowing only your laptop will block deployment. The app and database publish no host ports. Allow outbound access to Alibaba Cloud ACR and Docker Hub, certificate authorities, and the configured model providers.
+For HTTP IP testing, no domain or certificate is needed; allow inbound TCP 80. For HTTPS, point a domain's A record to the server. Only set AAAA if IPv6 routing actually works. Allow inbound TCP 80/443 and your SSH port in the cloud firewall. GitHub-hosted runners must be able to reach SSH; a firewall allowing only your laptop will block deployment. The app and database publish no host ports. Allow outbound access to Alibaba Cloud ACR, certificate authorities, and the configured model providers.
 
 Obtain the server SSH host public key/fingerprint from the cloud console or another trusted channel. `SSH_KNOWN_HOSTS` must contain its OpenSSH known_hosts entry, such as `server.example.com ssh-ed25519 AAAA...`; use `[server.example.com]:2222` for a non-default port. Do not trust an unverified `ssh-keyscan` result.
 
@@ -100,7 +100,7 @@ In the **Variables** tab, add:
 
 The resulting image is `ACR_REGISTRY/ACR_NAMESPACE/ACR_REPOSITORY:COMMIT_SHA`. The server deploys its immutable `@sha256:...` digest. Supported registry hostnames include `registry.cn-hangzhou.aliyuncs.com`, `crpi-xxxx.cn-hangzhou.personal.cr.aliyuncs.com`, and `my-instance-registry.cn-hangzhou.cr.aliyuncs.com`. Replace these examples with your own console values.
 
-Enable Actions; GitHub Packages permissions and a GitHub registry token are not needed. The Echooo application image is published to ACR. Python build images and the PostgreSQL/Caddy service images still come from Docker Hub, so both the runner and server need access to that registry.
+Enable Actions; GitHub Packages permissions and a GitHub registry token are not needed. Actions publishes the Echooo application and mirrors the official PostgreSQL/Caddy images to the same ACR repository under separate `deps-postgres-*` and `deps-caddy-*` tags. All three immutable digests are saved in each release's `image.env`. No extra ACR repositories, variables, or credentials are needed. Only the GitHub runner needs Docker Hub access for builds and smoke tests; the server pulls all service images from ACR. Keep dependency tags/digests when configuring registry cleanup or retaining rollback releases.
 
 If you already deployed the earlier configuration, stop the old Compose project and preserve its database volume before switching: the project name is now `echooo`, which changes automatically generated volume names. Reattach the existing volume explicitly in Compose or restore a tested backup; otherwise the new project starts with a fresh database. Existing server provider env files remain usable. Create the renamed repository secrets; old environment-scoped secrets are not read by this workflow.
 

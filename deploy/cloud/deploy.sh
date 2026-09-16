@@ -2,14 +2,18 @@
 set -euo pipefail
 umask 077
 release=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-image=${1:?Usage: deploy.sh registry.cn-hangzhou.aliyuncs.com/namespace/repo@sha256:digest}
-[[ "$image" =~ ^[a-z0-9][a-z0-9.-]*\.aliyuncs\.com/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$ ]] || { echo 'An immutable Alibaba Cloud ACR image digest is required.' >&2; exit 1; }
+image=${1:?Usage: deploy.sh APP_DIGEST POSTGRES_DIGEST CADDY_DIGEST}
+postgres_image=${2:?Pass the mirrored PostgreSQL image digest}
+caddy_image=${3:?Pass the mirrored Caddy image digest}
+for reference in "$image" "$postgres_image" "$caddy_image"; do
+    [[ "$reference" =~ ^[a-z0-9][a-z0-9.-]*\.aliyuncs\.com/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$ ]] || { echo 'An immutable Alibaba Cloud ACR image digest is required.' >&2; exit 1; }
+done
 exec 9>/opt/echooo/deploy.lock
 flock -n 9 || { echo 'Another deployment is running.' >&2; exit 1; }
 [[ -f /opt/echooo/deploy.env && -f /opt/echooo/app.env ]] || { echo 'Configure deploy.env and app.env first.' >&2; exit 1; }
 # Never reuse a release directory: it also records the configuration for rollback.
 [[ ! -e "$release/image.env" ]] || { echo 'Use a fresh release directory for each deployment.' >&2; exit 1; }
-printf 'ECHOOO_IMAGE=%s\n' "$image" > "$release/image.env"
+printf 'ECHOOO_IMAGE=%s\nPOSTGRES_IMAGE=%s\nCADDY_IMAGE=%s\n' "$image" "$postgres_image" "$caddy_image" > "$release/image.env"
 compose() { bash "$release/compose.sh" "$@"; }
 compose config --quiet
 origin=$(compose config --format json | python3 "$release/validate_config.py")

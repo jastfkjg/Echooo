@@ -54,7 +54,7 @@ if 'up' in args and args[-1] == '180' and mode == 'startup': sys.exit(1)
 
 def run(deployment, mode="", image=IMAGE):
     home, release, old, env = deployment
-    result = subprocess.run(["bash", str(release / "deploy.sh"), image], env=dict(env, FAIL_MODE=mode), capture_output=True, text=True)
+    result = subprocess.run(["bash", str(release / "deploy.sh"), image, IMAGE, IMAGE], env=dict(env, FAIL_MODE=mode), capture_output=True, text=True)
     calls_path = Path(env["CALLS"])
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()] if calls_path.exists() else []
     return result, calls
@@ -71,6 +71,9 @@ def test_success_backs_up_before_starting_and_records_previous(deployment):
     assert (home / 'current').resolve() == release
     assert (home / 'previous').resolve() == old
     assert len(list((home / 'backups').glob('*.dump'))) == 1
+    recorded = (release / 'image.env').read_text()
+    assert f'POSTGRES_IMAGE={IMAGE}' in recorded
+    assert f'CADDY_IMAGE={IMAGE}' in recorded
 
 
 @pytest.mark.parametrize('mode', ['pull', 'backup', 'startup', 'https'])
