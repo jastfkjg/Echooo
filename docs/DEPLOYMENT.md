@@ -176,3 +176,9 @@ bash deploy/cloud/smoke-test.sh
 ```
 
 This builds the image, tests PostgreSQL startup, static assets and owner creation with mock providers, and validates both Caddy modes. Its temporary containers, database volume, network, and image are removed on exit. It does not connect to the cloud server or test public certificate issuance.
+
+## ACR manifest compatibility
+
+The publish step disables provenance and SBOM attestations and explicitly exports Docker media types (`oci-mediatypes=false`). This avoids the OCI attestation artifact format rejected by some ACR Personal Edition registries with `unknown manifest class for application/vnd.oci.empty.v1+json`. Both CPU architectures and deployment by digest remain enabled. Published images do not include provenance/SBOM attestations; commit revision labels are retained.
+
+After updating the workflow, start a new **Deploy → Run workflow** from the branch containing the fix. Re-running an older failed run uses its older workflow revision.
