@@ -1,5 +1,7 @@
 # Operations and deployment
 
+For the Docker-based cloud test environment and manual GitHub Actions release process, see [Manual cloud deployment](DEPLOYMENT.md).
+
 ## Local setup and upgrading from the old demo
 
 Run `./start.sh` from the source checkout, or invoke the script by its full path.

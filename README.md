@@ -67,6 +67,8 @@ Live transcription requires STT; AI notes require a live LLM and should be revie
 
 ## Deployment
 
+For a cloud test server with Docker, HTTP IP access or domain HTTPS, and **manually triggered GitHub Actions**, follow [Manual cloud deployment](docs/DEPLOYMENT.md). Pushes and merges do not deploy.
+
 SQLite is the local default. For PostgreSQL, set `POSTGRES_PASSWORD` in `.env` and start the included database:
 
 ```bash

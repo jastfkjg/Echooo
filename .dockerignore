@@ -1,0 +1,15 @@
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!web/
+!web/**
+!config/
+!config/**
+!deploy/
+!deploy/cloud/
+!deploy/cloud/create_owner.py
+**/__pycache__
+**/*.pyc
