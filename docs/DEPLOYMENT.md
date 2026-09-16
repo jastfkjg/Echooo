@@ -6,7 +6,7 @@ This is an invitation-based test environment, not public multi-user registration
 
 ## 1. Prepare the server
 
-Use a Linux server with Docker Engine and Docker Compose v2 (including `up --wait`), Bash, Python 3, curl, tar, OpenSSH, and flock (util-linux). See [Docker's installation instructions](https://docs.docker.com/engine/install/). Both amd64 and arm64 images are built. Ports 80 and 443 must be free; if the server already runs a reverse proxy, adapt this stack before deployment.
+Use a Linux server with Docker Engine and Docker Compose v2.24+ (including `up --wait`), Bash, Python 3.6+, curl, tar, OpenSSH, and flock (util-linux). See [Docker's installation instructions](https://docs.docker.com/engine/install/). Both amd64 and arm64 images are built. Ports 80 and 443 must be free; if the server already runs a reverse proxy, adapt this stack before deployment.
 
 Create a dedicated `deploy` user, allow its SSH key, and grant Docker access. Docker group membership is effectively root access: grant deployment permissions only to trusted maintainers. As a server administrator:
 
@@ -182,3 +182,11 @@ This builds the image, tests PostgreSQL startup, static assets and owner creatio
 The publish step disables provenance and SBOM attestations and explicitly exports Docker media types (`oci-mediatypes=false`). This avoids the OCI attestation artifact format rejected by some ACR Personal Edition registries with `unknown manifest class for application/vnd.oci.empty.v1+json`. Both CPU architectures and deployment by digest remain enabled. Published images do not include provenance/SBOM attestations; commit revision labels are retained.
 
 After updating the workflow, start a new **Deploy → Run workflow** from the branch containing the fix. Re-running an older failed run uses its older workflow revision.
+
+## Deployment preflight and server compatibility
+
+Before building images, Actions checks SSH connectivity, readable env files, directory permissions, Docker daemon access, and host tooling (Compose 2.24+, Python 3.6+). You can run `bash deploy/cloud/preflight.sh` on the server independently. It does not restart services.
+
+After pulling the candidate images, deployment validates the application settings and Caddy configuration in disposable containers without starting app migrations. For an existing running database it also checks the configured application database credentials before stopping the old app. The old app is then stopped and the existing database backed up before any database container recreation. Health checks use a bounded shell retry loop compatible with older curl versions, including 7.61.1; TLS verification remains enabled for HTTPS.
+
+Host checks do not validate live model-provider credentials or provider quotas. A successful HTTP health response is not an end-to-end voice/LLM test. If an earlier release failed after startup, containers may already be healthy while `/opt/echooo/current` is absent; the next successful deployment creates that link. No database rollback is automatic.
