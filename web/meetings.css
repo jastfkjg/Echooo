@@ -15,7 +15,7 @@
 .meeting-passage-actions{display:flex;align-items:center;gap:16px;border-top:1px solid var(--line);margin-top:8px;font-size:12px;flex-wrap:wrap}.meeting-text-button{min-height:36px;padding:4px 0;font-size:12px;color:var(--accent);text-align:left}.meeting-text-button:hover{text-decoration:underline}.meeting-text-button.danger{color:var(--danger)}.meeting-draft{margin:0 auto 7px;border-left-style:dashed}.meeting-draft .meeting-prose,.meeting-inline-draft{color:var(--muted)}
 .meeting-live-controls{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-height:42px;padding-top:6px;border-top:1px solid var(--line)}#meeting-read-status{margin-right:auto;font-size:12px;color:var(--muted)}#meeting-latest{font-size:12px;padding:7px 12px}.meeting-follow{display:flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px}.meeting-follow input{margin:0}
 .meeting-placeholder{color:var(--muted);font-size:14px;line-height:1.6;margin:12px 0}.meeting-summary-coverage{font-size:13px;color:var(--muted);padding:10px 12px;background:var(--soft);border-radius:6px;margin:12px 0}.meeting-summary-status{color:var(--muted);font-size:12px;line-height:1.5;margin:8px 0}.meeting-summary-status:empty{display:none}.meeting-summary-status[data-error="true"]{color:var(--danger)}
-.meeting-minutes-reader{max-width:1040px;margin:22px auto 0}.minutes-hint{font-size:12px;color:var(--muted);margin:4px 0 16px}.minutes-overview{font-size:16px;line-height:1.65;margin:0 0 22px;overflow-wrap:anywhere}.minutes-outcomes{margin:16px 0}.minutes-outcomes h3,.minutes-discussion>h3{font-size:14px;font-weight:650;margin:0 0 6px;color:var(--accent)}.minutes-discussion{border-top:1px solid var(--line);padding-top:20px;margin-top:22px}.minutes-topic{margin-top:16px}.minutes-topic h4{font-size:15px;font-weight:650;margin:0 0 2px;line-height:1.5}.meeting-minutes-reader ul{padding:0 0 0 18px;margin:0}.meeting-minutes-reader li{padding-left:2px;margin:1px 0}.meeting-minutes-reader li::marker{color:var(--muted);font-size:12px}.minute-point{display:block;width:100%;text-align:left;font-size:15px;line-height:1.55;color:var(--fg);padding:7px 6px;margin-left:-6px;border-radius:5px;white-space:normal;overflow-wrap:anywhere;font-weight:400}.minute-point:hover,.minute-point:focus-visible{background:var(--soft)}.minute-action-meta{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.meeting-minutes-reader{max-width:1040px;margin:22px auto 0}.minutes-hint{font-size:12px;color:var(--muted);margin:4px 0 16px}.minutes-overview{font-size:16px;line-height:1.65;margin:0 0 22px;overflow-wrap:anywhere}.minutes-outcomes{margin:16px 0}.minutes-outcomes h3,.minutes-discussion>h3{font-size:14px;font-weight:650;margin:0 0 6px;color:var(--accent)}.minutes-discussion{border-top:1px solid var(--line);padding-top:20px;margin-top:22px}.minutes-topic{margin-top:16px}.minutes-topic h3{font-size:15px;font-weight:650;margin:0 0 2px;line-height:1.5}.meeting-minutes-reader ul{padding:0 0 0 18px;margin:0}.meeting-minutes-reader li{padding-left:2px;margin:1px 0}.meeting-minutes-reader li::marker{color:var(--muted);font-size:12px}.minute-point{display:block;width:100%;text-align:left;font-size:15px;line-height:1.55;color:var(--fg);padding:7px 6px;margin-left:-6px;border-radius:5px;white-space:normal;overflow-wrap:anywhere;font-weight:400}.minute-point:hover,.minute-point:focus-visible{background:var(--soft)}.minute-action-meta{display:block;font-size:12px;color:var(--muted);margin-top:2px}
 .meeting-recording-tools{display:flex;align-items:center;gap:8px;min-width:0}#single-recording{font-size:12px;color:var(--muted);white-space:nowrap}.meeting-menu{position:relative}.meeting-menu>summary{display:flex;align-items:center;justify-content:center;list-style:none;cursor:pointer;min-width:44px;min-height:44px;border-radius:6px;font-size:22px;line-height:1;color:var(--muted)}.meeting-menu>summary::-webkit-details-marker{display:none}.meeting-menu[open]>summary,.meeting-menu>summary:hover{background:var(--soft);color:var(--fg)}.meeting-menu-items{position:absolute;right:0;top:100%;z-index:20;width:190px;padding:5px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:0 8px 24px #0002}.meeting-menu-items :is(button,a){display:flex;align-items:center;width:100%;text-align:left;min-height:44px;padding:8px 10px;font-size:13px;color:var(--fg);border-radius:4px}.meeting-menu-items :is(button,a):hover{background:var(--soft)}.meeting-menu-items .danger{color:var(--danger)}.meeting-library-row{overflow:visible;gap:12px}.meeting-library-link{flex:1;min-width:0;padding:6px 0}.meeting-library-link h3{overflow-wrap:anywhere}.meeting-library-link p{margin:5px 0 0}.meeting-library-row .meeting-menu{flex-shrink:0}.meeting-library-row:focus-within{position:relative;z-index:2}
 .meeting-source-dialog{width:min(700px,calc(100vw - 28px));max-height:82dvh;padding:20px;border:1px solid var(--line);border-radius:12px;color:var(--fg);background:var(--panel);overflow:auto}.meeting-source-dialog::backdrop{background:#0005}.meeting-source-dialog .dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0;margin-bottom:16px}.meeting-source-dialog h2{font-size:17px;margin:0}.meeting-source-dialog .dialog-head .btn{min-height:44px}#meeting-source-point{font-size:15px;font-weight:600;line-height:1.55;overflow-wrap:anywhere}.minute-source-passage{padding:12px 0;border-top:1px solid var(--line)}.minute-source-passage p{font-size:15px;line-height:1.55;margin:4px 0;overflow-wrap:anywhere}.minute-source-passage p.muted{font-size:12px}.minute-source-passage button{min-height:44px}
 .meeting-player-wrap{position:fixed;z-index:10;bottom:0;left:238px;right:0;display:grid;grid-template-columns:90px minmax(120px,1fr) auto;gap:14px;align-items:center;border-top:1px solid var(--line);background:var(--panel);padding:10px 24px max(10px,env(safe-area-inset-bottom))}.meeting-player-title{display:flex;flex-direction:column;gap:3px;min-width:0}.meeting-player-wrap strong{font-size:12px}.meeting-player-wrap audio{display:block;width:100%;height:40px}.meeting-player-wrap .muted{font-size:11px;line-height:1.5}.meeting-player-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.meeting-player-tools .btn{padding:8px;min-width:44px}.meeting-speed{display:flex;gap:6px;align-items:center;font-size:12px}.meeting-speed select{width:74px;padding:8px}.meeting-player-tools .meeting-follow{min-height:44px;margin-left:6px}
@@ -152,9 +152,9 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 }
 
 /* Two visible alternatives: invite the assistant, or capture this device's audio. */
-.meeting-controls { grid-template-columns:repeat(2,minmax(0,1fr)); gap:32px; padding:18px 0; margin:8px 0 12px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
-.meeting-controls .meeting-bot,.meeting-controls .meeting-capture { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; min-width:0; min-height:0; padding:0; margin:0; border:0; }
-.meeting-controls .meeting-capture { padding-left:32px; border-left:1px solid var(--line); }
+.meeting-controls { grid-template-columns:auto minmax(0,1fr); gap:24px; padding:12px 0; margin:8px 0 12px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.meeting-controls .meeting-bot,.meeting-controls .meeting-capture { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; min-width:0; min-height:0; padding:0; margin:0; border:0; }
+.meeting-controls .meeting-capture { padding-left:24px; border-left:1px solid var(--line); }
 .meeting-method-copy h2,.meeting-controls .meeting-bot h2 { display:block; margin:0; font-size:14px; font-weight:600; }
 .meeting-method-copy p,.meeting-controls .meeting-bot .meeting-method-copy p { margin:3px 0 0; font-size:12px; line-height:1.5; }
 .meeting-method-actions,.meeting-controls .meeting-session-bar { display:flex; align-items:center; gap:10px; min-height:44px; padding:0; border:0; border-radius:0; background:none; flex-wrap:nowrap; }
@@ -232,11 +232,11 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .meeting-findings [role="status"]:empty,.meeting-findings [role="alert"]:empty{display:none}
 .meeting-findings [role="alert"]{color:var(--danger)}
 .meeting-findings .btn{min-height:44px}
-.meeting-findings .finding-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 24px;padding:20px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.meeting-findings .finding-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 20px;padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .finding-main{min-width:0}
 .meeting-findings .finding-meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;font-size:14px;color:var(--muted)}
 .finding-status{font-size:13px;padding:2px 8px;border-radius:4px;background:var(--soft);color:var(--fg)}
-.meeting-findings .finding-statement{margin:8px 0 4px;font-size:18px;line-height:1.6;font-weight:600;max-width:65ch}
+.meeting-findings .finding-statement{margin:4px 0 0;font-size:16px;line-height:1.55;font-weight:600;max-width:65ch}
 .finding-main>.muted{margin:6px 0;font-size:14px;line-height:1.6}
 .meeting-findings .finding-actions{display:flex;flex-wrap:wrap;margin:0;align-self:start;align-items:center;gap:8px;padding-top:26px}
 .finding-actions .meeting-text-button{min-height:44px;padding:8px}
@@ -251,7 +251,7 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .finding-details [data-history-for] p{font-size:14px;line-height:1.6;margin:8px 0;max-width:70ch}
 .finding-reviewed{margin-top:16px}
 .finding-reviewed>summary{font-size:15px;font-weight:600;color:var(--fg)}
-.meeting-findings [data-generate-record],.meeting-findings [data-approved-record]{margin-top:16px}
+.meeting-findings [data-approved-record]{margin-top:16px}
 .meeting-findings [data-approved-record]{overflow-wrap:anywhere}
 .finding-editor{width:min(640px,calc(100vw - 32px));max-height:85vh;overflow-y:auto;padding:24px;box-sizing:border-box}
 .finding-editor h3{margin-top:0}
@@ -265,3 +265,85 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
  .meeting-findings .finding-statement{font-size:17px}
  .meeting-findings .finding-details blockquote{padding:12px 14px}
 }
+
+/* Completed findings read as compact rows; source details stay beside their text. */
+@media(min-width:701px){
+ .finding-reviewed .finding-row{grid-template-columns:minmax(0,1fr) 190px;align-items:start}
+ .finding-reviewed .finding-details{grid-column:2;grid-row:1}
+ .finding-reviewed .finding-details[open]{grid-column:1/-1;grid-row:auto}
+ .finding-reviewed .finding-details>summary{padding-block:10px}
+}
+.meeting-findings .approved-record-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.approved-record-heading h3{margin:0;font-size:18px}
+.approved-record-heading>span,.record-edit-label{font-size:14px;color:var(--muted)}
+.meeting-findings [data-approved-record]{border-top:1px solid var(--line);padding-top:20px}
+.record-group h3{display:flex;gap:8px;align-items:center;margin:16px 0 4px;font-size:15px}
+.record-group h3 span{font-size:13px;color:var(--muted);font-weight:400}
+.record-group ol{margin:0;padding:0;list-style:none}
+.record-group li{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:24px;align-items:start;padding:12px 0;border-bottom:1px solid var(--line)}
+.record-group li>.muted{grid-column:1;margin:4px 0;font-size:13px}
+.record-group .finding-details{grid-column:2;grid-row:1}
+.record-group .finding-details>summary{padding:0;line-height:1.6;font-size:13px;min-height:44px;display:flex;align-items:center;gap:6px}
+.record-group .finding-details>summary::before{content:"+"}
+.record-group .finding-details[open]{grid-column:1/-1;grid-row:auto}
+.record-group .finding-details[open]>summary::before{content:"−"}
+.record-group .finding-details>summary::-webkit-details-marker{display:none}
+.meeting-findings .record-statement{margin:0;font-size:16px;line-height:1.6}
+.record-edit-label{display:block;margin-top:4px}
+.evidence-break{color:var(--muted)}
+
+#panel-review .meeting-findings{margin:0;padding:20px 0;border:0;max-width:none}
+.meeting-approved-record{max-width:1040px;margin:0 auto;padding:24px 0;border-top:0}
+.review-count{font-size:13px;color:var(--muted)}
+#return-to-review{min-height:44px;margin-bottom:12px}
+.meeting-navigation [role="tab"]{white-space:nowrap}
+@media(max-width:480px){.meeting-navigation [role="tab"]{padding-inline:8px;font-size:13px}}
+
+/* Keep setup guidance secondary to the conversation. */
+.meeting-recording-help{font-size:12px;color:var(--muted);min-width:0;margin:0}
+.meeting-recording-help>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;text-decoration:underline;text-underline-offset:3px}
+.meeting-recording-help[open]{flex-basis:100%}
+.meeting-recording-help p{max-width:65ch;margin:0 0 8px;line-height:1.6}
+.meeting-controls .meeting-warning:not(:empty),.meeting-controls #bot-status:not(:empty),.meeting-controls .meeting-agent-controls{flex-basis:100%}
+.meeting-controls .meeting-warning:empty{display:none}
+.meeting-controls .meeting-method-copy{flex-shrink:0}
+.record-group .record-statement{padding-top:8px;overflow-wrap:anywhere}
+@media(max-width:1100px){
+ .meeting-controls{grid-template-columns:1fr;gap:12px}
+ .meeting-controls .meeting-capture{padding:12px 0 0;border-left:0;border-top:1px solid var(--line)}
+}
+@media(max-width:480px){
+ .meeting-controls .meeting-session-bar{flex-basis:100%;flex-wrap:wrap}
+ .meeting-controls .meeting-audio-source{flex:1 1 150px}
+ .record-group li{column-gap:12px}
+}
+
+.meeting-minutes-reader .meeting-approved-record{max-width:none;margin:20px 0;padding:0;border:0}
+.record-confirmed{font-size:12px;color:var(--accent);font-weight:400}
+.minutes-highlights{margin:16px 0 0}
+.minutes-highlights>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--muted);font-size:14px}
+.minutes-highlights>summary::before{content:"+";margin-right:8px}
+.minutes-highlights[open]>summary::before{content:"−"}
+
+.meeting-approved-record .record-group:last-child li:last-child{border-bottom:0}
+
+/* Use spacing and peer headings to structure the reading view. */
+.meeting-controls{border:0}
+.meeting-controls .meeting-capture{border:0}
+.meeting-minutes-reader .meeting-approved-record{margin:36px 0 0}
+.meeting-minutes-reader .minutes-discussion{border:0;padding:0;margin:36px 0 0}
+.meeting-minutes-reader .meeting-section-heading h2,
+.meeting-approved-record>h2,.minutes-discussion>h2{margin:0 0 16px;font-size:22px;line-height:1.35;font-weight:650;color:var(--fg)}
+.meeting-minutes-reader .meeting-section-heading h2{margin:0}
+.meeting-approved-record .record-group h3{margin:20px 0 4px;font-size:15px}
+.record-group li{border:0;padding-block:10px}
+.meeting-findings .finding-row{border:0;padding:18px 8px;margin:0 -8px;border-radius:6px}
+.meeting-findings .finding-row:hover,.meeting-findings .finding-row:focus-within{background:var(--soft)}
+.meeting-findings .finding-details>summary{display:flex;align-items:center;gap:6px;padding:0;min-height:44px;font-size:13px}
+.meeting-findings .finding-details>summary::before{content:"+"}
+.meeting-findings .finding-details[open]>summary::before{content:"−"}
+.meeting-findings .finding-details>summary::-webkit-details-marker{display:none}
+.finding-notice{display:flex;align-items:center;gap:16px;font-size:14px;color:var(--accent);margin:8px 0}
+.finding-notice button{min-height:44px}
+[data-confirmed-finding]:focus{outline:2px solid var(--accent);outline-offset:6px;border-radius:4px}
+@media(min-width:701px){.finding-reviewed .finding-row{grid-template-columns:minmax(0,1fr) auto;column-gap:24px}}

@@ -1,7 +1,7 @@
-import {mountFindings} from './meeting-findings.js?v=5';
+import {mountFindings} from './meeting-findings.js?v=10';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
-import {MeetingAudio} from './meeting-audio.js?v=tab-audio-2';
+import {MeetingAudio} from './meeting-audio.js?v=tab-audio-3';
 import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent, transcriptRecords} from './meeting-transcript.js?v=meeting-transcript-7';
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const meetingTime = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
@@ -20,14 +20,15 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   let meeting=await api(`/meetings/${id}`);if(!isCurrent())return;
   let disposed=false,socket,audioInput,context,capture,starting=false,stopping=false,recordingRate=16000,pendingBuffers=[],captureFlushed=null;
   let selectedRecording=meeting.recordings.at(-1)?.id||'notes',captureRecording=null,selectedPassage=null,selectedView='full';
-  let analysisTask=null,analysisMessage='',analysisError=false;
+  let analysisTask=null,analysisMessage='',analysisError=false,analysisRecording=null;
   let searchOpen=false,searchQuery='',searchIndex=-1,searchIds=[],playingId=null,followedId=null,searchTimer;
   let playbackRecords=[],activePanel='transcript',unread=0,partialSpeaker='Listening',refreshing=false;
   let minuteSources=[];
   const liveUpdates=new TranscriptUpdates();
   let liveDraft=null,feedConnected=false,refreshAgain=false;
   let eventFeed;
-  const panelScroll={transcript:0,summary:0};
+  const panelScroll={transcript:0,review:0,summary:0};
+  let sourceReturn=null;
   let botBusy=false,projectUpdatesBusy=false,projectUpdateError='';
   const botActive=()=>!!meeting.connector?.bot&&!['ended','fatal_error','data_deleted','not_created'].includes(meeting.connector.bot.state);
   const base=`/meetings/${id}`,$=s=>document.querySelector(s);
@@ -35,24 +36,32 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const scope=rid=>`?recording_id=${encodeURIComponent(rid)}`;
   const textOf=u=>u.content.replace(/\s+/g,' ').trim();
   shell(`<div class="heading meeting-heading"><div><a class="meeting-back" href="#meetings">← All meetings</a><h1>${esc(meeting.title)}</h1><p id="meeting-context"></p><button class="meeting-text-button" id="meeting-project">Project & knowledge</button><p id="meeting-knowledge-hint" class="muted" role="status" hidden></p></div><div class="actions"><button class="btn" id="meeting-end">End meeting</button></div></div>
-    <div class="meeting-controls" aria-label="Choose how to record"><section class="meeting-bot" aria-labelledby="meeting-online-title"><div class="meeting-method-copy"><h2 id="meeting-online-title">Online meeting</h2><p class="muted">Echooo joins, records and replies.</p></div><div class="meeting-method-actions"><button class="btn" id="bot-join">Invite Echooo</button><button class="btn" id="bot-leave" hidden>Leave meeting</button></div><p id="bot-status" role="status" aria-live="polite" hidden></p><p id="bot-error" class="meeting-warning" role="alert"></p><div id="bot-agent-controls" class="meeting-agent-controls" hidden><label><input type="checkbox" id="bot-chat-enabled"> Chat replies</label><label><input type="checkbox" id="bot-voice-enabled"> Answer when called</label><button class="btn" id="bot-stop">Stop speaking</button></div></section>
-    <section class="meeting-capture" aria-labelledby="meeting-device-title"><div class="meeting-method-copy"><h2 id="meeting-device-title">Record from this device</h2><p class="muted">Browser tab or microphone · no AI participant.</p></div><div class="meeting-session-bar"><div class="meeting-audio-source"><label class="sr-only" id="meeting-audio-label" for="meeting-audio-source">Audio source</label><select id="meeting-audio-source" aria-labelledby="meeting-audio-label" aria-describedby="meeting-audio-help-copy"><option value="tab">Tab + microphone</option><option value="microphone">Microphone only</option></select></div><button class="btn primary" id="meeting-record">Start recording</button></div><p id="meeting-audio-help-copy" class="muted">Choose a Chrome tab and enable “Share tab audio”. Window and entire-screen recording are not supported. Your microphone records your voice.</p><p id="capture-warning" class="meeting-warning" role="status"></p></section></div>
+    <div class="meeting-controls" aria-label="Choose how to record"><section class="meeting-bot" aria-labelledby="meeting-online-title"><div class="meeting-method-copy"><h2 id="meeting-online-title">Online meeting</h2></div><div class="meeting-method-actions"><button class="btn" id="bot-join">Invite Echooo</button><button class="btn" id="bot-leave" hidden>Leave meeting</button></div><p id="bot-status" role="status" aria-live="polite" hidden></p><p id="bot-error" class="meeting-warning" role="alert"></p><div id="bot-agent-controls" class="meeting-agent-controls" hidden><label><input type="checkbox" id="bot-chat-enabled"> Chat replies</label><label><input type="checkbox" id="bot-voice-enabled"> Answer when called</label><button class="btn" id="bot-stop">Stop speaking</button></div></section>
+    <section class="meeting-capture" aria-labelledby="meeting-device-title"><div class="meeting-method-copy"><h2 id="meeting-device-title">Record audio</h2></div><div class="meeting-session-bar"><div class="meeting-audio-source"><label class="sr-only" id="meeting-audio-label" for="meeting-audio-source">Audio source</label><select id="meeting-audio-source" aria-labelledby="meeting-audio-label" aria-describedby="meeting-audio-help-copy"><option value="tab">Tab + microphone</option><option value="microphone">Microphone only</option></select></div><button class="btn primary" id="meeting-record">Start recording</button></div><details class="meeting-recording-help"><summary>Recording help</summary><p id="meeting-audio-help-copy" class="muted">Choose a Chrome tab and enable “Share tab audio”. Your microphone records your voice. Windows and full screens are not supported.</p></details><p id="capture-warning" class="meeting-warning" role="status"></p></section></div>
     <div class="meeting-processing"><div class="meeting-health"><p id="capture-status" role="status" class="sr-only"></p><p id="transcription-status" role="status"></p></div><button class="meeting-text-button" id="meeting-repair">Check saved audio</button></div>
-    <section id="meeting-findings" class="meeting-findings" aria-labelledby="finding-title"></section>
-    <div class="meeting-reader-toolbar"><div class="meeting-navigation"><div role="tablist" aria-label="Meeting content"><button id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript" data-panel="transcript">Transcript</button><button id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-panel="summary">Summary & notes</button></div><div class="meeting-recording-tools"><span id="single-recording"></span><label class="meeting-recording-select" for="recording-picker"><span class="sr-only">Selected recording</span><select id="recording-picker"></select></label><button class="meeting-search-toggle" id="meeting-search-toggle" aria-label="Search transcript" title="Search transcript" aria-expanded="false" aria-controls="meeting-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></button><details class="meeting-menu" id="recording-menu"><summary aria-label="More meeting options">…</summary><div class="meeting-menu-items"><button id="meeting-activity" aria-haspopup="dialog" aria-controls="meeting-activity-dialog">Messages & activity</button><button id="meeting-text">Add text note</button><div id="recording-options"></div></div></details></div></div>
+    <div class="meeting-reader-toolbar"><div class="meeting-navigation"><div role="tablist" aria-label="Meeting content"><button id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript" data-panel="transcript">Transcript</button><button id="tab-review" role="tab" aria-selected="false" aria-controls="panel-review" tabindex="-1" data-panel="review">Review<span id="review-count" class="review-count" hidden></span></button><button id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-panel="summary">Summary</button></div><div class="meeting-recording-tools"><span id="single-recording"></span><label class="meeting-recording-select" for="recording-picker"><span class="sr-only">Selected recording</span><select id="recording-picker"></select></label><button class="meeting-search-toggle" id="meeting-search-toggle" aria-label="Search transcript" title="Search transcript" aria-expanded="false" aria-controls="meeting-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></button><details class="meeting-menu" id="recording-menu"><summary aria-label="More meeting options">…</summary><div class="meeting-menu-items"><button id="meeting-activity" aria-haspopup="dialog" aria-controls="meeting-activity-dialog">Messages & activity</button><button id="meeting-text">Add text note</button><div id="recording-options"></div></div></details></div></div>
       <div class="meeting-search" id="meeting-search" hidden><label class="sr-only" for="transcript-search">Search transcript</label><div class="meeting-search-controls"><input type="search" id="transcript-search" maxlength="200" placeholder="Search this conversation" autocomplete="off" aria-describedby="transcript-search-status"><button class="btn subtle" id="search-prev" aria-label="Previous matching passage" disabled>↑</button><button class="btn subtle" id="search-next" aria-label="Next matching passage" disabled>↓</button><button class="btn subtle" id="search-clear" disabled>Clear</button><button class="btn subtle" id="search-close" aria-label="Close search" title="Close search">×</button></div><p id="transcript-search-status" role="status" aria-live="polite"></p></div>
       <div class="meeting-live-controls"><span id="meeting-read-status" role="status"></span><button class="btn" id="meeting-latest" hidden>Back to live ↓</button><label class="meeting-follow"><input type="checkbox" id="meeting-follow" checked> Follow live</label></div>
     </div>
     <section id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript" class="meeting-transcript-section">
-      <h2 id="transcript-heading" class="sr-only" tabindex="-1">Conversation</h2>
+      <button id="return-to-review" class="meeting-text-button" hidden>← Back to review</button><h2 id="transcript-heading" class="sr-only" tabindex="-1">Conversation</h2>
       <div class="meeting-feed" aria-label="Conversation transcript"><div id="meeting-transcript"></div><article id="meeting-draft" class="meeting-paragraph meeting-draft" hidden><div class="paragraph-meta"><span id="draft-speaker">Listening</span><span class="paragraph-time">Transcribing…</span></div><p id="meeting-partial" class="meeting-prose"></p></article><div id="meeting-live-anchor"></div></div>
 
     </section>
-    <section id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" hidden><div class="meeting-minutes-reader"><div class="meeting-section-heading"><h2>Meeting notes</h2><button class="btn" id="meeting-analyze">Update notes</button></div><p class="minutes-hint">AI-generated · Select a point to view its source</p><p class="meeting-summary-coverage" id="meeting-summary-coverage"></p><p id="meeting-summary-status" class="meeting-summary-status" role="status"></p><div id="meeting-minutes"></div><section id="meeting-project-updates" class="meeting-project-updates" hidden><div class="meeting-section-heading"><h2>Project updates</h2><button class="btn" id="prepare-project-updates">Prepare updates</button></div><p class="muted">Review before saving to the project.</p><p id="project-updates-status" role="status"></p><div id="project-update-list"></div></section></div></section>
+    <section id="panel-review" role="tabpanel" aria-labelledby="tab-review" hidden><section id="meeting-findings" class="meeting-findings" aria-labelledby="finding-title"></section></section>
+    <section id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" hidden><div class="meeting-minutes-reader"><div class="meeting-section-heading"><h2>Overview</h2><div class="actions"><button class="btn" id="meeting-analyze">Generate summary</button><details class="meeting-menu" id="summary-menu" hidden><summary aria-label="Summary options">…</summary><div class="meeting-menu-items"><button id="meeting-regenerate">Regenerate summary</button></div></details></div></div><p class="meeting-summary-coverage" id="meeting-summary-coverage"></p><p id="meeting-summary-status" class="meeting-summary-status" role="status"></p><div id="meeting-minutes"></div><section id="meeting-approved-record" class="meeting-findings meeting-approved-record" aria-label="Confirmed results"></section><div id="meeting-discussion"></div><section id="meeting-project-updates" class="meeting-project-updates" hidden><div class="meeting-section-heading"><h2>Project updates</h2><button class="btn" id="prepare-project-updates">Prepare updates</button></div><p class="muted">Review before saving to the project.</p><p id="project-updates-status" role="status"></p><div id="project-update-list"></div></section></div></section>
     <dialog id="meeting-activity-dialog" class="meeting-activity-dialog" aria-labelledby="meeting-activity-title"><div class="dialog-head"><div><h2 id="meeting-activity-title">Messages & activity</h2></div><button class="btn" id="close-meeting-activity" autofocus aria-label="Close messages and activity">Close</button></div><div class="meeting-activity-body"><details class="inline-help"><summary>Meeting help</summary><p id="bot-help" class="muted"></p></details><details id="meeting-audio-help" class="meeting-audio-help"><summary>Recording tips</summary><p class="muted">For online meetings or videos, open the meeting or video in a Chrome tab before starting. Your microphone records your voice.</p></details><p class="meeting-activity-privacy">Private replies stay here and out of meeting notes.</p><section id="bot-agent-history" class="meeting-agent-history"><h3>Recent exchanges</h3><ol id="bot-agent-events"></ol></section><p id="meeting-activity-empty" class="meeting-placeholder">No messages yet.</p></div></dialog>
     <dialog id="meeting-source-dialog" class="meeting-source-dialog" aria-labelledby="meeting-source-title"><div class="dialog-head"><h2 id="meeting-source-title">Supporting conversation</h2><button class="btn" id="close-meeting-source" aria-label="Close source">Close</button></div><p id="meeting-source-point"></p><div id="meeting-source-passages"></div></dialog>
     <section class="meeting-player-wrap" aria-label="Recording player"><div class="meeting-player-title"><strong id="meeting-player-label"></strong><span id="meeting-playback" class="muted"></span></div><audio id="meeting-player" controls preload="none" aria-label="Selected recording audio"></audio><div class="meeting-player-tools"><button class="btn" id="play-back" aria-label="Back 10 seconds">−10s</button><button class="btn" id="play-forward" aria-label="Forward 10 seconds">+10s</button><label class="meeting-speed" for="play-speed">Speed<select id="play-speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><label class="meeting-follow"><input type="checkbox" id="follow-playback"> Follow playback</label></div></section>`,'Meetings');
-  const findingsPanel=mountFindings($('#meeting-findings'),{api,base,refresh,showSource});
+  const findingsPanel=mountFindings($('#meeting-findings'),{api,base,refresh,showSource,recordRoot:$('#meeting-approved-record'),getRecordScope:()=>selectedRecording,
+    onPending(count){$('#review-count').textContent=` · ${count}`;$('#review-count').hidden=!count;$('#tab-review').setAttribute('aria-label',count?`Review, ${count} awaiting review`:'Review');},
+    onRecord(finding){
+      const recording=finding.evidence.some(e=>(e.recording_id||'notes')===selectedRecording)?selectedRecording:(finding.evidence[0]?.recording_id||'notes');
+      if(recording!==selectedRecording)selectRecording(recording);
+      setPanel('summary');
+      const target=[...$('#meeting-approved-record').querySelectorAll('[data-confirmed-finding]')].find(node=>node.dataset.confirmedFinding===finding.id);
+      if(target){target.scrollIntoView({block:'center'});target.focus({preventScroll:true});}
+    }});
   const dock=$('.meeting-player-wrap'),workspace=$('.workspace');
   // Outside the animated workspace, so fixed controls remain viewport-relative.
   $('.main').append(dock);workspace.classList.add('meeting-workspace');
@@ -99,14 +108,15 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('#transcription-status').dataset.phase=state.phase;
     $('#meeting-repair').hidden=selectedRecording==='notes'||!!socket||!!meeting.recording||(state.phase==='complete'&&state.summary_phase!=='error')||state.phase==='verifying'||!meeting.transcription_available;
     $('.meeting-processing').hidden=state.phase==='complete'&&state.summary_phase!=='error'||selectedRecording==='notes'||!rec;
-    $('#meeting-repair').textContent=state.summary_phase==='error'?'Retry notes':state.phase==='error'?'Retry transcript check':'Check saved audio';
-    $('#meeting-summary-coverage').textContent=state.summary_error||(selectedRecording==='notes'||state.phase==='complete'?'':'These notes use the available transcript. Saved audio has not finished verification.');
+    $('#meeting-repair').textContent=state.summary_phase==='error'?'Retry summary':state.phase==='error'?'Retry transcript check':'Check saved audio';
+    $('#meeting-summary-coverage').textContent=state.summary_error||(selectedRecording==='notes'||state.phase==='complete'?'':'Transcript verification in progress.');
     $('#meeting-summary-coverage').hidden=!$('#meeting-summary-coverage').textContent;
   }
   function setPanel(panel){
     if(panel!==activePanel){panelScroll[activePanel]=window.scrollY;activePanel=panel;}else return;
     for(const button of document.querySelectorAll('[data-panel]')){const active=button.dataset.panel===panel;button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;}
-    $('#panel-transcript').hidden=panel!=='transcript';$('#panel-summary').hidden=panel!=='summary';
+    for(const name of ['transcript','review','summary'])$(`#panel-${name}`).hidden=panel!==name;
+    $('.meeting-recording-tools').hidden=panel==='review';
     $('.meeting-search').hidden=panel!=='transcript'||!searchOpen;
     $('#meeting-search-toggle').hidden=panel!=='transcript';
     $('#meeting-search-toggle').setAttribute('aria-expanded',String(panel==='transcript'&&searchOpen));
@@ -138,11 +148,11 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     if(!text)document.querySelector('.meeting-inline-draft')?.remove();
   }
   function draw(){
-    findingsPanel.render(meeting);
     drawProject();
     if(disposed)return;
     drawBot();
     if(selectedRecording!=='notes'&&!meeting.recordings.some(r=>r.id===selectedRecording))selectedRecording=meeting.recordings.at(-1)?.id||'notes';
+    findingsPanel.render(meeting);
     const {records}=recordingContent(meeting,selectedRecording);
     const {minutes,current:minutesCurrent}=minutesContent(meeting,selectedRecording);
     playbackRecords=records;
@@ -155,12 +165,20 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('.meeting-bot').hidden=completed&&!botActive();
     $('.meeting-controls').hidden=completed&&!botActive();
     $('#meeting-context').textContent=completed?`Ended${verified?.phase==='complete'?' · Saved audio checked':''}`:meeting.recording?'Recording':'Active';
-    $('#meeting-summary-status').textContent=analysisMessage||(meeting.recordings.find(r=>r.id===selectedRecording)?.transcription?.summary_phase==='building'?'Updating notes from the verified transcript…':'');$('#meeting-summary-status').dataset.error=String(analysisError);
-    $('#meeting-analyze').disabled=!!analysisTask||!records.length;
-    if(minutes&&!minutesCurrent&&!$('#meeting-summary-coverage').textContent){$('#meeting-summary-coverage').textContent=minutes.revision!==meeting.revision?'Transcript corrected · update notes to include the changes.':'More conversation is available · notes are updating or need an update.';$('#meeting-summary-coverage').hidden=false;}
+    const summaryBusy=!!analysisTask&&analysisRecording===selectedRecording||verified?.summary_phase==='building';
+    const summaryFailed=analysisError&&analysisRecording===selectedRecording||verified?.summary_phase==='error'||!!verified?.summary_error;
+    $('#meeting-summary-status').textContent=analysisRecording===selectedRecording?analysisMessage:'';$('#meeting-summary-status').dataset.error=String(analysisError&&analysisRecording===selectedRecording);
+    const summaryAction=$('#meeting-analyze');
+    summaryAction.textContent=summaryBusy?'Generating…':summaryFailed?'Retry':!minutes?'Generate summary':'Update summary';
+    summaryAction.hidden=!!minutes&&minutesCurrent&&!summaryBusy&&!summaryFailed;
+    summaryAction.disabled=!!analysisTask||summaryBusy||!records.length;
+    $('#summary-menu').hidden=!minutes||!minutesCurrent||summaryBusy||summaryFailed;
+    $('#meeting-regenerate').disabled=!!analysisTask||summaryBusy||!records.length;
+    if(minutes&&!minutesCurrent&&!summaryBusy&&!$('#meeting-summary-coverage').textContent){$('#meeting-summary-coverage').textContent='Transcript changed · update summary.';$('#meeting-summary-coverage').hidden=false;}
     minuteSources=[];
     const pointHTML=item=>{const index=minuteSources.push(item)-1;return `<li><button class="minute-point" data-minute-source="${index}" aria-haspopup="dialog">${esc(item.text)}${item.kind==='action'?`<span class="minute-action-meta">${esc([item.status==='requested'?'Requested':'Committed',speakerName(item.owner||'').replace('Unidentified speaker',''),item.deadline].filter(Boolean).join(' · '))}</span>`:''}</button></li>`;};
-    setHTML($('#meeting-minutes'),minutes?`<p class="minutes-overview">${esc(minutes.content.overview)}</p>${[['decision','Decisions'],['action','Next steps'],['question','Open questions']].map(([kind,label])=>{const items=minutes.content.outcomes.filter(i=>i.kind===kind);return items.length?`<section class="minutes-outcomes"><h3>${label}</h3><ul>${items.map(pointHTML).join('')}</ul></section>`:'';}).join('')}${minutes.content.topics.length?`<section class="minutes-discussion"><h3>Discussion</h3>${minutes.content.topics.map(t=>`<section class="minutes-topic"><h4>${esc(t.title)}</h4><ul>${t.points.map(pointHTML).join('')}</ul></section>`).join('')}</section>`:''}`:`<p class="meeting-placeholder">${records.length?'Update notes to organize this conversation into topics, outcomes and next steps.':'Meeting notes will appear after the conversation starts.'}</p>`);
+    setHTML($('#meeting-minutes'),minutes?`<p class="minutes-overview">${esc(minutes.content.overview)}</p>`:`<p class="meeting-placeholder">${records.length?'No summary yet.':'Summary will appear after the conversation starts.'}</p>`);
+    setHTML($('#meeting-discussion'),minutes&&(minutes.content.topics.length||minutes.content.outcomes.length)?`<section class="minutes-discussion"><h2>Discussion</h2>${minutes.content.topics.map(t=>`<section class="minutes-topic"><h3>${esc(t.title)}</h3><ul>${t.points.map(pointHTML).join('')}</ul></section>`).join('')}${minutes.content.outcomes.length?`<details class="minutes-highlights"><summary>Highlights</summary><ul>${minutes.content.outcomes.map(pointHTML).join('')}</ul></details>`:''}</section>`:'');
     updateSearchState(records);
     renderTranscript(records);
     if(liveDraft?.recording_id===selectedRecording)showPartial(liveDraft.text,liveDraft.speaker);else showPartial('');
@@ -176,7 +194,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('#play-back').disabled=$('#play-forward').disabled=$('#play-speed').disabled=$('#follow-playback').disabled=!playable;
     $('#meeting-record').disabled=meeting.status==='ended'||!!meeting.recording&&!socket||starting||stopping||botActive()||botBusy;
     $('#meeting-audio-source').disabled=starting||!!socket||!!meeting.recording||completed||botActive()||botBusy;
-    $('.meeting-audio-source').hidden=completed||botActive();$('#meeting-audio-help').hidden=completed||botActive();$('#meeting-audio-help-copy').hidden=completed||botActive();
+    $('.meeting-audio-source').hidden=completed||botActive();$('#meeting-audio-help').hidden=completed||botActive();$('.meeting-recording-help').hidden=completed||botActive();
     $('#meeting-end').disabled=meeting.status==='ended'||starting||!!socket||meeting.recording||!!analysisTask||botActive()||botBusy;$('#meeting-text').disabled=meeting.status==='ended';
     bindContent();
     syncPlayback(false);updateDockSpace();
@@ -243,12 +261,14 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     });
   }
   function showSource(item){
+    sourceReturn=activePanel==='review'?{scroll:window.scrollY,focus:document.activeElement}:null;
     const dialog=$('#meeting-source-dialog');$('#meeting-source-point').textContent=item.text;
     const passages=meeting.utterances.filter(u=>item.evidence_ids.includes(u.id)).sort((a,b)=>a.start_ms-b.start_ms);
     $('#meeting-source-passages').innerHTML=passages.map(u=>`<article class="minute-source-passage"><p class="muted">${esc(speakerName(u.speaker))}${u.recording_id?` · ${meetingTime(u.start_ms)}`:''}</p><p>${esc(u.content)}</p><button class="meeting-text-button" data-source-jump="${u.id}">Go to transcript${u.recording_id?` · ${meetingTime(u.start_ms)}`:''}</button></article>`).join('');
-    dialog.querySelectorAll('[data-source-jump]').forEach(b=>b.onclick=()=>{const u=meeting.utterances.find(u=>u.id===b.dataset.sourceJump);dialog.close();if(selectedRecording!==(u.recording_id||'notes'))selectRecording(u.recording_id||'notes');selectedPassage=u.id;selectedView='full';stopFollowing();setPanel('transcript');draw();const phrase=openPassage(u.id);phrase?.scrollIntoView({block:'center'});phrase?.focus({preventScroll:true});});
+    dialog.querySelectorAll('[data-source-jump]').forEach(b=>b.onclick=()=>{const u=meeting.utterances.find(u=>u.id===b.dataset.sourceJump);dialog.close();const reviewScroll=sourceReturn?.scroll;if(selectedRecording!==(u.recording_id||'notes'))selectRecording(u.recording_id||'notes');selectedPassage=u.id;selectedView='full';stopFollowing();setPanel('transcript');if(reviewScroll!==undefined){panelScroll.review=reviewScroll;$('#return-to-review').hidden=false;}draw();const phrase=openPassage(u.id);phrase?.scrollIntoView({block:'center'});phrase?.focus({preventScroll:true});});
     dialog.showModal();
   }
+  $('#return-to-review').onclick=()=>{setPanel('review');if(sourceReturn){window.scrollTo({top:sourceReturn.scroll,behavior:'instant'});if(sourceReturn.focus?.isConnected)sourceReturn.focus.focus({preventScroll:true});}sourceReturn=null;$('#return-to-review').hidden=true;};
   $('#close-meeting-source').onclick=()=>$('#meeting-source-dialog').close();
   function loadSelectedAudio(ms=0,autoplay=false){
     const player=$('#meeting-player');player.pause();player.onloadedmetadata=null;playingId=null;followedId=null;
@@ -307,7 +327,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     document.documentElement.style.setProperty('--meeting-nav-height',`${Math.ceil($('.meeting-reader-toolbar').getBoundingClientRect().height)}px`);
   }
   const onFocus=e=>{
-    if(!e.target.closest('#panel-transcript,#panel-summary')||!e.target.matches('button,input,summary,[tabindex],a'))return;
+    if(!e.target.closest('#panel-transcript,#panel-review,#panel-summary')||!e.target.matches('button,input,summary,[tabindex],a'))return;
     const rect=e.target.getBoundingClientRect(),bottom=dock.hidden?innerHeight:dock.getBoundingClientRect().top;
     if(rect.bottom>bottom||rect.top<$('.meeting-reader-toolbar').getBoundingClientRect().bottom)e.target.scrollIntoView({block:'center'});
   };
@@ -316,7 +336,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   document.querySelectorAll('[data-panel]').forEach(b=>{
     b.onmousedown=e=>{if(e.button===0){e.preventDefault();b.focus({preventScroll:true});}};
     b.onclick=()=>setPanel(b.dataset.panel);
-    b.onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const panel=e.key==='Home'?'transcript':e.key==='End'?'summary':activePanel==='transcript'?'summary':'transcript';setPanel(panel);$(`#tab-${panel}`).focus({preventScroll:true});}};
+    b.onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const panels=['transcript','review','summary'],index=panels.indexOf(b.dataset.panel);const panel=e.key==='Home'?panels[0]:e.key==='End'?panels.at(-1):panels[(index+(e.key==='ArrowRight'?1:2))%3];setPanel(panel);$(`#tab-${panel}`).focus({preventScroll:true});}};
   });
   // User scroll intent pauses following; programmatic source/search jumps do not.
   const onReadIntent=e=>{
@@ -409,22 +429,21 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   }
   function requestAnalysis(force=false,rid=selectedRecording){
     if(disposed)return Promise.resolve();if(analysisTask)return analysisTask;
+    analysisRecording=rid;analysisMessage='';analysisError=false;
     analysisTask=Promise.resolve().then(()=>runAnalysis(force,rid)).finally(()=>{analysisTask=null;if(!disposed)draw();});draw();return analysisTask;
   }
   async function runAnalysis(force,rid){
     if(!recordingContent(meeting,rid).records.length)return;
-    let remaining=Infinity;const started=Date.now();analysisError=false;
-    const progress=()=>{if(disposed)return;analysisMessage=`${recordingLabel(rid)} · Updating meeting notes · ${Math.floor((Date.now()-started)/1000)}s`;$('#meeting-summary-status').textContent=analysisMessage;};
-    progress();const timer=setInterval(progress,1000);
+    let remaining=Infinity;analysisError=false;
     try{
       while(!disposed&&remaining){
         const since=liveUpdates.version;const next=await api(`${base}/minutes${scope(rid)}${force?'&force=true':''}`,'POST');if(disposed)return;force=false;merge(next,since);draw();
         const nextRemaining=next.summary_remaining;
-        if(nextRemaining>=remaining)throw new Error('No new notes returned. Please retry.');remaining=nextRemaining;
+        if(nextRemaining>=remaining)throw new Error('No summary returned. Please retry.');remaining=nextRemaining;
       }
       analysisMessage='';
     }catch(e){analysisMessage=e.message;analysisError=true;}
-    finally{clearInterval(timer);if(!disposed)draw();}
+    finally{if(!disposed)draw();}
   }
   async function updateRecording(rid){if(rid)await requestAnalysis(false,rid);}
   function release(){capture?.disconnect();audioInput?.close();context?.close().catch(()=>{});capture=audioInput=context=null;}
@@ -462,8 +481,8 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     }catch(e){release();warning(e.message);status('Recording not started');}
     finally{starting=false;if(!disposed)draw();}
   }
-  $('#meeting-audio-source').onchange=()=>{$('#meeting-audio-help-copy').textContent=$('#meeting-audio-source').value==='tab'?'Choose a Chrome tab and enable “Share tab audio”. Window and entire-screen recording are not supported. Your microphone records your voice.':'Records your microphone only. Audio playing on your computer is not shared.';};
-  $('#meeting-record').onclick=()=>socket?stop():start();$('#meeting-analyze').onclick=()=>requestAnalysis(true);
+  $('#meeting-audio-source').onchange=()=>{$('#meeting-audio-help-copy').textContent=$('#meeting-audio-source').value==='tab'?'Choose a Chrome tab and enable “Share tab audio”. Your microphone records your voice. Windows and full screens are not supported.':'Records your microphone only. Audio playing on your computer is not shared.';};
+  $('#meeting-record').onclick=()=>socket?stop():start();$('#meeting-analyze').onclick=()=>requestAnalysis(true);$('#meeting-regenerate').onclick=()=>{$('#summary-menu').open=false;requestAnalysis(true);};
   $('#meeting-text').onclick=()=>{$('#recording-menu').open=false;openDialog('Add text note',field('speaker','Speaker','Unidentified speaker','text','required maxlength="80"')+'<div class="form-field"><label for="meeting-text-input">Spoken words</label><textarea id="meeting-text-input" name="content" required maxlength="6000"></textarea></div>',async fd=>{await api(`${base}/utterances`,'POST',{speaker:fd.get('speaker'),content:fd.get('content')});selectedRecording='notes';await refresh();if(!disposed)loadSelectedAudio();},'Add note');};
   $('#meeting-project').onclick=()=>editMeetingKnowledge({api,openDialog,meeting,onSave:async k=>{meeting.knowledge=k;await refresh();}}).catch(e=>toast(e.message));
   $('#prepare-project-updates').onclick=async()=>{projectUpdatesBusy=true;projectUpdateError='';drawProject();try{const drafts=await api(`${base}/memory-proposals`,'POST');await refresh();if(!drafts.length){projectUpdateError='No supported project changes were found.';}}catch(e){projectUpdateError=e.message;}finally{projectUpdatesBusy=false;drawProject();}};

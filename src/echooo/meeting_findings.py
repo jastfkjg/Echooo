@@ -36,6 +36,14 @@ follow-up. Omit small talk, rhetorical questions, transcription fragments and
 questions answered in the supplied context. Summarize each finding in one short,
 self-contained sentence; keep verbatim speech only in evidence. Evaluate all three
 kinds independently; do not force a kind that is absent. Empty findings is valid.
+Do not copy a whole conversational turn into statement. Remove filler and unrelated
+observations. If pronouns such as "this" or "that" have no clear referent in context,
+omit the question instead of guessing its subject. Do not silently repair garbled
+transcription into a plausible but unsupported meaning. A question mark alone is
+not evidence of a meeting follow-up. Adjacent transcript segments may form one
+sentence: cite each supporting segment separately, but emit only one finding.
+Before returning, check that every statement is supported by its cited words and
+that each unresolved question has a concrete meeting consequence.
 At most 8 items.
 For the SAME task/decision/question, use its supplied existing finding ID in
 supersedes when new evidence changes its content, owner, deadline or resolution.

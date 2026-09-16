@@ -80,7 +80,7 @@ test('unsupported surfaces release all tracks before requesting microphone, even
     const shared=stream('video','audio');let micCalls=0;
     shared.getVideoTracks()[0].getSettings=()=>({displaySurface:surface});
     const input=new MeetingAudio({mediaDevices:{getDisplayMedia:async()=>shared,getUserMedia:async()=>{micCalls++;}}});
-    await assert.rejects(input.open(),/Window and entire-screen recording are not supported/);
+    await assert.rejects(input.open(),/Choose a Chrome tab, not a window or screen/);
     assert.equal(micCalls,0);assert.ok(shared.getTracks().every(t=>t.stops===1));
   }
 });
