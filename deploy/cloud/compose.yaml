@@ -1,0 +1,68 @@
+name: echooo
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: echooo
+      POSTGRES_DB: echooo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U echooo -d echooo']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+  app:
+    image: ${ECHOOO_IMAGE:?Deploy an immutable image first}
+    restart: unless-stopped
+    env_file: /opt/echooo/app.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://echooo:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/echooo
+      PUBLIC_ORIGIN: ${PUBLIC_SCHEME:-https}://${DOMAIN:?Set DOMAIN to a domain or IP address}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    depends_on:
+      db:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 45s
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+    logging: *logging
+  proxy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile.${PUBLIC_SCHEME:-https}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    logging: *logging
+volumes:
+  postgres:
+  caddy_data:
+  caddy_config:
