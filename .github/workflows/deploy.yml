@@ -25,7 +25,7 @@ jobs:
           LLM_PROVIDER: mock
           TTS_PROVIDER: browser
       - run: node --test tests/*.mjs
-      - name: Test container, PostgreSQL, and proxy configuration
+      - name: Test container and PostgreSQL
         run: bash deploy/cloud/smoke-test.sh
   deploy:
     needs: test
@@ -97,17 +97,6 @@ jobs:
           sbom: false
           outputs: type=image,push=true,oci-mediatypes=false
           tags: ${{ steps.image.outputs.name }}:deps-postgres-17-bookworm-${{ github.sha }}
-      - name: Publish caddy to ACR
-        id: caddy
-        uses: docker/build-push-action@v6
-        with:
-          context: deploy/cloud/images
-          file: deploy/cloud/images/caddy.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          provenance: false
-          sbom: false
-          outputs: type=image,push=true,oci-mediatypes=false
-          tags: ${{ steps.image.outputs.name }}:deps-caddy-2.10.2-alpine-${{ github.sha }}
       - name: Deploy over SSH
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -117,7 +106,6 @@ jobs:
           KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
           POSTGRES_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.postgres.outputs.digest }}
-          CADDY_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.caddy.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
@@ -133,7 +121,7 @@ jobs:
           release="/opt/echooo/releases/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           "${SSH[@]}" "$target" "umask 077; mkdir -p '$release'"
           tar -C deploy/cloud -czf - . | "${SSH[@]}" "$target" "tar -xzf - -C '$release'"
-          "${SSH[@]}" "$target" "bash '$release/deploy.sh' '$IMAGE' '$POSTGRES_IMAGE' '$CADDY_IMAGE'"
+          "${SSH[@]}" "$target" "bash '$release/deploy.sh' '$IMAGE' '$POSTGRES_IMAGE'"
       - name: Remove SSH key
         if: always()
         run: rm -f "$HOME/.ssh/deploy_key"

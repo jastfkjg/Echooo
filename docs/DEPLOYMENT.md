@@ -1,66 +1,29 @@
 # Manual cloud deployment
 
-This deployment runs one Echooo application worker, PostgreSQL 17, and Caddy with HTTP IP access or automatic domain HTTPS on a Linux server. GitHub Actions runs only when **Deploy → Run workflow** is selected. Pushes and merges do not deploy. Choose a trusted branch in the dropdown; the workflow must first exist on the repository's default branch and on the selected branch. Server files and secrets are not committed to Git.
+This deployment runs one Echooo application worker and PostgreSQL 17 behind the independent jastcraft-infra Caddy gateway on a Linux server. GitHub Actions runs only when **Deploy → Run workflow** is selected. Pushes and merges do not deploy. Choose a trusted branch in the dropdown; the workflow must first exist on the repository's default branch and on the selected branch. Server files and secrets are not committed to Git.
 
 This is an invitation-based test environment, not public multi-user registration. Each instance has one owner. Attendee is not included; the existing local Attendee stack requires separate cloud configuration. Browser recording, knowledge, chat, and guest invitations are included. Mock providers are the initial default; configure live providers for real AI and transcription.
 
-## 1. Prepare the server
+## 1. Prepare the server and independent gateway
 
-Use a Linux server with Docker Engine and Docker Compose v2.24+ (including `up --wait`), Bash, Python 3.6+, curl, tar, OpenSSH, and flock (util-linux). See [Docker's installation instructions](https://docs.docker.com/engine/install/). Both amd64 and arm64 images are built. Ports 80 and 443 must be free; if the server already runs a reverse proxy, adapt this stack before deployment.
+Use Linux, Docker Engine, Docker Compose v2.24+, Bash, Python3, curl, tar, OpenSSH and flock. Keep the existing `echooo` Compose project name and PostgreSQL volume. The deployment account needs Docker access and write access to `/opt/echooo`, including `releases` and `backups`.
 
-Create a dedicated `deploy` user, allow its SSH key, and grant Docker access. Docker group membership is effectively root access: grant deployment permissions only to trusted maintainers. As a server administrator:
+Caddy is now managed by the separate `jastcraft-infra` repository. Follow its migration runbook before deploying this version. It creates `echooo_proxy`, attaches the gateway, preserves the existing Caddy certificate volumes, and transfers ports 80/443. This repository deploys only app/db. Do not run the old deployment workflow after gateway migration.
 
-```bash
-sudo useradd --create-home --shell /bin/bash deploy
-sudo usermod -aG docker deploy
-sudo install -d -m 700 -o deploy -g deploy /opt/echooo
-sudo install -d -m 700 -o deploy -g deploy /opt/echooo/releases /opt/echooo/backups
-```
-
-Skip user creation if that user already exists. Install the deployment public key in `/home/deploy/.ssh/authorized_keys` with directory mode 700 and file mode 600, owned by deploy. Reconnect after changing group membership. Confirm `docker info` works as deploy without sudo.
-
-For HTTP IP testing, no domain or certificate is needed; allow inbound TCP 80. For HTTPS, point a domain's A record to the server. Only set AAAA if IPv6 routing actually works. Allow inbound TCP 80/443 and your SSH port in the cloud firewall. GitHub-hosted runners must be able to reach SSH; a firewall allowing only your laptop will block deployment. The app and database publish no host ports. Allow outbound access to Alibaba Cloud ACR, certificate authorities, and the configured model providers.
-
-Obtain the server SSH host public key/fingerprint from the cloud console or another trusted channel. `SSH_KNOWN_HOSTS` must contain its OpenSSH known_hosts entry, such as `server.example.com ssh-ed25519 AAAA...`; use `[server.example.com]:2222` for a non-default port. Do not trust an unverified `ssh-keyscan` result.
+The application joins its default database network and `echooo_proxy` with alias `echooo-upstream`; PostgreSQL only joins the default network. Neither service publishes host ports. The gateway preserves the public owner-setup block, 25MB request limit, and streaming proxy settings.
 
 ## 2. Configure server secrets
 
-Copy the two examples from this checkout to the server:
-
-```bash
-scp deploy/cloud/deploy.env.example deploy@SERVER:/opt/echooo/deploy.env
-scp deploy/cloud/app.env.example deploy@SERVER:/opt/echooo/app.env
-```
-
-Add `-P PORT` if using a custom SSH port. As deploy on the server:
-
-```bash
-chmod 600 /opt/echooo/deploy.env /opt/echooo/app.env
-openssl rand -hex 32
-```
-
-Edit `/opt/echooo/deploy.env`:
-
-```dotenv
-DOMAIN=39.106.102.121
-PUBLIC_SCHEME=http
-COOKIE_SECURE=false
-ACME_EMAIL=
-POSTGRES_PASSWORD=the_64_hex_characters_generated_above
-```
-
-Use exactly 64 hex characters for the database password. This avoids URL escaping problems. Do not change it after database initialization without also changing the PostgreSQL role password. The application URL and database URL are set by Compose. `PUBLIC_SCHEME=http` selects the HTTP proxy, and `COOKIE_SECURE=false` allows login cookies over HTTP. `ACME_EMAIL` is unused in this mode. Visit `http://39.106.102.121` after deployment. HTTP sends credentials and content without TLS; use it only for temporary testing. Browser microphone and screen capture require a secure context and are unavailable over a public HTTP IP address.
-
-To switch to domain HTTPS, use:
+Preserve existing `/opt/echooo/app.env` and `/opt/echooo/deploy.env` (mode 600). For a new instance, copy their examples from `deploy/cloud`. Set deploy.env to the actual public origin:
 
 ```dotenv
 DOMAIN=echooo.your-domain.com
 PUBLIC_SCHEME=https
 COOKIE_SECURE=true
-ACME_EMAIL=you@your-domain.com
+POSTGRES_PASSWORD=the_existing_64_hex_character_password
 ```
 
-Keep the existing database password. Re-run the manual deployment to apply the proxy, origin, and cookie settings together. Existing configurations without `PUBLIC_SCHEME` or `COOKIE_SECURE` default to HTTPS with secure cookies. Deployment rejects mismatched cookie/scheme settings before stopping the application. These modes select one public origin per deployment; concurrent IP and domain sessions are not configured.
+Do not change the database password during gateway migration. If currently serving HTTP, preserve `PUBLIC_SCHEME=http` and `COOKIE_SECURE=false` and configure the gateway's ECHOOO_ADDRESS to the same `http://IP`. Migrate to domain HTTPS separately, changing both gateway route and application origin/cookie settings. ACME_EMAIL now belongs only to the gateway environment. Domain HTTPS is needed for secure browser recording.
 
 Edit `/opt/echooo/app.env` using the root `.env.example` as the provider reference. Start with mock providers for the first deployment. For live chat/transcription, configure the provider names, keys, model, and reachable endpoints. `localhost` inside a container is not the host server. Quote literal values containing `$` with single quotes in env files to prevent Compose interpolation. Never put secrets into the Dockerfile or image.
 
@@ -100,13 +63,13 @@ In the **Variables** tab, add:
 
 The resulting image is `ACR_REGISTRY/ACR_NAMESPACE/ACR_REPOSITORY:COMMIT_SHA`. The server deploys its immutable `@sha256:...` digest. Supported registry hostnames include `registry.cn-hangzhou.aliyuncs.com`, `crpi-xxxx.cn-hangzhou.personal.cr.aliyuncs.com`, and `my-instance-registry.cn-hangzhou.cr.aliyuncs.com`. Replace these examples with your own console values.
 
-Enable Actions; GitHub Packages permissions and a GitHub registry token are not needed. Actions publishes the Echooo application and mirrors the official PostgreSQL/Caddy images to the same ACR repository under separate `deps-postgres-*` and `deps-caddy-*` tags. All three immutable digests are saved in each release's `image.env`. No extra ACR repositories, variables, or credentials are needed. Only the GitHub runner needs Docker Hub access for builds and smoke tests; the server pulls all service images from ACR. Keep dependency tags/digests when configuring registry cleanup or retaining rollback releases.
+Enable Actions; GitHub Packages permissions and a GitHub registry token are not needed. Actions publishes the Echooo application and mirrors the official PostgreSQL image to the same ACR repository under `deps-postgres-*` tags. Both immutable digests are saved in each release's `image.env`. No extra ACR repositories, variables, or credentials are needed. Only the GitHub runner needs Docker Hub access for builds and smoke tests; the server pulls all service images from ACR. Keep dependency tags/digests when configuring registry cleanup or retaining rollback releases.
 
 If you already deployed the earlier configuration, stop the old Compose project and preserve its database volume before switching: the project name is now `echooo`, which changes automatically generated volume names. Reattach the existing volume explicitly in Compose or restore a tested backup; otherwise the new project starts with a fresh database. Existing server provider env files remain usable. Create the renamed repository secrets; old environment-scoped secrets are not read by this workflow.
 
 ## 4. Deploy and create the owner
 
-Open **Actions → Deploy → Run workflow**, select the branch, and run it. It tests Python and JavaScript, smoke-tests the Docker image against disposable PostgreSQL, validates Caddy, publishes both architectures, and deploys the immutable image digest. Concurrent deployments are serialized in GitHub and on the server.
+Open **Actions → Deploy → Run workflow**, select the branch, and run it. It tests Python and JavaScript, smoke-tests the Docker image against disposable PostgreSQL, publishes both architectures, and deploys the immutable image digest. Concurrent deployments are serialized in GitHub and on the server.
 
 The server pulls images before downtime, stops the old application, creates a database dump, starts the new release, and checks the configured HTTP or HTTPS URL. Existing voice/meeting connections are interrupted: publish between testing sessions. A release is marked current only after health checks succeed. `/health` is service liveness, not an end-to-end provider check.
 
@@ -136,7 +99,7 @@ bash /opt/echooo/current/compose.sh up -d --no-deps --force-recreate --wait app
 
 ```bash
 bash /opt/echooo/current/compose.sh ps
-bash /opt/echooo/current/compose.sh logs --tail 100 app proxy
+bash /opt/echooo/current/compose.sh logs --tail 100 app
 ```
 
 Every deployment creates `/opt/echooo/backups/TIMESTAMP-RELEASE.dump`. PostgreSQL contains meeting audio as well as text, so monitor disk usage. Docker logs rotate. Database backups are not automatically deleted or copied off-server; establish a retention schedule and off-server backup before storing important data. To create an additional consistent database backup:
@@ -163,7 +126,7 @@ For a known database-compatible rollback, stop the failed/current application an
 ) 9>/opt/echooo/deploy.lock
 ```
 
-After rolling back to `previous`, update the current link to that release and verify the configured public URL. Rollback also restores that release's Compose/Caddy files, but uses today's server env files. For incompatible schema changes, stop the app and plan a database restore from the matching pre-deploy dump; this loses writes made after that backup. Retain the image digest in ACR and the corresponding release directory as long as you need rollback.
+After rolling back to `previous`, update the current link to that release and verify the configured public URL. Rollback uses that release's business Compose and today's server env files. Never run a pre-gateway-split Compose release with whole-stack up: it would recreate the old proxy. To restore older application code, use the new split Compose with the older app digest and the current database image. For incompatible schema changes, stop the app and plan a database restore from the matching pre-deploy dump; this loses writes made after that backup. Retain the image digest in ACR and the corresponding release directory as long as you need rollback.
 
 The standard Caddy image does not add comprehensive request-rate limits or model-spending quotas. Keep this environment invitation-only; add an appropriate edge access/rate-control layer before broader exposure. Use a separate instance and database per tester if independent owner workspaces are required.
 
@@ -175,7 +138,7 @@ With Docker running, from the repository root:
 bash deploy/cloud/smoke-test.sh
 ```
 
-This builds the image, tests PostgreSQL startup, static assets and owner creation with mock providers, and validates both Caddy modes. Its temporary containers, database volume, network, and image are removed on exit. It does not connect to the cloud server or test public certificate issuance.
+This builds the image, tests PostgreSQL startup, static assets and owner creation with mock providers, without managing the independent gateway. Its temporary containers, database volume, network, and image are removed on exit. It does not connect to the cloud server or test public certificate issuance.
 
 ## ACR manifest compatibility
 
@@ -187,6 +150,6 @@ After updating the workflow, start a new **Deploy → Run workflow** from the br
 
 Before building images, Actions checks SSH connectivity, readable env files, directory permissions, Docker daemon access, and host tooling (Compose 2.24+, Python 3.6+). You can run `bash deploy/cloud/preflight.sh` on the server independently. It does not restart services.
 
-After pulling the candidate images, deployment validates the application settings and Caddy configuration in disposable containers without starting app migrations. For an existing running database it also checks the configured application database credentials before stopping the old app. The old app is then stopped and the existing database backed up before any database container recreation. Health checks use a bounded shell retry loop compatible with older curl versions, including 7.61.1; TLS verification remains enabled for HTTPS.
+After pulling the candidate images, deployment validates the application settings in disposable containers without starting app migrations. For an existing running database it also checks the configured application database credentials before stopping the old app. The old app is then stopped and the existing database backed up before any database container recreation. Health checks use a bounded shell retry loop compatible with older curl versions, including 7.61.1; TLS verification remains enabled for HTTPS.
 
 Host checks do not validate live model-provider credentials or provider quotas. A successful HTTP health response is not an end-to-end voice/LLM test. If an earlier release failed after startup, containers may already be healthy while `/opt/echooo/current` is absent; the next successful deployment creates that link. No database rollback is automatic.

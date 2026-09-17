@@ -35,7 +35,7 @@ with open(os.environ['CALLS'], 'a') as f:
     f.write(json.dumps(args) + '\\n')
 mode = os.environ.get('FAIL_MODE', '')
 if 'config' in args and 'json' in args:
-    print(json.dumps({'services': {'db': {'environment': {'POSTGRES_PASSWORD': 'a'*64}}, 'app': {'environment': {'PUBLIC_ORIGIN': os.environ.get('TEST_ORIGIN', 'https://example.com'), 'COOKIE_SECURE': os.environ.get('TEST_SECURE', 'true')}}, 'proxy': {'environment': {'DOMAIN': os.environ.get('TEST_DOMAIN', 'example.com'), 'ACME_EMAIL': 'admin@example.com'}}}}))
+    print(json.dumps({'services': {'db': {'environment': {'POSTGRES_PASSWORD': 'a'*64}}, 'app': {'environment': {'PUBLIC_ORIGIN': os.environ.get('TEST_ORIGIN', 'https://example.com'), 'COOKIE_SECURE': os.environ.get('TEST_SECURE', 'true')}}}}))
 if 'pull' in args and mode == 'pull': sys.exit(1)
 if 'run' in args and mode == 'config': sys.exit(1)
 if 'ps' in args and mode in ('existing_db', 'credentials'): print('existing-db-container')
@@ -61,7 +61,7 @@ if 'up' in args and args[-1] == '180' and mode == 'startup': sys.exit(1)
 
 def run(deployment, mode="", image=IMAGE):
     home, release, old, env = deployment
-    result = subprocess.run(["bash", str(release / "deploy.sh"), image, IMAGE, IMAGE], env=dict(env, FAIL_MODE=mode), capture_output=True, text=True)
+    result = subprocess.run(["bash", str(release / "deploy.sh"), image, IMAGE], env=dict(env, FAIL_MODE=mode), capture_output=True, text=True)
     calls_path = Path(env["CALLS"])
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()] if calls_path.exists() else []
     return result, calls
@@ -80,7 +80,8 @@ def test_success_backs_up_before_starting_and_records_previous(deployment):
     assert len(list((home / 'backups').glob('*.dump'))) == 1
     recorded = (release / 'image.env').read_text()
     assert f'POSTGRES_IMAGE={IMAGE}' in recorded
-    assert f'CADDY_IMAGE={IMAGE}' in recorded
+    assert 'CADDY_IMAGE' not in recorded
+    assert not any('proxy' in c for c in calls)
 
 
 @pytest.mark.parametrize('mode', ['pull', 'backup', 'startup', 'https'])

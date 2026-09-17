@@ -6,6 +6,7 @@ for tool in docker python3 curl flock tar readlink; do
 done
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 6) else "Python 3.6+ is required on the host.")'
 docker info >/dev/null
+docker network inspect echooo_proxy >/dev/null || { echo "Create echooo_proxy through jastcraft-infra first." >&2; exit 1; }
 version=$(docker compose version --short)
 python3 - "$version" <<'PY'
 import re, sys
