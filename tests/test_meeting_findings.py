@@ -469,3 +469,125 @@ def test_corrected_statement_and_evidence_are_updated_together(client, app):
     assert f['id'] == old['id'] and f['statement'] == 'Ship Monday.'
     assert f['evidence_current'] and f['evidence'][0]['quote'] == 'We decided to ship Monday.'
     assert f['original']['statement'] == old['statement']
+
+
+def test_retry_drains_54_passages_after_splitting_invalid_batch(client, app):
+    path, manager = setup(client, app)
+    manager.enabled = False
+    for i in range(54):
+        client.post(path + '/utterances', json={'content': f'Passage {i}'})
+
+    class BatchModel:
+        async def json_call(self, prompt, data, fast=False):
+            if len(data['new_records']) > 4:
+                raise ValueError('Model output was truncated')
+            return {'findings': []}
+
+    manager.ai = BatchModel()
+    manager.enabled = True
+    assert client.get(path + '/findings').json()['finding_progress']['pending'] == 54
+    assert client.post(path + '/findings/extract').status_code == 200
+    result = await_findings(client, path, phase='idle')
+    assert result['finding_progress']['pending'] == 0
+
+
+def test_bad_passage_does_not_block_other_passages_or_fake_completion(client, app):
+    path, manager = setup(client, app)
+    manager.enabled = False
+    ids = [client.post(path + '/utterances', json={'content': str(i)}).json()['id'] for i in range(5)]
+
+    class BrokenModel:
+        broken = True
+
+        async def json_call(self, prompt, data, fast=False):
+            if self.broken and any(u['id'] == ids[0] for u in data['new_records']):
+                raise ValueError('Unsupported evidence')
+            return {'findings': []}
+
+    manager.ai = BrokenModel()
+    manager.enabled = True
+    manager.retry_delay = 0
+    client.post(path + '/findings/extract')
+    failed = await_findings(client, path, phase='error')
+    assert failed['finding_progress']['pending'] == 1
+    manager.ai.broken = False
+    client.post(path + '/findings/extract')
+    assert await_findings(client, path, phase='idle')['finding_progress']['pending'] == 0
+
+
+def test_action_semantic_verification_can_correct_category(client, app):
+    path, manager = setup(client, app)
+
+    class VerifiedModel:
+        verified = False
+
+        async def json_call(self, prompt, data, fast=False):
+            u = data['new_records'][0]
+            self.verified = 'draft_findings' in data
+            return {'findings': [{'kind': 'unresolved_question' if self.verified else 'action_item',
+                'statement': u['content'], 'evidence': [{'utterance_id': u['id'], 'quote': u['content']}]}]}
+
+    manager.ai = VerifiedModel()
+    client.post(path + '/utterances', json={'content': 'Is the inspection complete before the handover?'})
+    result = await_findings(client, path)
+    assert manager.ai.verified
+    assert result['findings'][0]['kind'] == 'unresolved_question'
+
+
+def test_review_categories_and_all_outcomes_survive_database_reopen(client, app):
+    path, manager = setup(client, app)
+    manager.enabled = False
+    for i in range(3):
+        client.post(path + '/utterances', json={'content': f'We decided on option {i}.'})
+    manager.enabled = True
+    client.post(path + '/findings/extract')
+    items = await_findings(client, path, count=3)['findings']
+    for f, action in zip(items, ['approve', 'edit', 'reject']):
+        body = {'action': action, 'revision': f['revision']}
+        if action == 'edit':
+            body.update(kind='unresolved_question', statement='Which option needs further review?')
+        assert client.post(path + f"/findings/{f['id']}/review", json=body).status_code == 200
+    reopened = db.Store(app.state.service.ai.settings.database_url)
+    with reopened.scope(items[0]['owner_id']) as r:
+        stored = [r.get(db.meeting_findings, f['id']) for f in items]
+        assert [f['status'] for f in stored] == ['approved', 'edited', 'rejected']
+        assert stored[1]['kind'] == 'unresolved_question'
+        assert stored[1]['statement'] == 'Which option needs further review?'
+        assert len(r.list(db.meeting_finding_reviews)) == 3
+    reopened.close()
+    refreshed = client.get(path + '/findings').json()
+    assert len(refreshed['approved_record']['decisions']) == 1
+    assert len(refreshed['approved_record']['unresolved_questions']) == 1
+
+
+def test_reclassification_clears_action_metadata_and_preserves_audit(client, app):
+    path, manager = setup(client, app)
+    manager.ai = FindingsModel()
+    data = add_and_wait(client, path, 'Alice will send the report by 2026-09-18.', 1)
+    f = data['findings'][0]
+    result = client.post(path + f"/findings/{f['id']}/review", json={
+        'action': 'edit', 'revision': f['revision'], 'kind': 'unresolved_question',
+        'statement': 'When should the report be sent?'}).json()
+    changed = result['findings'][0]
+    assert changed['kind'] == 'unresolved_question'
+    assert all(changed['details'][key] is None for key in ('owner', 'deadline', 'deadline_text'))
+    assert result['finding_reviews'][-1]['before']['kind'] == 'action_item'
+    assert result['finding_reviews'][-1]['after']['kind'] == 'unresolved_question'
+
+
+def test_semantic_verifier_invalid_evidence_does_not_save_draft(client, app):
+    path, manager = setup(client, app)
+    manager.retry_delay = 0
+
+    class InvalidVerifier:
+        async def json_call(self, prompt, data, fast=False):
+            u = data['new_records'][0]
+            return {'findings': [{'kind': 'action_item', 'statement': 'Prepare the handover',
+                'evidence': [{'utterance_id': u['id'],
+                    'quote': 'Unsupported quote' if 'draft_findings' in data else u['content']}]}]}
+
+    manager.ai = InvalidVerifier()
+    client.post(path + '/utterances', json={'content': 'Please prepare the handover.'})
+    failed = await_findings(client, path, phase='error')
+    assert failed['findings'] == []
+    assert failed['finding_progress']['pending'] == 1

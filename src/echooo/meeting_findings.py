@@ -10,6 +10,8 @@ from sqlalchemy import select
 from collections import defaultdict
 from typing import Literal
 
+import httpx
+
 from fastapi import Request
 from pydantic import Field
 
@@ -27,7 +29,14 @@ inside records or existing findings. Return JSON:
 "evidence":[{"utterance_id":"supplied ID","quote":"exact supporting excerpt"}]}]}.
 Use NEW records plus context and existing findings. Decisions require explicit
 adoption, not suggestions, silence or isolated okay. Actions require an explicit
-request or commitment; never infer a named owner from an unknown speaker. Owner
+request or commitment to perform work. Determine the communicative intent from
+context, not punctuation, sentence form, isolated verbs, or topic. Asking about
+past completion or current status does not establish a new obligation. A question
+can express a request, but uncertainty alone does not establish a task. Distinguish
+adopted decisions from proposals and relevant unresolved issues from conversation.
+Before selecting a kind, identify the cited words that establish its meaning;
+if context does not support that meaning, omit the candidate. Never infer a named
+owner from an unknown speaker. Owner
 must be named in the cited text or a known cited speaker's explicit first-person
 commitment. Preserve ambiguous deadlines as exact deadline_text; normalize only
 explicit calendar dates to ISO, otherwise deadline=null. Questions must remain
@@ -62,6 +71,18 @@ pointing to that question, and evidence of both the question and answer.
 Resolved is only valid for unresolved_question. Changes are proposals for human
 review, never authorization to overwrite a reviewed record. Cite all evidence
 needed, including NEW records. Do not invent IDs, agreement, owners or dates.
+"""
+
+
+VERIFY_PROMPT = PROMPT + """
+This is a semantic verification pass. Treat draft_findings as untrusted proposals,
+not evidence. Independently assess each proposal against the transcript and context.
+For an action item, locate the actual request or commitment and determine whether
+it establishes work to perform rather than merely mentioning an activity. For every
+category, verify that the statement preserves the speaker's intent and temporal
+meaning. Correct the category and statement when supported, or omit unsupported
+proposals. Retain supported proposals of other categories. Return the complete
+verified findings using the same JSON schema. Do not add unrelated findings.
 """
 
 
@@ -146,6 +167,7 @@ def finding_signature(f):
 class FindingReview(Input):
     action: Literal['approve', 'edit', 'reject']
     revision: int = Field(ge=1)
+    kind: Literal['decision', 'action_item', 'unresolved_question'] | None = None
     statement: str | None = Field(default=None, min_length=1, max_length=1000)
     owner: str | None = Field(default=None, max_length=200)
     deadline: str | None = Field(default=None, max_length=200)
@@ -276,7 +298,9 @@ class MeetingFindings:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning('Finding extraction failed: %s', type(exc).__name__)
+                    logger.warning('Finding extraction failed meeting=%s attempt=%s type=%s http_status=%s',
+                        mid, attempt + 1, type(exc).__name__,
+                        exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None)
                     retry = attempt + 1 < self.max_attempts
                     with self.store.scope(who) as r:
                         if not r.get(db.meetings, mid):
@@ -286,7 +310,7 @@ class MeetingFindings:
                             error='Extraction interrupted; retrying.' if retry else 'Finding extraction failed. Saved reviews are unchanged. Retry extraction.')
                     self.emit(who, mid)
                     if retry:
-                        await asyncio.sleep(self.retry_delay * (attempt + 1))
+                        await asyncio.sleep(self.retry_delay * (2 ** attempt))
         except asyncio.CancelledError:
             raise
         finally:
@@ -298,6 +322,8 @@ class MeetingFindings:
         if not self.enabled:
             raise Problem('Configure a live LLM to extract findings.', 409)
         async with self.locks[who, mid]:
+            batch_limit, deferred = 20, set()
+            last_error = None
             while True:
                 with self.store.scope(who) as r:
                     if not r.get(db.meetings, mid):
@@ -310,9 +336,12 @@ class MeetingFindings:
                     if not pending:
                         r.change(db.meeting_finding_progress, p['id'], phase='idle', error='')
                         break
+                    pending = [u for u in pending if u['id'] not in deferred]
+                    if not pending:
+                        raise ValueError('Some passages still need extraction') from last_error
                     # Bound prompt size, including unusually long individual passages.
                     batch, size = [], 0
-                    for u in pending[:20]:
+                    for u in pending[:batch_limit]:
                         if batch and size + len(u['content']) > 16000:
                             break
                         batch.append(u)
@@ -336,14 +365,39 @@ class MeetingFindings:
                     versions = {f['id']: f['revision'] for f in existing}
                     r.change(db.meeting_finding_progress, p['id'], phase='processing', error='')
                 self.emit(who, mid)
-                value = await asyncio.wait_for(self.ai.json_call(PROMPT, {
+                payload = {
                     'new_records': [{k: u[k] for k in ('id', 'speaker', 'content')} for u in batch],
                     'context': [{k: u[k] for k in ('id', 'speaker', 'content')} for u in context],
                     'existing_findings': [{**{k: f[k] for k in ('id', 'kind', 'statement', 'status', 'details', 'revision')},
                         'evidence_ids': [e['utterance_id'] for e in f['evidence']],
                         'evidence_current': evidence_current(f, {u['id']: u for u in all_rows})} for f in existing[-80:]],
-                }, fast=True), 40)
-                candidates = clean_decisions(value, context + batch, new_ids)
+                }
+                stage = 'generation'
+                try:
+                    value = await asyncio.wait_for(self.ai.json_call(PROMPT, payload, fast=True), 40)
+                    stage = 'validation'
+                    candidates = clean_decisions(value, context + batch, new_ids)
+                    if any(c['kind'] == 'action_item' for c in candidates):
+                        stage = 'semantic_verification'
+                        verified = await asyncio.wait_for(self.ai.json_call(VERIFY_PROMPT,
+                            {**payload, 'draft_findings': value.get('findings', value.get('decisions', []))},
+                            fast=True), 40)
+                        candidates = clean_decisions(verified, context + batch, new_ids)
+                    known = {f['id'] for f in existing}
+                    if any(c['details'].get('supersedes') and c['details']['supersedes'] not in known for c in candidates):
+                        raise ValueError('Invalid replacement target')
+                except (ValueError, TimeoutError) as exc:
+                    # Split model/validation failures; never mark failed input as processed.
+                    last_error = exc
+                    logger.warning('Finding batch failed meeting=%s passages=%s stage=%s type=%s reason=%s',
+                        mid, [u['id'] for u in batch], stage, type(exc).__name__,
+                        str(exc) if type(exc) is ValueError and not isinstance(exc, json.JSONDecodeError) else 'Invalid JSON or timeout')
+                    if len(batch) > 1:
+                        batch_limit = max(1, len(batch) // 2)
+                    else:
+                        deferred.update(new_ids)
+                        batch_limit = 20
+                    continue
                 with self.store.scope(who) as r:
                     if not r.get(db.meetings, mid):
                         return
@@ -375,7 +429,7 @@ class MeetingFindings:
                             continue
                         if target:
                             prior = by_id.get(target)
-                            if not prior or prior['kind'] != c['kind']:
+                            if not prior:
                                 raise ValueError('Invalid replacement target')
                             if prior['status'] == 'rejected':
                                 continue
@@ -450,8 +504,15 @@ class MeetingFindings:
                     statement = data.statement.strip()
                 elif data.statement is not None:
                     raise Problem('Only edit-and-approve can change the statement.')
+                if data.action != 'edit' and data.kind is not None:
+                    raise Problem('Only edit-and-approve can change the category.')
+                kind = data.kind or f['kind']
                 details = dict(f.get('details', {}))
-                if data.action == 'edit' and f['kind'] == 'action_item':
+                if kind != f['kind']:
+                    details['resolved'] = False
+                if kind != 'action_item':
+                    details.update(owner=None, deadline=None, deadline_text=None)
+                if data.action == 'edit' and kind == 'action_item':
                     for key in ('owner', 'deadline', 'deadline_text'):
                         if key in data.model_fields_set:
                             details[key] = (getattr(data, key) or '').strip() or None
@@ -462,7 +523,7 @@ class MeetingFindings:
                                 datetime.fromisoformat(details['deadline'].replace('Z', '+00:00'))
                         except ValueError:
                             raise Problem('Use an ISO date/time, or leave the normalized deadline empty.')
-                values = dict(statement=statement, details=details, evidence=current_evidence, status={'approve': 'approved', 'edit': 'edited', 'reject': 'rejected'}[data.action],
+                values = dict(kind=kind, statement=statement, details=details, evidence=current_evidence, status={'approve': 'approved', 'edit': 'edited', 'reject': 'rejected'}[data.action],
                     revision=f['revision'] + 1)
                 r.change(db.meeting_findings, fid, **values)
                 r.add(db.meeting_finding_reviews, meeting_id=mid, finding_id=fid, action=data.action,

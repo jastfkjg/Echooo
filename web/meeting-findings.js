@@ -39,7 +39,7 @@ export function approvedRecordHTML(record, recordingId) {
 
 export function findingEditorHTML(f){
   const field=(name,label,value)=>`<label>${label}<input name="${name}" maxlength="200" value="${esc(value||'')}"></label>`;
-  return `${!f.evidence_current?`<h4>Current transcript</h4>${evidenceHTML(f.current_evidence||[],f.id)}`:''}<label>${f.evidence_current?'Finding summary':'Update summary to match the current transcript'}<textarea name="statement" required maxlength="1000" rows="3">${esc(f.statement)}</textarea></label>${f.kind==='action_item'?field('owner','Owner',f.details?.owner)+field('deadline_text','Deadline as written',f.details?.deadline_text)+field('deadline','Normalized deadline (ISO date/time, optional)',f.details?.deadline):''}${f.evidence_current?`<h4>Source</h4>${evidenceHTML(f.evidence,f.id)}`:`<details><summary>Previous transcript</summary>${evidenceHTML(f.evidence)}</details>`}`;
+  return `<label>Category<select name="kind">${Object.entries(labels).map(([kind,label])=>`<option value="${kind}" ${f.kind===kind?'selected':''}>${label}</option>`).join('')}</select></label>${!f.evidence_current?`<h4>Current transcript</h4>${evidenceHTML(f.current_evidence||[],f.id)}`:''}<label>${f.evidence_current?'Finding summary':'Update summary to match the current transcript'}<textarea name="statement" required maxlength="1000" rows="3">${esc(f.statement)}</textarea></label><div data-action-fields ${f.kind==='action_item'?'':'hidden'}>${field('owner','Owner',f.details?.owner)+field('deadline_text','Deadline as written',f.details?.deadline_text)+field('deadline','Normalized deadline (ISO date/time, optional)',f.details?.deadline)}</div>${f.evidence_current?`<h4>Source</h4>${evidenceHTML(f.evidence,f.id)}`:`<details><summary>Previous transcript</summary>${evidenceHTML(f.evidence)}</details>`}`;
 }
 
 export function mountFindings(root, {api, base, refresh, showSource, recordRoot=null, onRecord=()=>{}, onPending=()=>{}, getRecordScope=()=>undefined}) {
@@ -66,9 +66,10 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
     for(const node of list.querySelectorAll('[data-history-for]')){
       const entries=(value.finding_reviews||[]).filter(r=>r.finding_id===node.dataset.historyFor);
       const historyOpen=!!node.querySelector('details[open]');
-      const historyHTML=entries.length?'<details data-finding-details="history-'+esc(node.dataset.historyFor)+'"><summary>History · '+entries.length+'</summary>'+entries.map(r=>`<p>${esc(r.action.replaceAll('_',' '))} · ${esc(new Date(r.created_at*1000).toLocaleString())}</p><p>Before: ${esc(r.before.statement)}</p>${metadataHTML(r.before)}<p>After: ${esc(r.after.statement)}</p>${metadataHTML(r.after)}`).join('')+'</details>':'';
+      const historyHTML=entries.length?'<details data-finding-details="history-'+esc(node.dataset.historyFor)+'"><summary>History · '+entries.length+'</summary>'+entries.map(r=>`<p>${esc(r.action.replaceAll('_',' '))} · ${esc(new Date(r.created_at*1000).toLocaleString())}</p><p>Before: ${esc(labels[r.before.kind]||'Decision')} · ${esc(r.before.statement)}</p>${metadataHTML(r.before)}<p>After: ${esc(labels[r.after.kind]||'Decision')} · ${esc(r.after.statement)}</p>${metadataHTML(r.after)}`).join('')+'</details>':'';
       if(node._html!==historyHTML){node.innerHTML=historyHTML;node._html=historyHTML;if(historyOpen&&node.firstElementChild)node.firstElementChild.open=true;}
     }
+    root.querySelector('[data-extract-decisions]').textContent=progress.phase==='error'?'Retry Extraction':'Check for findings';
     root.querySelector('[data-extract-decisions]').disabled=busy||['processing','queued','retrying','unavailable'].includes(progress.phase);
     {
       const html=approvedRecordHTML(value.approved_record||{},getRecordScope());
@@ -83,6 +84,7 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
   function openEditor(f){
     editing=structuredClone(f);
     root.querySelector('[data-editor-fields]').innerHTML=findingEditorHTML(f);
+    form.elements.kind.onchange=()=>{root.querySelector('[data-action-fields]').hidden=form.elements.kind.value!=='action_item';};
     root.querySelector('[data-editor-error]').textContent='';dialog.showModal();form.elements.statement.focus();
   }
   async function submitReview(f,body){
@@ -104,8 +106,8 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
   }
   form.onsubmit=async event=>{
     event.preventDefault();if(busy||!editing)return;
-    const data=new FormData(form),body={action:'edit',revision:editing.revision,statement:data.get('statement'),evidence_token:editing.evidence_token};
-    if(editing.kind==='action_item')for(const key of ['owner','deadline','deadline_text'])body[key]=data.get(key)||null;
+    const data=new FormData(form),body={action:'edit',revision:editing.revision,kind:data.get('kind'),statement:data.get('statement'),evidence_token:editing.evidence_token};
+    if(body.kind==='action_item')for(const key of ['owner','deadline','deadline_text'])body[key]=data.get(key)||null;
     form.querySelector('[type="submit"]').disabled=true;
     await submitReview(editing,body);
     form.querySelector('[type="submit"]').disabled=false;

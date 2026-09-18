@@ -13,3 +13,13 @@
 
 - Write and maintain all application-authored LLM prompts in English, including system instructions, developer instructions, prompt templates, and embedded task instructions.
 - Preserve user input and source material in their original language when inserting them into prompts.
+
+## Classification development principle
+
+Fix classification errors through general semantic criteria, contextual evidence,
+and representative evaluations. Do not hardcode a reported sentence, keyword list,
+punctuation pattern, or an example-specific prompt rule to force a category.
+Keep application prompts in English and preserve source material in its original
+language. Mechanical validation may enforce schemas and evidence integrity; category
+meaning must be assessed from context. Human category corrections must be persisted
+with an audit history.
