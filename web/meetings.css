@@ -347,3 +347,53 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .finding-notice button{min-height:44px}
 [data-confirmed-finding]:focus{outline:2px solid var(--accent);outline-offset:6px;border-radius:4px}
 @media(min-width:701px){.finding-reviewed .finding-row{grid-template-columns:minmax(0,1fr) auto;column-gap:24px}}
+
+/* Review evidence and audit are separate, quiet disclosures. */
+.meeting-findings .finding-row{border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:20px 0}
+.meeting-findings .finding-row:hover,.meeting-findings .finding-row:focus-within{background:transparent}
+.finding-disclosures{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:0 24px;margin-top:8px;min-width:0}
+.meeting-findings .finding-disclosures>.finding-details{grid-column:auto;grid-row:auto;flex:0 0 auto}
+.meeting-findings .finding-disclosures>.finding-details[open]{flex-basis:100%;order:1}
+.meeting-findings .finding-details>summary{list-style:none;font-size:14px;gap:8px}
+.meeting-findings .finding-details>summary::before{content:'›';font-size:18px;line-height:1;transition:transform .15s}
+.meeting-findings .finding-details[open]>summary::before{content:'›';transform:rotate(90deg)}
+.finding-detail-count{font-size:12px;color:var(--muted)}
+.meeting-findings .finding-details blockquote,.finding-editor blockquote{background:transparent;border-left:2px solid var(--line);border-radius:0;padding:4px 0 4px 18px;margin:8px 0 16px;max-width:70ch}
+.finding-details footer,.finding-editor footer{font-size:13px;gap:4px 16px;margin-top:4px}
+.finding-timeline{list-style:none;margin:8px 0 16px;padding:0 0 0 18px;border-left:2px solid var(--line);max-width:70ch}
+.finding-timeline>li{padding:8px 0 16px}
+.finding-timeline>li:last-child{padding-bottom:4px}
+.finding-history-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 16px;font-size:13px}
+.finding-history-heading strong{font-weight:500}
+.finding-history-heading time{color:var(--muted);font-size:12px}
+.finding-timeline dl{margin:12px 0 0}
+.finding-change{display:grid;grid-template-columns:70px minmax(0,1fr);gap:12px;font-size:14px;line-height:1.6;margin-top:8px}
+.finding-change dt{color:var(--muted);font-size:12px;padding-top:2px}
+.finding-change dd{margin:0;display:grid;gap:4px;white-space:pre-wrap;overflow-wrap:anywhere}
+.finding-change-before{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--line)}
+.finding-editor select{width:100%;min-height:44px;box-sizing:border-box;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 12px}
+.finding-editor [data-editor-fields]>label:first-child{max-width:240px;margin-top:20px}
+.finding-editor textarea{min-height:96px;resize:vertical}
+.finding-action-fields:not([hidden]){display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.finding-action-fields label{min-width:0;margin-top:0}
+.finding-editor h4{font-size:13px;font-weight:500;color:var(--muted);margin:20px 0 8px}
+.finding-editor form>.actions{justify-content:flex-end;border-top:1px solid var(--line);padding-top:16px;margin-top:20px}
+.finding-editor [data-editor-error]:empty{display:none}
+@media(max-width:480px){
+ .finding-editor{padding:20px;width:calc(100vw - 24px)}
+ .finding-action-fields:not([hidden]){grid-template-columns:1fr;gap:0}
+ .finding-history-heading{display:grid;gap:4px}
+}
+.finding-editor label{margin-block:12px;gap:6px}
+.finding-editor [data-editor-fields]>label:first-child{margin-top:16px}
+.finding-editor h4{margin-top:16px}
+.finding-editor form>.actions{margin-top:16px}
+.meeting-findings .finding-details>summary::before{display:inline-block;width:12px;flex:0 0 12px;text-align:center}
+.finding-speakers{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px;font-size:13px;line-height:1.5;font-weight:500;color:var(--accent)}
+.finding-speakers span{padding:2px 8px;background:var(--soft);border-radius:4px}
+.record-group .finding-speakers{grid-column:1}
+.record-group .record-statement{grid-column:1}
+.finding-speaker-fields{margin:12px 0}
+.finding-speaker-fields .muted{font-size:12px;line-height:1.5;margin-top:4px}
+.finding-speaker-fields label{margin-bottom:4px}
+.finding-speaker-fields:has(input:only-child){min-width:0}

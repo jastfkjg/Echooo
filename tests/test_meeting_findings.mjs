@@ -121,3 +121,24 @@ test('summary scopes confirmed results to selected recording and preserves sourc
   assert.equal(approvedRecordHTML(record,'missing'),'');
   assert.equal(record.decisions.length,3);
 });
+
+test('history omits unchanged content and escapes changed type and summary',async()=>{
+  const {findingHistoryHTML}=await import('../web/meeting-findings.js');
+  const approved=findingHistoryHTML([{action:'approve',created_at:1,before:item,after:item}],item.id);
+  assert.match(approved,/Approved/);
+  assert.ok(!approved.includes('finding-change-before'));
+  const edited=findingHistoryHTML([{action:'edit',created_at:1,before:item,after:{...item,kind:'action_item',statement:'<script>changed</script>'}}],item.id);
+  assert.match(edited,/Action item/);
+  assert.match(edited,/&lt;script&gt;changed&lt;\/script&gt;/);
+});
+
+test('speaker is separated only using cited names and aliases remain escaped',async()=>{
+  const {findingContentHTML,findingEditorHTML}=await import('../web/meeting-findings.js');
+  const f={...item,statement:'Speaker D asked about the schedule.',evidence:[{...item.evidence[0],speaker:'Speaker D'}],details:{speaker_names:{u:'Alice <Admin>'}}};
+  const html=findingContentHTML(f);
+  assert.match(html,/Alice &lt;Admin&gt;/);
+  assert.match(html,/<p class="finding-statement">asked about the schedule\.<\/p>/);
+  assert.ok(!html.includes('Speaker D'));
+  assert.match(findingContentHTML({...f,statement:'Speaker Z asked about the schedule.'}),/Speaker Z asked/);
+  assert.match(findingEditorHTML(f),/name="speaker_0"/);
+});

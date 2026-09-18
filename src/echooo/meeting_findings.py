@@ -172,6 +172,7 @@ class FindingReview(Input):
     owner: str | None = Field(default=None, max_length=200)
     deadline: str | None = Field(default=None, max_length=200)
     deadline_text: str | None = Field(default=None, max_length=200)
+    speaker_names: dict[str, str] | None = None
     evidence_token: str | None = None
 
 
@@ -508,6 +509,14 @@ class MeetingFindings:
                     raise Problem('Only edit-and-approve can change the category.')
                 kind = data.kind or f['kind']
                 details = dict(f.get('details', {}))
+                if data.speaker_names is not None:
+                    if data.action != 'edit':
+                        raise Problem('Only edit-and-approve can change speaker names.')
+                    evidence_ids = {e['utterance_id'] for e in current_evidence}
+                    if any(uid not in evidence_ids or not name.strip() or len(name.strip()) > 80
+                           for uid, name in data.speaker_names.items()):
+                        raise Problem('Enter a speaker name of 1–80 characters for the cited evidence.')
+                    details['speaker_names'] = {uid: name.strip() for uid, name in data.speaker_names.items()}
                 if kind != f['kind']:
                     details['resolved'] = False
                 if kind != 'action_item':

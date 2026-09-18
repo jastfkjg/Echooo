@@ -591,3 +591,22 @@ def test_semantic_verifier_invalid_evidence_does_not_save_draft(client, app):
     failed = await_findings(client, path, phase='error')
     assert failed['findings'] == []
     assert failed['finding_progress']['pending'] == 1
+
+
+def test_review_speaker_names_persist_without_changing_source(client, app):
+    path, manager = setup(client, app)
+    client.post(path + '/utterances', json={'speaker': 'Speaker D', 'content': 'We decided to review the proposal.'})
+    f = await_findings(client, path)['findings'][0]
+    uid = f['evidence'][0]['utterance_id']
+    url = path + f"/findings/{f['id']}/review"
+    bad = client.post(url, json={'action': 'edit', 'revision': f['revision'],
+        'statement': f['statement'], 'speaker_names': {'not-evidence': 'Alice'}})
+    assert bad.status_code == 400
+    response = client.post(url, json={'action': 'edit', 'revision': f['revision'],
+        'statement': f['statement'], 'speaker_names': {uid: 'Alice'}})
+    assert response.status_code == 200
+    refreshed = client.get(path + '/findings').json()
+    assert refreshed['findings'][0]['details']['speaker_names'] == {uid: 'Alice'}
+    assert refreshed['findings'][0]['evidence'][0]['speaker'] == 'Speaker D'
+    assert refreshed['findings'][0]['evidence_current']
+    assert refreshed['finding_reviews'][-1]['after']['details']['speaker_names'] == {uid: 'Alice'}
