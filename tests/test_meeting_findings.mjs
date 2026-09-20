@@ -91,8 +91,8 @@ test('adjacent evidence shares a block but retains exact quotes and individual a
   const html=approvedRecordHTML({unresolved_questions:[{...item,evidence:[a,b]}]});
   assert.equal((html.match(/<blockquote>/g)||[]).length,1);
   assert.ok(!html.includes('6c7b'));
-  assert.match(html,/5:44–5:50/);assert.match(html,/5:49–5:51/);
-  assert.match(html,/data-source-utterance="u"/);assert.match(html,/data-source-utterance="v"/);
+  assert.match(html,/5:44–5:51/);
+  assert.match(html,/data-source-utterances="\[&quot;u&quot;,&quot;v&quot;\]"/);
   assert.ok(html.includes(a.quote)&&html.includes(b.quote));
   assert.equal(JSON.stringify([a,b]),before);
   for(const change of [{speaker:'Speaker B · 6c7b'},{recording_id:'other'},{start_ms:360000,end_ms:362000},{speaker:'Speaker A · abcd'}]){
@@ -228,17 +228,40 @@ test('explicit speaker aliases render independently of question wording and in s
   assert.doesNotMatch(html,/Alice &amp; Bob/);
 });
 
-test('continuous source text retains distinct speaker anchors and rename fields distinguish identities',async()=>{
+test('source text separates distinct speaker anchors and rename fields distinguish identities',async()=>{
   const {findingEditorHTML,findingSpeakers}=await import('../web/meeting-findings.js');
   const a={...item.evidence[0],speaker:'Speaker B · abcd',quote:'Which option',start_ms:0,end_ms:1200};
   const b={...a,utterance_id:'v',speaker:'Speaker B · efab',quote:'works?',start_ms:1200,end_ms:1800};
   const f={...item,evidence:[a,b]};
   const html=findingEditorHTML(f);
-  assert.equal((html.match(/<blockquote>/g)||[]).length,1);
-  assert.match(html,/Which option works\?/);
+  assert.equal((html.match(/<blockquote>/g)||[]).length,2);
+  assert.match(html,/>Which option<\/p>/);assert.match(html,/>works\?<\/p>/);
   assert.match(html,/data-source-utterance="u"/);
   assert.match(html,/data-source-utterance="v"/);
-  assert.match(html,/Source 1/);assert.match(html,/Source 2/);
+  assert.equal((html.match(/name="speaker_/g)||[]).length,1);
   assert.equal(findingSpeakers({...f,evidence:[a,{...a,utterance_id:'v'}]}).length,1);
-  assert.equal(findingSpeakers(f).length,2);
+  assert.equal(findingSpeakers(f).length,1);
+});
+
+test('source collapses duplicate references, keeps recordings distinct, and exposes subsecond timing',async()=>{
+  const {evidenceTimeRange}=await import('../web/meeting-findings.js');
+  assert.equal(evidenceTimeRange(162023,162119),'2:42.023–2:42.119');
+  assert.equal(evidenceTimeRange(162023,162023),'2:42');
+  const a={...item.evidence[0],recording_id:'abcd',speaker:'Speaker A',quote:'A repeated excerpt.'};
+  const b={...a,utterance_id:'other',recording_id:'efab'};
+  const html=approvedRecordHTML({decisions:[{...item,evidence:[a,a,b]}]});
+  assert.equal((html.match(/A repeated excerpt\./g)||[]).length,2);
+  assert.match(html,/Recording · abcd/);assert.match(html,/Recording · efab/);
+  assert.equal((html.match(/data-source-utterance="u"/g)||[]).length,1);
+});
+
+test('uncertain adjacent fragments read together without assigning an unsupported speaker',()=>{
+ const a={...item.evidence[0],speaker:'Unknown speaker',quote:'Which option',start_ms:71000,end_ms:75000};
+ const b={...a,utterance_id:'tail',speaker:'Speaker B',quote:'works?',start_ms:75470,end_ms:75919};
+ const html=approvedRecordHTML({decisions:[{...item,evidence:[a,b]}]});
+ assert.equal((html.match(/<blockquote>/g)||[]).length,1);
+ assert.match(html,/Which option works\?/);
+ assert.match(html,/Unidentified speaker · 1:11–1:15/);
+ assert.doesNotMatch(html,/source segments|Speaker B/);
+ assert.match(html,/&quot;tail&quot;/);
 });

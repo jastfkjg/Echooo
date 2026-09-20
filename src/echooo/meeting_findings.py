@@ -43,7 +43,12 @@ explicit calendar dates to ISO, otherwise deadline=null. Questions must remain
 unresolved in supplied context AND matter to a meeting outcome, task, blocker or
 follow-up. Omit small talk, rhetorical questions, transcription fragments and
 questions answered in the supplied context. Summarize each finding in one short,
-self-contained sentence; keep verbatim speech only in evidence. Evaluate all three
+self-contained sentence; keep verbatim speech only in evidence.
+Keep statement and answer focused on the issue and outcome, not transcript speaker
+labels. Do not embed diarization labels in either field. Express the relevant task,
+role, or subject directly when supported by context. Preserve real person names
+only when essential to the meaning; do not delete meaningful ownership or invent
+an identity. Attribution belongs in the cited evidence, separate from prose. Evaluate all three
 kinds independently; do not force a kind that is absent. Empty findings is valid.
 Do not copy a whole conversational turn into statement. Remove filler and unrelated
 observations. If pronouns such as "this" or "that" have no clear referent in context,

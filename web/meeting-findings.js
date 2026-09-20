@@ -8,7 +8,7 @@ export function groupEvidence(items,combineSpeakers=false) {
   const groups=[];
   for(const e of items){
     const last=groups.at(-1);
-    if(last && e.recording_id && last.recording_id===e.recording_id && (combineSpeakers||last.speaker===e.speaker) &&
+    if(last && e.recording_id && last.recording_id===e.recording_id && (combineSpeakers||last.speaker===e.speaker||speakerName(last.speaker)==='Unidentified speaker'||speakerName(e.speaker)==='Unidentified speaker') &&
       e.start_ms>=last.start_ms && e.start_ms-last.end_ms<=2000 && e.end_ms-last.start_ms<=30000){
       last.items.push(e);last.end_ms=Math.max(last.end_ms,e.end_ms);
     }else groups.push({...e,items:[e]});
@@ -21,13 +21,16 @@ export function evidenceTimeRange(start,end){
   return Math.floor(start/1000)===Math.floor(end/1000)?`${precise(start)}–${precise(end)}`:`${time(start)}–${time(end)}`;
 }
 const evidenceHTML=(items,fid,aliases={})=>{
+  const recordings=[...new Set(items.map(e=>e.recording_id).filter(Boolean))];
   const seen=new Set();
   const unique=items.filter(e=>{const key=JSON.stringify([e.recording_id,e.utterance_id,e.quote]);if(seen.has(key))return false;seen.add(key);return true;});
-  const jump=(e,label='Open transcript')=>fid?`<button type="button" class="meeting-text-button" data-finding-source="${esc(fid)}" data-source-utterance="${esc(e.utterance_id)}">${label}</button>`:'';
+  const jump=(e,ids,label='Open transcript')=>fid?`<button type="button" class="meeting-text-button" data-finding-source="${esc(fid)}" data-source-utterance="${esc(e.utterance_id)}" data-source-utterances="${esc(JSON.stringify(ids))}">${label}</button>`:'';
   return groupEvidence(unique.map(e=>({...e,speaker:aliases[e.utterance_id]||e.speaker}))).map(g=>{
+    const labels=[...new Set(g.items.map(e=>speakerName(e.speaker)))];
+    const displaySpeaker=labels.includes('Unidentified speaker')?'Unidentified speaker':labels.join(', ');
     const quotes=[];
     for(const e of g.items)if(quotes.at(-1)!==e.quote)quotes.push(e.quote);
-    return `<blockquote><p>${quotes.map(esc).join(' ')}</p><footer><span class="evidence-anchor"><span>${esc(speakerName(g.speaker))} · ${g.recording_id?evidenceTimeRange(g.start_ms,g.end_ms):'Text note'}</span>${jump(g.items[0])}</span>${g.items.length>1?`<details class="evidence-segments"><summary>${g.items.length} source segments</summary>${g.items.map(e=>`<div class="evidence-anchor"><span>${evidenceTimeRange(e.start_ms,e.end_ms)}</span>${jump(e)}</div>`).join('')}</details>`:''}</footer></blockquote>`;
+    return `<blockquote><p>${quotes.map(esc).join(' ')}</p><footer><span class="evidence-anchor"><span>${recordings.length>1?`${esc(g.recording_label||`Recording · ${g.recording_id?.slice(0,4)||'notes'}`)} · `:''}${esc(displaySpeaker)} · ${g.recording_id?evidenceTimeRange(g.start_ms,g.end_ms):'Text note'}</span>${jump(g.items[0],g.items.map(e=>e.utterance_id))}</span></footer></blockquote>`;
   }).join('');
 };
 const answerHTML=(f,confirmed=false)=>f.details?.resolved?`<div class="finding-answer"><span>${f.status==='provisional'?'Suggested answer':'Answer'}</span><p>${esc(f.details.answer||(confirmed?'No answer saved.':'No answer summary yet. Review the source and add an answer, or keep this question open.'))}</p></div>`:'';
@@ -37,7 +40,7 @@ export function findingSpeakers(f){
   const groups=[];
   for(const e of f.evidence||[]){
     const name=f.details?.speaker_names?.[e.utterance_id]||speakerName(e.speaker);
-    const group=groups.find(g=>g.identity===e.speaker&&g.recording===e.recording_id&&g.name===name);
+    const group=groups.find(g=>g.original===speakerName(e.speaker)&&g.name===name);
     if(group)group.ids.push(e.utterance_id);
     else groups.push({identity:e.speaker,name,original:speakerName(e.speaker),recording:e.recording_id,ids:[e.utterance_id]});
   }
@@ -57,7 +60,7 @@ export function findingAttribution(f){
 }
 export function findingContentHTML(f, className='finding-statement'){
   const {name,statement}=findingAttribution(f);
-  return `${name?`<p class="finding-speakers" aria-label="Attributed speaker"><span>${esc(name)}</span></p>`:''}<p class="${className}">${esc(statement)}</p>`;
+  return name?`<div class="finding-attributed"><p class="finding-speakers" aria-label="Attributed speaker"><span>${esc(name)}</span></p><p class="${className}">${esc(statement)}</p></div>`:`<p class="${className}">${esc(statement)}</p>`;
 }
 
 export function findingHistoryHTML(entries, fid) {
@@ -115,7 +118,7 @@ export function editedFindingStatement(f, content){
 
 export function findingEditorHTML(f){
   const field=(name,label,value)=>`<label>${label}<input name="${name}" maxlength="200" value="${esc(value||'')}"></label>`;
-  return `<div class="finding-type-field"><label for="finding-kind">Type</label><select id="finding-kind" name="kind">${Object.entries(labels).map(([kind,label])=>`<option value="${kind}" ${f.kind===kind?'selected':''}>${label}</option>`).join('')}</select></div><fieldset class="finding-speaker-fields"><legend>Rename speakers</legend><div class="finding-speaker-grid">${findingSpeakers(f).map((speaker,i)=>`<label>${esc(speaker.original)}${findingSpeakers(f).filter(s=>s.original===speaker.original).length>1?` · Source ${i+1} · ${time(f.evidence.find(e=>e.utterance_id===speaker.ids[0])?.start_ms||0)}`:''}<input aria-label="Name for ${esc(speaker.original)}${findingSpeakers(f).filter(s=>s.original===speaker.original).length>1?` source ${i+1}`:''}" name="speaker_${i}" maxlength="80" required value="${esc(speaker.name)}"></label>`).join('')}</div><p class="muted">Names apply to this finding only.</p></fieldset>${!f.evidence_current?`<h4>Current transcript</h4>${evidenceHTML(f.current_evidence||[],f.id,f.details?.speaker_names)}`:''}<label>${f.evidence_current?'Finding summary':'Update summary to match the current transcript'}<textarea name="statement" required maxlength="1000" rows="3">${esc(findingAttribution(f).statement)}</textarea></label>${f.details?.resolved?`<label data-answer-field>Answer<textarea name="answer" maxlength="2000" rows="3" required>${esc(f.details.answer||'')}</textarea></label>`:''}<div class="finding-action-fields" data-action-fields ${f.kind==='action_item'?'':'hidden'}>${field('owner','Owner (optional)',f.details?.owner)+field('deadline_text','Deadline (optional)',f.details?.deadline_text||f.details?.deadline)}</div>${f.evidence_current?`<h4>Source</h4>${evidenceHTML(f.evidence,f.id,f.details?.speaker_names)}`:`<details><summary>Previous transcript</summary>${evidenceHTML(f.evidence)}</details>`}`;
+  return `<div class="finding-type-field"><label for="finding-kind">Type</label><select id="finding-kind" name="kind">${Object.entries(labels).map(([kind,label])=>`<option value="${kind}" ${f.kind===kind?'selected':''}>${label}</option>`).join('')}</select></div><fieldset class="finding-speaker-fields"><legend>Rename speakers</legend><div class="finding-speaker-grid">${findingSpeakers(f).map((speaker,i)=>`<label>${esc(speaker.original)}${findingSpeakers(f).filter(s=>s.original===speaker.original).length>1?` · Source ${i+1} · ${time(f.evidence.find(e=>e.utterance_id===speaker.ids[0])?.start_ms||0)}`:''}<input aria-label="Name for ${esc(speaker.original)}${findingSpeakers(f).filter(s=>s.original===speaker.original).length>1?` source ${i+1}`:''}" name="speaker_${i}" maxlength="80" required value="${esc(speaker.name)}"></label>`).join('')}</div><p class="muted">One name per label, across this finding’s sources.</p></fieldset>${!f.evidence_current?`<h4>Current transcript</h4>${evidenceHTML(f.current_evidence||[],f.id,f.details?.speaker_names)}`:''}<label>${f.evidence_current?'Finding summary':'Update summary to match the current transcript'}<textarea name="statement" required maxlength="1000" rows="3">${esc(findingAttribution(f).statement)}</textarea></label>${f.details?.resolved?`<label data-answer-field>Answer<textarea name="answer" maxlength="2000" rows="3" required>${esc(f.details.answer||'')}</textarea></label>`:''}<div class="finding-action-fields" data-action-fields ${f.kind==='action_item'?'':'hidden'}>${field('owner','Owner (optional)',f.details?.owner)+field('deadline_text','Deadline (optional)',f.details?.deadline_text||f.details?.deadline)}</div>${f.evidence_current?`<h4>Source</h4>${evidenceHTML(f.evidence,f.id,f.details?.speaker_names)}`:`<details><summary>Previous transcript</summary>${evidenceHTML(f.evidence)}</details>`}`;
 }
 
 export function mountFindings(root, {api, base, refresh, showSource, recordRoot=null, onRecord=()=>{}, onPending=()=>{}, getRecordScope=()=>undefined, onNextRecording=()=>{}}) {
@@ -126,6 +129,9 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
   const status=root.querySelector('[data-finding-status]'),error=root.querySelector('[data-finding-error]'),dialog=root.querySelector('dialog'),form=dialog.querySelector('form');
   function render(value){
     if(disposed)return;
+    const recordingNames=new Map((value.recordings||snapshot?.recordings||[]).map((r,i)=>[r.id,`Recording ${i+1}`]));
+    const labelFinding=f=>({...f,evidence:f.evidence.map(e=>({...e,recording_label:recordingNames.get(e.recording_id)}))});
+    value={...value,findings:(value.findings||[]).map(labelFinding),approved_record:Object.fromEntries(Object.entries(value.approved_record||{}).map(([key,entries])=>[key,Array.isArray(entries)?entries.map(labelFinding):entries]))};
     snapshot=value;
     const scope=getRecordScope(),allItems=value.findings||[],items=findingsForRecording(allItems,scope);
     if(scope!==lastScope){root.querySelector('[data-finding-notice]').hidden=true;noticeFinding=null;lastScope=scope;}
@@ -250,7 +256,7 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
     const fid=button.dataset.findingSource||button.dataset.approveFinding||button.dataset.editFinding||button.dataset.rejectFinding||button.dataset.keepOpenFinding;
     if(fid){
       const f=snapshot.findings.find(f=>f.id===fid);if(!f)return;
-      if(button.dataset.findingSource){if(dialog.open)dialog.close();showSource({text:f.statement,speaker_names:f.details?.speaker_names,evidence_ids:button.dataset.sourceUtterance?[button.dataset.sourceUtterance]:f.evidence.map(e=>e.utterance_id)});return;}
+      if(button.dataset.findingSource){if(dialog.open)dialog.close();showSource({text:f.statement,speaker_names:f.details?.speaker_names,evidence_ids:button.dataset.sourceUtterances?JSON.parse(button.dataset.sourceUtterances):button.dataset.sourceUtterance?[button.dataset.sourceUtterance]:f.evidence.map(e=>e.utterance_id)});return;}
       if(button.dataset.keepOpenFinding){
         if(!f.evidence_current){openEditor(f);return;}
         await submitReview(f,{action:'keep_open',revision:f.revision});return;
