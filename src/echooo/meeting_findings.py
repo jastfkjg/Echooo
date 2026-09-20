@@ -102,8 +102,11 @@ def source_hash(row):
 
 
 def evidence_current(item, by_id):
-    return all(e['utterance_id'] in by_id and e['source_hash'] == source_hash(by_id[e['utterance_id']])
-               for e in item['evidence'])
+    aliases = item.get('details', {}).get('speaker_names', {})
+    return all(e['utterance_id'] in by_id and (
+        e['source_hash'] == source_hash(by_id[e['utterance_id']]) or
+        (e['utterance_id'] in aliases and e['source_hash'] == source_hash({**by_id[e['utterance_id']], 'speaker': e['speaker']})))
+        for e in item['evidence'])
 
 
 def clean_decisions(value, records, new_ids):
@@ -124,6 +127,8 @@ def clean_decisions(value, records, new_ids):
             u, quote = by_id.get(e['utterance_id']), e.get('quote')
             if not u or not isinstance(quote, str) or not quote.strip() or len(quote) > 6000 or normalized(quote) not in normalized(u['content']):
                 raise ValueError('Unsupported evidence')
+            if any(snapshot['utterance_id'] == u['id'] and snapshot['quote'] == quote.strip() for snapshot in snapshots):
+                continue
             snapshots.append(dict(utterance_id=u['id'], recording_id=u['recording_id'],
                 start_ms=u['start_ms'], end_ms=u['end_ms'], speaker=u['speaker'],
                 quote=quote.strip(), source_hash=source_hash(u)))
@@ -238,8 +243,13 @@ class MeetingFindings:
             findings = enriched
             progress = r.list(db.meeting_finding_progress, db.meeting_finding_progress.c.meeting_id == mid)
             state = {k: progress[0][k] for k in ('phase', 'error')} if progress else {'phase': 'idle', 'error': ''}
+            state['updating_recordings'] = [t['recording_id'] for t in r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid) if t['state'].get('phase') in {'connecting', 'live', 'reconnecting', 'verifying'}]
             processed = progress[0]['processed'] if progress else {}
             state['pending'] = sum(processed.get(u['id']) != source_hash(u) for u in sources.values())
+            state['pending_by_recording'] = {}
+            for u in sources.values():
+                key = u['recording_id'] or 'notes'
+                state['pending_by_recording'][key] = state['pending_by_recording'].get(key, 0) + int(processed.get(u['id']) != source_hash(u))
             if state['phase'] in {'processing', 'retrying'} and (who, mid) not in self.tasks:
                 state.update(phase='error', error='Finding extraction was interrupted. Retry to continue.')
             if (who, mid) in self.tasks and state['phase'] == 'idle':
@@ -465,6 +475,8 @@ class MeetingFindings:
                             cited = {e['utterance_id'] for e in c['evidence']}
                             c['evidence'].extend(e for e in prior['evidence'] if e['utterance_id'] not in cited
                                 and e['utterance_id'] in current and e['source_hash'] == source_hash(current[e['utterance_id']]))
+                            aliases = prior.get('details', {}).get('speaker_names', {})
+                            c['details']['speaker_names'] = {e['utterance_id']: aliases[e['utterance_id']] for e in c['evidence'] if e['utterance_id'] in aliases}
                             c['details']['supersedes'] = prior['id']
                             if prior['status'] == 'provisional':
                                 values = dict(kind=c['kind'], statement=c['statement'], evidence=c['evidence'],
@@ -497,6 +509,11 @@ class MeetingFindings:
                 f = need(r.get(db.meeting_findings, fid), 'Finding')
                 if f['meeting_id'] != mid:
                     raise Problem('Finding is outside this meeting.', 404)
+                recording_ids = {e['recording_id'] for e in f['evidence']}
+                transcribing = any(t['recording_id'] in recording_ids and t['state'].get('phase') in {'connecting', 'live', 'reconnecting', 'verifying'}
+                    for t in r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid))
+                if transcribing or (who, mid) in self.tasks:
+                    raise Problem('Review is paused while the transcript and findings are updating. Try again when processing finishes.', 409)
                 if f['revision'] != data.revision or f['status'] == 'rejected':
                     raise Problem('This finding has changed. Refresh before reviewing.', 409)
                 sources = {u['id']: u for u in r.list(db.utterances, db.utterances.c.meeting_id == mid)}

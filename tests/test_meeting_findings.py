@@ -647,3 +647,44 @@ def test_confirm_and_edit_answer_survive_reload_and_export(client, app):
     assert record['answered_questions'][0]['details']['answer'] == 'Bob owns the launch.'
     assert record['answered_questions'][0]['evidence']
     assert client.get(path + '/export').json()['approved_record'] == record
+
+
+def test_manual_speaker_survives_label_refresh_but_content_changes_require_review():
+    from echooo.meeting_findings import evidence_current, source_hash
+    source = dict(id='u', recording_id='r', speaker='Speaker A', content='Which option?', start_ms=0, end_ms=1000)
+    finding = {'evidence': [dict(utterance_id='u', speaker='Speaker A', source_hash=source_hash(source))],
+               'details': {'speaker_names': {'u': 'Jason'}}}
+    renamed = {**source, 'speaker': 'Speaker B'}
+    assert evidence_current(finding, {'u': renamed})
+    assert not evidence_current(finding, {'u': {**renamed, 'content': 'Another question'}})
+    assert not evidence_current({**finding, 'details': {}}, {'u': renamed})
+
+
+def test_review_is_rejected_while_extraction_is_running(client, app):
+    path, manager = setup(client, app)
+    f = add_and_wait(client, path, 'We decided to review the proposal.', 1)['findings'][0]
+    # Use the finding owner from storage rather than a second test account.
+    with manager.store.engine.connect() as connection:
+        row = connection.execute(db.meeting_findings.select().where(db.meeting_findings.c.id == f['id'])).mappings().one()
+        key = (row['owner_id'], row['meeting_id'])
+    manager.tasks[key] = object()
+    try:
+        response = client.post(path + f"/findings/{f['id']}/review", json={'action':'approve','revision':f['revision']})
+        assert response.status_code == 409
+        assert 'paused' in response.text
+    finally:
+        del manager.tasks[key]
+
+
+def test_answer_proposal_inherits_manual_speaker_name(client, app):
+    path, manager = setup(client, app)
+    manager.ai = FindingsModel()
+    question = add_and_wait(client, path, 'Who will own the launch?', 1)['findings'][0]
+    uid = question['evidence'][0]['utterance_id']
+    response = client.post(path + f"/findings/{question['id']}/review", json={
+        'action':'edit', 'revision':question['revision'], 'statement':question['statement'],
+        'speaker_names':{uid:'Jason'}})
+    assert response.status_code == 200
+    add_and_wait(client, path, 'Bob will own the launch.', 2)
+    proposal = next(f for f in await_findings(client, path, phase='idle')['findings'] if f['details'].get('resolved'))
+    assert proposal['details']['speaker_names'][uid] == 'Jason'

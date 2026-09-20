@@ -1,4 +1,4 @@
-import {mountFindings} from './meeting-findings.js?v=10';
+import {mountFindings} from './meeting-findings.js?v=11';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
 import {MeetingAudio} from './meeting-audio.js?v=tab-audio-3';
@@ -54,12 +54,10 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     <dialog id="meeting-source-dialog" class="meeting-source-dialog" aria-labelledby="meeting-source-title"><div class="dialog-head"><h2 id="meeting-source-title">Supporting conversation</h2><button class="btn" id="close-meeting-source" aria-label="Close source">Close</button></div><p id="meeting-source-point"></p><div id="meeting-source-passages"></div></dialog>
     <section class="meeting-player-wrap" aria-label="Recording player"><div class="meeting-player-title"><strong id="meeting-player-label"></strong><span id="meeting-playback" class="muted"></span></div><audio id="meeting-player" controls preload="none" aria-label="Selected recording audio"></audio><div class="meeting-player-tools"><button class="btn" id="play-back" aria-label="Back 10 seconds">−10s</button><button class="btn" id="play-forward" aria-label="Forward 10 seconds">+10s</button><label class="meeting-speed" for="play-speed">Speed<select id="play-speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><label class="meeting-follow"><input type="checkbox" id="follow-playback"> Follow playback</label></div></section>`,'Meetings');
   const findingsPanel=mountFindings($('#meeting-findings'),{api,base,refresh,showSource,recordRoot:$('#meeting-approved-record'),getRecordScope:()=>selectedRecording,
+    onNextRecording(id){selectRecording(id);setPanel('review');},
     onPending(count){$('#review-count').textContent=` · ${count}`;$('#review-count').hidden=!count;$('#tab-review').setAttribute('aria-label',count?`Review, ${count} awaiting review`:'Review');},
     onRecord(finding){
       if(!finding){
-        const results=Object.values(meeting.approved_record||{}).filter(Array.isArray).flat();
-        const scoped=results.some(f=>f.evidence.some(e=>(e.recording_id||'notes')===selectedRecording));
-        if(!scoped&&results.length)selectRecording(results[0].evidence[0]?.recording_id||'notes');
         setPanel('summary');
         const section=$('#meeting-approved-record');
         section.tabIndex=-1;section.scrollIntoView({block:'start'});section.focus({preventScroll:true});
@@ -126,7 +124,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     if(panel!==activePanel){panelScroll[activePanel]=window.scrollY;activePanel=panel;}else return;
     for(const button of document.querySelectorAll('[data-panel]')){const active=button.dataset.panel===panel;button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;}
     for(const name of ['transcript','review','summary'])$(`#panel-${name}`).hidden=panel!==name;
-    $('.meeting-recording-tools').hidden=panel==='review';
+    $('.meeting-recording-tools').hidden=false;
     $('.meeting-search').hidden=panel!=='transcript'||!searchOpen;
     $('#meeting-search-toggle').hidden=panel!=='transcript';
     $('#meeting-search-toggle').setAttribute('aria-expanded',String(panel==='transcript'&&searchOpen));
@@ -167,7 +165,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     const {minutes,current:minutesCurrent}=minutesContent(meeting,selectedRecording);
     playbackRecords=records;
     const options=meeting.recordings.map((r,i)=>`<option value="${r.id}">Recording ${i+1} · ${meetingTime(r.samples/r.sample_rate*1000)}</option>`).join('')+(transcriptRecords(meeting).some(u=>!u.recording_id)||!meeting.recordings.length?'<option value="notes">Text notes</option>':'');
-    setHTML($('#recording-picker'),options);$('#recording-picker').value=selectedRecording;
+    setHTML($('#recording-picker'),options);$('#recording-picker').value=selectedRecording;$('#recording-picker').dispatchEvent(new Event('input'));
     updateHealth();$('.meeting-live-controls').hidden=activePanel!=='transcript'||!socket&&!meeting.recording;
     const completed=meeting.status==='ended',verified=meeting.recordings.find(r=>r.id===selectedRecording)?.transcription;
     $('#meeting-end').hidden=completed;$('#meeting-record').hidden=completed||botActive();
@@ -274,7 +272,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     sourceReturn=activePanel==='review'?{scroll:window.scrollY,focus:document.activeElement}:null;
     const dialog=$('#meeting-source-dialog');$('#meeting-source-point').textContent=item.text;
     const passages=meeting.utterances.filter(u=>item.evidence_ids.includes(u.id)).sort((a,b)=>a.start_ms-b.start_ms);
-    $('#meeting-source-passages').innerHTML=passages.map(u=>`<article class="minute-source-passage"><p class="muted">${esc(speakerName(u.speaker))}${u.recording_id?` · ${meetingTime(u.start_ms)}`:''}</p><p>${esc(u.content)}</p><button class="meeting-text-button" data-source-jump="${u.id}">Go to transcript${u.recording_id?` · ${meetingTime(u.start_ms)}`:''}</button></article>`).join('')||'<p class="muted">This transcript evidence is no longer available.</p>';
+    $('#meeting-source-passages').innerHTML=passages.map(u=>`<article class="minute-source-passage"><p class="muted">${esc(item.speaker_names?.[u.id]||speakerName(u.speaker))}${u.recording_id?` · ${meetingTime(u.start_ms)}`:''}</p><p>${esc(u.content)}</p><button class="meeting-text-button" data-source-jump="${u.id}">Go to transcript${u.recording_id?` · ${meetingTime(u.start_ms)}`:''}</button></article>`).join('')||'<p class="muted">This transcript evidence is no longer available.</p>';
     dialog.querySelectorAll('[data-source-jump]').forEach(b=>b.onclick=()=>{const u=meeting.utterances.find(u=>u.id===b.dataset.sourceJump);dialog.close();const reviewScroll=sourceReturn?.scroll;if(selectedRecording!==(u.recording_id||'notes'))selectRecording(u.recording_id||'notes');selectedPassage=u.id;selectedView='full';stopFollowing();setPanel('transcript');if(reviewScroll!==undefined){panelScroll.review=reviewScroll;$('#return-to-review').hidden=false;}draw();if(u.recording_id)loadSelectedAudio(u.start_ms);const phrase=openPassage(u.id);phrase?.scrollIntoView({block:'center'});phrase?.focus({preventScroll:true});});
     dialog.showModal();
   }
@@ -289,7 +287,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     if(player.getAttribute('src')!==url){player.onloadedmetadata=seek;player.src=url;player.load();}else if(Number.isFinite(player.duration))seek();else{player.onloadedmetadata=seek;player.load();}
     $('#meeting-playback').textContent='Original audio';
   }
-  function selectRecording(rid){stopFollowing();selectedRecording=rid;selectedPassage=null;searchQuery='';searchIndex=-1;searchIds=[];$('#transcript-search').value='';analysisMessage='';analysisError=false;showPartial('');draw();loadSelectedAudio();panelScroll.transcript=panelScroll.summary=0;$('.meeting-reader-toolbar').scrollIntoView({block:'start',behavior:'instant'});}
+  function selectRecording(rid){stopFollowing();selectedRecording=rid;selectedPassage=null;searchQuery='';searchIndex=-1;searchIds=[];$('#transcript-search').value='';analysisMessage='';analysisError=false;showPartial('');draw();loadSelectedAudio();panelScroll.transcript=panelScroll.summary=panelScroll.review=0;$('.meeting-reader-toolbar').scrollIntoView({block:'start',behavior:'instant'});}
   function playPassage(uid){const u=meeting.utterances.find(u=>u.id===uid);if(!u?.recording_id)return;if(selectedRecording!==u.recording_id){selectedRecording=u.recording_id;draw();}loadSelectedAudio(u.start_ms,true);}
 
   function stopFollowing(){$('#meeting-follow').checked=false;$('#follow-playback').checked=false;$('#meeting-latest').hidden=!socket&&!meeting.recording;$('#meeting-read-status').textContent='Auto-follow paused';}
@@ -471,7 +469,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/meetings/${id}`);
       socket.onmessage=async event=>{
         const p=JSON.parse(event.data);if(disposed)return;if(p.type==='warning')warning(p.message);
-        if(p.type==='transcription'){const rec=meeting.recordings.find(r=>r.id===p.recording_id);if(rec)rec.transcription=p.state;updateHealth();}
+        if(p.type==='transcription'){const rec=meeting.recordings.find(r=>r.id===p.recording_id);if(rec)rec.transcription=p.state;updateHealth();findingsPanel.render(meeting);}
         if(p.type==='ready'){
           if(stopping)return;
           recordingRate=p.recording.sample_rate;captureRecording=p.recording.id;selectedRecording=captureRecording;meeting.recordings.push(p.recording);meeting.recording=true;setPanel('transcript');$('#meeting-follow').checked=true;warning('');draw();loadSelectedAudio();

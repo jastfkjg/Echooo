@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from echooo import database as db
 from echooo.models import STTEventType
-from echooo.meeting_live import TranscriptFeed, join_words, timed_words, label_name, invalidate, remember
+from echooo.meeting_live import TranscriptFeed, join_words, timed_words, label_name, invalidate, remember, segments
 from echooo.service import Problem
 
 logger = logging.getLogger(__name__)
@@ -104,13 +104,32 @@ def reconcile_passages(r, result, existing, rid):
         if count >= 500 and count / sum(counts.values()) >= .85:
             names[label] = name
     changed = []
-    for u in existing:
+    for u in list(existing):
         part = [w for w in words if u['start_ms'] <= (w['start'] + w['end']) / 2 < u['end_ms']]
         if not part:
             continue
         source = sources.get(u['id'])
         state = source['state'] if source else {}
         values = {}
+        groups = segments(part, None)
+        # Rebuild machine-only turn boundaries from final word-level attribution.
+        # Keep the original ID for the first turn; new turns receive their own anchors.
+        if (source and not state.get('content_edited') and not state.get('speaker_edited')
+                and u['content'] == state['content'] and u['speaker'] == state['speaker'] and len(groups) > 1):
+            for index, (label, group) in enumerate(groups):
+                values = dict(content=join_words(group)[:6000], speaker=names.get(label) or label_name(label, rid),
+                    start_ms=group[0]['start'], end_ms=group[-1]['end'])
+                if index == 0:
+                    r.change(db.utterances, u['id'], **values)
+                    u.update(values)
+                    r.change(db.utterance_sources, source['id'], state={**state, **values, 'words': group})
+                    changed.append(dict(u))
+                else:
+                    extra = r.add(db.utterances, meeting_id=u['meeting_id'], recording_id=rid, **values)
+                    remember(r, extra, words=group)
+                    existing.append(extra)
+                    changed.append(extra)
+            continue
         if source and not state.get('content_edited') and u['content'] == state['content']:
             values['content'] = join_words(part)[:6000]
         if (source and not state.get('speaker_edited') and u['speaker'] == state['speaker']) or (not source and u['speaker'] == 'Unknown speaker'):

@@ -60,7 +60,7 @@ test('outdated statement is paired with its original evidence, never substituted
   assert.ok(html.includes('We decided &lt;b&gt;yes&lt;/b&gt;'));
   assert.ok(!html.includes('Corrected speech'));
   assert.ok(!html.includes('The transcript changed'));
-  assert.match(html,/<footer><span>.*?<button[^>]+data-source-utterance="u"/);
+  assert.match(html,/<footer><span[^>]*>.*?<button[^>]+data-source-utterance="u"/);
 });
 
 test('re-review shows current evidence first and save is the single confirmation',async()=>{
@@ -91,7 +91,7 @@ test('adjacent evidence shares a block but retains exact quotes and individual a
   const html=approvedRecordHTML({unresolved_questions:[{...item,evidence:[a,b]}]});
   assert.equal((html.match(/<blockquote>/g)||[]).length,1);
   assert.ok(!html.includes('6c7b'));
-  assert.match(html,/5:44–5:51/);
+  assert.match(html,/5:44–5:50/);assert.match(html,/5:49–5:51/);
   assert.match(html,/data-source-utterance="u"/);assert.match(html,/data-source-utterance="v"/);
   assert.ok(html.includes(a.quote)&&html.includes(b.quote));
   assert.equal(JSON.stringify([a,b]),before);
@@ -184,6 +184,61 @@ test('answers are reviewable content and confirmed answers have a collapsed resu
   assert.match(record,/Bob &lt;owner&gt;/);
   assert.match(record,/data-source-utterance="u"/);
   const legacy=decisionListHTML([{...f,details:{resolved:true}}]);
-  assert.match(legacy,/Add answer/);
+  assert.match(legacy,/Review answer/);
   assert.ok(!legacy.includes('data-approve-finding'));
+});
+
+import {findingsForRecording,nextReviewRecording,needsReview} from '../web/meeting-findings.js';
+test('recording review scopes shared findings without copying their review state',()=>{
+  const first={...item,id:'first',evidence:[{recording_id:'r1'}]};
+  const shared={...item,id:'shared',evidence:[{recording_id:'r1'},{recording_id:'r2'}]};
+  const second={...item,id:'second',evidence:[{recording_id:'r2'}]};
+  const note={...item,id:'note',evidence:[{recording_id:null}]};
+  const items=[first,shared,second,note];
+  assert.deepEqual(findingsForRecording(items,'r1').map(f=>f.id),['first','shared']);
+  assert.deepEqual(findingsForRecording(items,'r2').map(f=>f.id),['shared','second']);
+  assert.deepEqual(findingsForRecording(items,'notes'),[note]);
+  assert.deepEqual(findingsForRecording(items,'missing'),[]);
+  assert.deepEqual(nextReviewRecording(items,'r1'),{id:'r2',count:2});
+  shared.status='approved';
+  assert.equal(findingsForRecording(items,'r2').filter(needsReview).length,1);
+  assert.deepEqual(nextReviewRecording(items,'r1'),{id:'r2',count:1});
+  second.status='rejected';note.status='approved';first.status='approved';
+  assert.equal(nextReviewRecording(items,'r1'),null);
+});
+
+test('speaker editing keeps attribution out of the content field and preserves it on save',async()=>{
+  const {findingEditorHTML,editedFindingStatement,findingContentHTML}=await import('../web/meeting-findings.js');
+  const f={...item,statement:'Speaker B asked about Speaker A.',evidence:[{...item.evidence[0],speaker:'Speaker B'}]};
+  assert.match(findingEditorHTML(f),/<legend>Rename speakers<\/legend>/);
+  assert.match(findingEditorHTML(f),/>asked about Speaker A\.<\/textarea>/);
+  assert.equal(editedFindingStatement(f,'asked about timing.'),'Speaker B asked about timing.');
+  const renamed={...f,statement:editedFindingStatement(f,'asked about timing.'),details:{speaker_names:{u:'Alice'}}};
+  assert.match(findingContentHTML(renamed),/Alice/);
+  assert.ok(!findingContentHTML(renamed).includes('Speaker B'));
+  assert.equal(editedFindingStatement(item,'A neutral summary.'),'A neutral summary.');
+});
+
+test('explicit speaker aliases render independently of question wording and in source',()=>{
+  const f={...item,kind:'unresolved_question',statement:'Which option should we choose?',details:{speaker_names:{u:'Jason'}},status:'edited'};
+  const html=approvedRecordHTML({unresolved_questions:[f]});
+  assert.match(html,/Attributed speaker/);
+  assert.match(html,/<span>Jason<\/span>/);
+  assert.match(html,/Jason · 0:01/);
+  assert.doesNotMatch(html,/Alice &amp; Bob/);
+});
+
+test('continuous source text retains distinct speaker anchors and rename fields distinguish identities',async()=>{
+  const {findingEditorHTML,findingSpeakers}=await import('../web/meeting-findings.js');
+  const a={...item.evidence[0],speaker:'Speaker B · abcd',quote:'Which option',start_ms:0,end_ms:1200};
+  const b={...a,utterance_id:'v',speaker:'Speaker B · efab',quote:'works?',start_ms:1200,end_ms:1800};
+  const f={...item,evidence:[a,b]};
+  const html=findingEditorHTML(f);
+  assert.equal((html.match(/<blockquote>/g)||[]).length,1);
+  assert.match(html,/Which option works\?/);
+  assert.match(html,/data-source-utterance="u"/);
+  assert.match(html,/data-source-utterance="v"/);
+  assert.match(html,/Source 1/);assert.match(html,/Source 2/);
+  assert.equal(findingSpeakers({...f,evidence:[a,{...a,utterance_id:'v'}]}).length,1);
+  assert.equal(findingSpeakers(f).length,2);
 });

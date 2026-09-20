@@ -448,3 +448,23 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .answered-questions .finding-answer{margin-top:8px;padding-left:14px;border-left:2px solid var(--line)}
 .answered-questions .finding-answer>span{margin-bottom:3px}
 .answered-questions .finding-answer>p{margin:0;font-size:15px;line-height:1.65}
+
+.finding-next-recording{margin:0 0 20px;min-height:44px}
+.finding-next-recording[hidden]{display:none}
+
+/* Separate speaker identity from finding content and align review actions. */
+.finding-editor .finding-speaker-fields{min-width:0;margin:20px 0;padding:12px 0 16px;border:0;border-bottom:1px solid var(--line)}
+.finding-speaker-fields legend{padding:0;font-size:14px;font-weight:600}
+.finding-speaker-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.finding-editor .finding-speaker-grid label{margin:0;min-width:0;color:var(--muted)}
+.finding-editor .finding-speaker-grid input{min-height:44px;color:var(--fg)}
+.finding-editor form>.finding-editor-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.finding-editor-actions .btn{min-height:44px;font-size:14px;padding:10px 16px}
+.finding-editor-actions [data-cancel-edit]{margin-right:auto}
+@media(max-width:480px){
+ .finding-speaker-grid{grid-template-columns:1fr}
+ .finding-editor-actions [type="submit"]{flex:1 0 100%}
+}
+
+.evidence-anchor{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.finding-details blockquote footer,.finding-editor blockquote footer{align-items:flex-start;flex-direction:column;gap:4px}
