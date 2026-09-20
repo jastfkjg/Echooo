@@ -56,10 +56,20 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const findingsPanel=mountFindings($('#meeting-findings'),{api,base,refresh,showSource,recordRoot:$('#meeting-approved-record'),getRecordScope:()=>selectedRecording,
     onPending(count){$('#review-count').textContent=` · ${count}`;$('#review-count').hidden=!count;$('#tab-review').setAttribute('aria-label',count?`Review, ${count} awaiting review`:'Review');},
     onRecord(finding){
+      if(!finding){
+        const results=Object.values(meeting.approved_record||{}).filter(Array.isArray).flat();
+        const scoped=results.some(f=>f.evidence.some(e=>(e.recording_id||'notes')===selectedRecording));
+        if(!scoped&&results.length)selectRecording(results[0].evidence[0]?.recording_id||'notes');
+        setPanel('summary');
+        const section=$('#meeting-approved-record');
+        section.tabIndex=-1;section.scrollIntoView({block:'start'});section.focus({preventScroll:true});
+        return;
+      }
       const recording=finding.evidence.some(e=>(e.recording_id||'notes')===selectedRecording)?selectedRecording:(finding.evidence[0]?.recording_id||'notes');
       if(recording!==selectedRecording)selectRecording(recording);
       setPanel('summary');
       const target=[...$('#meeting-approved-record').querySelectorAll('[data-confirmed-finding]')].find(node=>node.dataset.confirmedFinding===finding.id);
+      if(target)for(let parent=target.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
       if(target){target.scrollIntoView({block:'center'});target.focus({preventScroll:true});}
     }});
   const dock=$('.meeting-player-wrap'),workspace=$('.workspace');

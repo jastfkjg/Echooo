@@ -180,7 +180,7 @@ class FindingsModel:
                 item=dict(kind='unresolved_question', statement=text)
             elif text.startswith('Bob will own'):
                 target=next(f for f in data['existing_findings'] if f['kind']=='unresolved_question')
-                item=dict(kind='unresolved_question',statement=target['statement'],supersedes=target['id'],resolved=True)
+                item=dict(kind='unresolved_question',statement=target['statement'],supersedes=target['id'],resolved=True,answer='Bob will own the launch.')
             elif text.startswith('Change deadline'):
                 target=next(f for f in data['existing_findings'] if f['kind']=='action_item')
                 item=dict(kind='action_item',statement=target['statement'],owner='Alice',deadline='2026-09-21',deadline_text='2026-09-21',supersedes=target['id'])
@@ -610,3 +610,40 @@ def test_review_speaker_names_persist_without_changing_source(client, app):
     assert refreshed['findings'][0]['evidence'][0]['speaker'] == 'Speaker D'
     assert refreshed['findings'][0]['evidence_current']
     assert refreshed['finding_reviews'][-1]['after']['details']['speaker_names'] == {uid: 'Alice'}
+
+
+@pytest.mark.parametrize('reviewed', [False, True])
+def test_keep_open_preserves_question_and_audits_declined_answer(client, app, reviewed):
+    path, manager = setup(client, app)
+    manager.ai = FindingsModel()
+    data = add_and_wait(client, path, 'Who will own the launch?', 1)
+    if reviewed:
+        approve(client, path, data['findings'][0])
+    data = add_and_wait(client, path, 'Bob will own the launch.', 2 if reviewed else 1)
+    data = await_findings(client, path, phase='idle')
+    suggestion = next(f for f in data['findings'] if f['details'].get('resolved'))
+    response = client.post(path + f"/findings/{suggestion['id']}/review", json={'action':'keep_open','revision':suggestion['revision']})
+    assert response.status_code == 200
+    result = client.get(path + '/findings').json()
+    assert len(result['approved_record']['unresolved_questions']) == 1
+    assert result['approved_record']['answered_questions'] == []
+    assert result['finding_reviews'][-1]['action'] == 'keep_open'
+
+
+def test_confirm_and_edit_answer_survive_reload_and_export(client, app):
+    path, manager = setup(client, app)
+    manager.ai = FindingsModel()
+    question = add_and_wait(client, path, 'Who will own the launch?', 1)['findings'][0]
+    approve(client, path, question)
+    add_and_wait(client, path, 'Bob will own the launch.', 2)
+    suggestion = next(f for f in await_findings(client, path, phase='idle')['findings'] if f['details'].get('resolved'))
+    url = path + f"/findings/{suggestion['id']}/review"
+    bad = client.post(url, json={'action':'edit','revision':suggestion['revision'],'statement':suggestion['statement'],'answer':' '})
+    assert bad.status_code == 400
+    response = client.post(url, json={'action':'edit','revision':suggestion['revision'],'statement':suggestion['statement'],'answer':'Bob owns the launch.'})
+    assert response.status_code == 200
+    record = client.get(path + '/findings').json()['approved_record']
+    assert record['unresolved_questions'] == []
+    assert record['answered_questions'][0]['details']['answer'] == 'Bob owns the launch.'
+    assert record['answered_questions'][0]['evidence']
+    assert client.get(path + '/export').json()['approved_record'] == record

@@ -397,3 +397,54 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .finding-speaker-fields .muted{font-size:12px;line-height:1.5;margin-top:4px}
 .finding-speaker-fields label{margin-bottom:4px}
 .finding-speaker-fields:has(input:only-child){min-width:0}
+/* Compact editor with the shared, theme-aware type picker. */
+.finding-editor{padding:0;max-height:90svh;width:min(620px,calc(100vw - 32px))}
+.finding-editor form{padding:24px;max-height:90svh;overflow-y:auto;scroll-padding-bottom:88px}
+.finding-editor form>h3{font-size:20px;line-height:1.4;margin-bottom:16px}
+.finding-editor [data-editor-fields]>label:first-child{max-width:none}
+.finding-editor .select-control .select-native{min-height:0;padding:0;border:0}
+.finding-editor form>.actions{position:sticky;bottom:-24px;background:var(--bg);margin:20px -24px -24px;padding:16px 24px;border-top:1px solid var(--line);z-index:1}
+.finding-editor .finding-speaker-fields{margin:4px 0 12px}
+.finding-editor .finding-speaker-fields>summary{min-height:36px;padding:6px 0;font-size:13px}
+.finding-editor .finding-speaker-fields label{font-size:14px}
+.finding-resolution-help{font-size:13px;line-height:1.5;margin-top:16px}
+.finding-change{grid-template-columns:100px minmax(0,1fr)}
+@media(max-width:480px){
+ .finding-editor{width:calc(100vw - 24px)}
+ .finding-editor form{padding:20px}
+ .finding-editor form>.actions{bottom:-20px;margin-inline:-20px;margin-bottom:-20px;padding:14px 20px}
+}
+/* Keep evidence links attached to the text, independent of action-button height. */
+.meeting-findings .finding-row{padding-block:16px}
+.finding-disclosures{margin-top:2px;column-gap:20px}
+@media(min-width:701px){
+ .meeting-findings .finding-main{grid-column:1;grid-row:1}
+ .meeting-findings .finding-actions{grid-column:2;grid-row:1 / span 2;padding-top:22px}
+ .meeting-findings .finding-disclosures{grid-column:1;grid-row:2}
+ .meeting-findings .finding-details>summary{min-height:32px}
+}
+.finding-answer{margin-top:12px;max-width:70ch;grid-column:1}
+.finding-answer>span{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.finding-answer>p{font-size:15px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;font-weight:400}
+.answered-questions{margin:16px 0 0}
+.answered-questions>summary{font-size:15px;font-weight:500;color:var(--fg)}
+.finding-results-link{margin-left:auto;min-height:44px;font-size:14px;border-color:var(--control-line);white-space:nowrap}
+.finding-complete{padding:28px 24px;margin:16px 0 24px;background:var(--soft);border-radius:10px}
+.finding-complete h3{font-size:20px;margin:0}
+.finding-complete .btn{margin-top:16px;min-height:44px}
+.finding-complete p{margin-top:8px}
+.finding-complete[hidden],.finding-results-link[hidden],.finding-complete [hidden]{display:none}
+#meeting-approved-record{scroll-margin-top:90px}
+#meeting-approved-record:focus-visible{outline:2px solid var(--accent);outline-offset:6px}
+@media(max-width:600px){
+ .meeting-findings>.meeting-section-heading{flex-wrap:wrap;gap:4px 12px}
+ .finding-results-link{margin-left:0}
+}
+
+/* Keep confirmed questions and their answers visually distinct without extra cards. */
+.answered-questions .record-statement{font-weight:600;line-height:1.5}
+.answered-questions li{padding-block:16px;border-bottom:1px solid var(--line)}
+.answered-questions li:last-child{border-bottom:0}
+.answered-questions .finding-answer{margin-top:8px;padding-left:14px;border-left:2px solid var(--line)}
+.answered-questions .finding-answer>span{margin-bottom:3px}
+.answered-questions .finding-answer>p{margin:0;font-size:15px;line-height:1.65}

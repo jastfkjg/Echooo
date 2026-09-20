@@ -18,7 +18,7 @@ test('untrusted model statements, names and quotes are escaped in review and fin
 
 test('stale evidence and in-flight review disable approval; approved items cannot be approved twice',()=>{
   assert.ok(!decisionListHTML([{...item,evidence_current:false}]).includes('data-approve-finding'));
-  assert.match(decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:true}]), /Review &amp; approve/);
+  assert.match(decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:true}]), /Review changes/);
   assert.match(decisionListHTML([item],true), /data-approve-finding="finding-1" disabled/);
   assert.ok(!decisionListHTML([{...item,status:'approved'}]).includes('data-approve-finding'));
   assert.ok(approvedRecordHTML({decisions:[]}).includes('No approved findings'));
@@ -38,7 +38,7 @@ test('review controls include edit and reject and permit explicit re-review',()=
   assert.ok(decisionListHTML([item]).includes('data-reject-finding'));
   assert.ok(decisionListHTML([item]).includes('data-edit-finding'));
   const html=decisionListHTML([{...item,status:'approved',evidence_current:false,can_refresh_evidence:true}]);
-  assert.ok(html.includes('Review &amp; approve'));
+  assert.ok(html.includes('Review changes'));
   assert.ok(!html.includes('data-approve-finding'));
 });
 
@@ -141,4 +141,49 @@ test('speaker is separated only using cited names and aliases remain escaped',as
   assert.ok(!html.includes('Speaker D'));
   assert.match(findingContentHTML({...f,statement:'Speaker Z asked about the schedule.'}),/Speaker Z asked/);
   assert.match(findingEditorHTML(f),/name="speaker_0"/);
+});
+
+test('evidence contributors do not become joint authors and order-only history is hidden',async()=>{
+  const {findingContentHTML,findingHistoryHTML}=await import('../web/meeting-findings.js');
+  const a={...item.evidence[0],speaker:'Speaker A'},b={...item.evidence[0],utterance_id:'v',speaker:'Speaker B'};
+  const before={...item,statement:'Speaker A asked about the project.',evidence:[a,b]};
+  const after={...before,evidence:[b,a]};
+  const content=findingContentHTML(after);
+  assert.match(content,/Speaker A/);
+  assert.ok(!content.includes('Speaker B'));
+  assert.equal(findingHistoryHTML([{action:'extraction_revision',created_at:1,before,after}],item.id),'');
+  assert.ok(!findingContentHTML({...after,statement:'The project needs review.'}).includes('finding-speakers'));
+  const changed=findingHistoryHTML([{action:'extraction_revision',created_at:1,before,after:{...after,statement:'Speaker B asked about the project.'}}],item.id);
+  assert.equal(changed,'');
+});
+
+test('review UI keeps evidence and resolution consequences distinct without redundant pending badges',()=>{
+  const normal=decisionListHTML([item]);
+  assert.ok(!normal.includes('Needs review'));
+  const stale=decisionListHTML([{...item,evidence_current:false,can_refresh_evidence:true}]);
+  assert.match(stale,/Source changed/);
+  assert.match(stale,/Review changes/);
+  assert.ok(!stale.includes('data-approve-finding'));
+  const resolution=decisionListHTML([{...item,kind:'unresolved_question',details:{resolved:true,answer:'The integration has been tested.'}}]);
+  assert.match(resolution,/Answer found/);
+  assert.match(resolution,/Confirm answer/);
+  assert.ok(!resolution.includes('Answered ·'));
+  assert.match(resolution,/Answered questions/);
+});
+
+test('answers are reviewable content and confirmed answers have a collapsed result section',()=>{
+  const f={...item,kind:'unresolved_question',statement:'Who owns the launch?',details:{resolved:true,answer:'Bob <owner>'}};
+  const html=decisionListHTML([f]);
+  assert.match(html,/Suggested answer/);
+  assert.match(html,/Bob &lt;owner&gt;/);
+  assert.match(html,/Confirm answer/);
+  assert.match(html,/Keep open/);
+  assert.ok(!html.includes('data-reject-finding'));
+  const record=approvedRecordHTML({answered_questions:[{...f,status:'approved'}]});
+  assert.match(record,/<details class="answered-questions" data-record-evidence="answered-questions">/);
+  assert.match(record,/Bob &lt;owner&gt;/);
+  assert.match(record,/data-source-utterance="u"/);
+  const legacy=decisionListHTML([{...f,details:{resolved:true}}]);
+  assert.match(legacy,/Add answer/);
+  assert.ok(!legacy.includes('data-approve-finding'));
 });
