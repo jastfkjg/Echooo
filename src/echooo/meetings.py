@@ -107,6 +107,10 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     from echooo.meeting_bots import install_meeting_bots
     bots = install_meeting_bots(app, store, settings, transcriptions, captures, owner)
     bots.knowledge = knowledge
+    from echooo.meeting_interventions import MeetingInterventions, install_intervention_routes, purge_interventions
+    interventions = MeetingInterventions(store, ai, transcriptions.feed, bots, settings.llm_provider != 'mock')
+    app.state.meeting_interventions = interventions
+    install_intervention_routes(app, interventions, owner)
 
     async def prepare_approved_record(who, mid):
         bots.require_detached(who, mid)
@@ -155,7 +159,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
                 "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
-                "recordings": recordings, **findings.view(who, mid)}
+                "recordings": recordings, **findings.view(who, mid), **interventions.view(who, mid)}
 
     def scoped_records(r, mid, recording_id):
         if recording_id and recording_id != "notes":
@@ -217,6 +221,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 if set(minutes["evidence_ids"]) & ids:
                     r.remove(db.meeting_minutes, minutes["id"])
             purge_findings(r, mid, ids)
+            purge_interventions(r, mid, ids)
             app.state.service.purge_meeting_evidence(r, mid, ids)
             r.remove(db.recordings, rid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
@@ -278,7 +283,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})

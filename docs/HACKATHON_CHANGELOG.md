@@ -1,5 +1,24 @@
 # Hackathon implementation log
 
+## 21 September 2026 — Milestone 2, governed participation
+
+- Added private, evidence-backed intervention proposals with persistent owner review
+  history, editable speech approval, defer, dismiss and cancellation.
+- Added semantic detection for material contradictions and missing details, duplicate
+  suppression, automatic resolution checks and pre-approval/pre-speech revalidation.
+- Reused the Attendee voice queue and interruption controls to speak the exact approved
+  wording. Failed, cancelled or restarted deliveries never replay automatically.
+- Added Suggested questions to the meeting dashboard, source navigation, review history
+  and explicit failure/recovery states, following the existing compact UI patterns.
+- Extended reviewed findings and confirmed records with contradictions and risks.
+- Added isolated governance tests and a repeatable live-model semantic evaluation.
+  See [Milestone 2](MILESTONE_2.md) for local commands and real-meeting acceptance.
+- Validation: 306 backend tests passed (1 skipped), 95 frontend tests passed,
+  and all 9 synthetic scenarios passed with the configured live LLM. Browser checks
+  covered editable approval, missing-connector error recovery, deferred-state reload,
+  evidence navigation and 390px layout without horizontal overflow. Real two-person
+  audible intervention acceptance remains a separate manual check.
+
 ## 15 September 2026 — Milestone 1, batches 1–3
 
 Pre-existing baseline: Attendee/browser capture, AssemblyAI streaming, transcript storage and playback, generated minutes, and workspace authentication.

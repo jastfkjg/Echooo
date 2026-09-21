@@ -475,3 +475,11 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .finding-attributed>.finding-speakers span{display:inline-block}
 .meeting-findings .finding-attributed>.finding-statement,.meeting-findings .finding-attributed>.record-statement{flex:1;min-width:0;margin:0;padding:0;overflow-wrap:anywhere}
 .record-group .finding-attributed{margin-top:8px}
+.meeting-interventions { margin: 1.5rem 0; padding: 1rem 0; border-block: 1px solid var(--line); }
+.intervention-row { padding: 1rem 0; overflow-wrap: anywhere; }
+.intervention-row + .intervention-row { border-top: 1px solid var(--line); }
+.intervention-question { font-size: 1.1rem; font-weight: 600; }
+.intervention-row details { margin: .75rem 0; }
+.intervention-row .actions { margin-top: 1rem; flex-wrap: wrap; gap: .5rem; }
+.intervention-row button { min-height: 44px; }
+#intervention-wording { width: 100%; box-sizing: border-box; }

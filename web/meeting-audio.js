@@ -59,9 +59,18 @@ export class MeetingAudio {
         }
       }
       requestingTab = false;
-      this.keep(await this.mediaDevices.getUserMedia({
+      const microphone = this.keep(await this.mediaDevices.getUserMedia({
         audio: {echoCancellation: true, noiseSuppression: true},
       }));
+      // Cancel local speaker output in the microphone path, never the shared tab.
+      // Capability-gated: older browsers keep their ordinary AEC. Do not gate
+      // capture or remove matching transcript text: people may quote the assistant.
+      for (const track of microphone.getAudioTracks()) {
+        if (track.getCapabilities?.().echoCancellation?.includes('all') && track.applyConstraints) {
+          try { await track.applyConstraints({echoCancellation: {exact: 'all'}}); }
+          catch { /* Keep the initially requested ordinary AEC and continuous capture. */ }
+        }
+      }
       if (this.closed) throw new Error('Recording setup was cancelled.');
       return this;
     } catch (error) {

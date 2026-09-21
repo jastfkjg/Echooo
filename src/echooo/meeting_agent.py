@@ -122,6 +122,7 @@ class MeetingAgent:
         self.turn_revision = 0
         self.turn_decision = None
         self.speech_scope = None
+        self.intervention_context = None
         with self.store.scope(self.who) as r:
             prefs = r.list(db.meeting_agent_settings, db.meeting_agent_settings.c.connection_id == self.cid)
             self.prefs = prefs[0] if prefs else r.add(db.meeting_agent_settings,
@@ -166,6 +167,9 @@ class MeetingAgent:
         with self.store.scope(self.who) as r:
             r.change(db.meeting_agent_events, event['id'], **values)
         event.update(values)
+        interventions = getattr(self.manager, 'interventions', None)
+        if interventions and event['source_key'].startswith('intervention:') and 'status' in values:
+            interventions.delivery(self, event, values['status'])
 
     async def configure(self, chat_enabled, voice_enabled):
         with self.store.scope(self.who) as r:
@@ -418,6 +422,12 @@ class MeetingAgent:
     async def answer(self, event):
         self.phase, self.error = 'thinking', ''
         self.change(event, status='thinking')
+        if event['source_key'].startswith('intervention:'):
+            self.speech_scope = None
+            # speak() validates after waiting for the floor, immediately before TTS.
+            await self.speak(event['request'], event)
+            self.change(event, status='spoken')
+            return
         project_context, authorized_scope = self.manager.knowledge.context(self.who, self.mid, event['request'])
         context = {**self.context(event), **project_context}
         citation_ids = []
@@ -466,6 +476,8 @@ class MeetingAgent:
             raise ValueError('Meeting audio is disconnected')
         if packet.get('data', {}).get('action') != 'stop' and self.speech_scope is not None and not self.manager.knowledge.valid(self.who, self.mid, self.speech_scope):
             raise ValueError('Meeting knowledge was revoked')
+        if packet.get('data', {}).get('action') not in {'stop', 'pause'} and self.current_event and self.current_event['source_key'].startswith('intervention:'):
+            self.manager.interventions.guard(self, self.current_event)
         await ws.send_json(packet)
 
     async def speak(self, text, event):
@@ -478,6 +490,9 @@ class MeetingAgent:
             if time.monotonic() > deadline:
                 raise ValueError('No pause available to speak')
             await asyncio.sleep(.1)
+        if event['source_key'].startswith('intervention:'):
+            text = await self.manager.interventions.prepare_speech(self, event)
+            self.change(event, response=text)
         self.last_spoken = text
         self.echo_until = time.monotonic() + 90
         tts, pending, rate = self.tts_factory(), bytearray(), None

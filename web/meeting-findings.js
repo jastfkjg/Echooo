@@ -2,7 +2,7 @@ import {speakerName} from './meeting-transcript.js';
 import {enhanceSelects} from './select.js';
 const esc = (value='') => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const time = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
-const labels={decision:'Decision',action_item:'Action item',unresolved_question:'Open question'};
+const labels={decision:'Decision',action_item:'Action item',unresolved_question:'Open question',contradiction:'Contradiction',risk:'Risk'};
 // Group nearby source fragments for reading; keep every original quote and anchor.
 export function groupEvidence(items,combineSpeakers=false) {
   const groups=[];
@@ -105,7 +105,7 @@ export function nextReviewRecording(items,recordingId){
 }
 
 export function approvedRecordHTML(record, recordingId) {
-  const groups=[['Decisions',record.decisions||[]],['Action items',record.action_items||[]],['Open questions',record.unresolved_questions||[]],['Answered questions',record.answered_questions||[]]].map(([label,items])=>[label,findingsForRecording(items,recordingId)]);
+  const groups=[['Decisions',record.decisions||[]],['Action items',record.action_items||[]],['Open questions',record.unresolved_questions||[]],['Contradictions',record.contradictions||[]],['Risks',record.risks||[]],['Answered questions',record.answered_questions||[]]].map(([label,items])=>[label,findingsForRecording(items,recordingId)]);
   if(!groups.some(([,items])=>items.length))return recordingId===undefined?'<p class="muted">No approved findings yet. Approve items in Review.</p>':'';
   return `<h2>Confirmed results</h2>${groups.filter(([,items])=>items.length).map(([title,items])=>`<section class="record-group">${title==='Answered questions'?`<details class="answered-questions" data-record-evidence="answered-questions"><summary>Answered questions · ${items.length}</summary>`:`<h3>${title}</h3>`}<ol>${items.map(f=>`<li data-confirmed-finding="${esc(f.id)}" tabindex="-1">${findingContentHTML(f,'record-statement')}${answerHTML(f,true)}${metadataHTML(f)}<details class="finding-details" data-record-evidence="${esc(f.id)}"><summary>Source</summary>${f.status==='edited'?'<p class="record-edit-label">Edited &amp; approved</p>':''}${evidenceHTML(f.evidence,f.id,f.details?.speaker_names)}</details></li>`).join('')}</ol>${title==='Answered questions'?'</details>':''}</section>`).join('')}`;
 }

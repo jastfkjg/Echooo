@@ -1,7 +1,8 @@
-import {mountFindings} from './meeting-findings.js?v=11';
+import {mountFindings} from './meeting-findings.js?v=12';
+import {mountInterventions} from './meeting-interventions.js?v=3';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
-import {MeetingAudio} from './meeting-audio.js?v=tab-audio-3';
+import {MeetingAudio} from './meeting-audio.js?v=tab-audio-4';
 import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent, transcriptRecords} from './meeting-transcript.js?v=meeting-transcript-7';
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const meetingTime = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
@@ -53,6 +54,10 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     <dialog id="meeting-activity-dialog" class="meeting-activity-dialog" aria-labelledby="meeting-activity-title"><div class="dialog-head"><div><h2 id="meeting-activity-title">Messages & activity</h2></div><button class="btn" id="close-meeting-activity" autofocus aria-label="Close messages and activity">Close</button></div><div class="meeting-activity-body"><details class="inline-help"><summary>Meeting help</summary><p id="bot-help" class="muted"></p></details><details id="meeting-audio-help" class="meeting-audio-help"><summary>Recording tips</summary><p class="muted">For online meetings or videos, open the meeting or video in a Chrome tab before starting. Your microphone records your voice.</p></details><p class="meeting-activity-privacy">Private replies stay here and out of meeting notes.</p><section id="bot-agent-history" class="meeting-agent-history"><h3>Recent exchanges</h3><ol id="bot-agent-events"></ol></section><p id="meeting-activity-empty" class="meeting-placeholder">No messages yet.</p></div></dialog>
     <dialog id="meeting-source-dialog" class="meeting-source-dialog" aria-labelledby="meeting-source-title"><div class="dialog-head"><h2 id="meeting-source-title">Supporting conversation</h2><button class="btn" id="close-meeting-source" aria-label="Close source">Close</button></div><p id="meeting-source-point"></p><div id="meeting-source-passages"></div></dialog>
     <section class="meeting-player-wrap" aria-label="Recording player"><div class="meeting-player-title"><strong id="meeting-player-label"></strong><span id="meeting-playback" class="muted"></span></div><audio id="meeting-player" controls preload="none" aria-label="Selected recording audio"></audio><div class="meeting-player-tools"><button class="btn" id="play-back" aria-label="Back 10 seconds">−10s</button><button class="btn" id="play-forward" aria-label="Forward 10 seconds">+10s</button><label class="meeting-speed" for="play-speed">Speed<select id="play-speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><label class="meeting-follow"><input type="checkbox" id="follow-playback"> Follow playback</label></div></section>`,'Meetings');
+  $('.meeting-reader-toolbar').insertAdjacentHTML('beforebegin','<section id="meeting-interventions" class="meeting-interventions" aria-label="Private suggested questions" hidden></section>');
+  const interventionsPanel=mountInterventions($('#meeting-interventions'),{api,base,refresh,openDialog,showSource,
+    getLocalRecording:()=>!disposed&&!stopping&&socket?.readyState===WebSocket.OPEN?captureRecording:null,
+    });
   const findingsPanel=mountFindings($('#meeting-findings'),{api,base,refresh,showSource,recordRoot:$('#meeting-approved-record'),getRecordScope:()=>selectedRecording,
     onNextRecording(id){selectRecording(id);setPanel('review');},
     onPending(count){$('#review-count').textContent=` · ${count}`;$('#review-count').hidden=!count;$('#tab-review').setAttribute('aria-label',count?`Review, ${count} awaiting review`:'Review');},
@@ -156,6 +161,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     if(!text)document.querySelector('.meeting-inline-draft')?.remove();
   }
   function draw(){
+    interventionsPanel.render(meeting);
     drawProject();
     if(disposed)return;
     drawBot();
@@ -408,7 +414,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   }
   function receiveLive(p){
     if(disposed)return;
-    if(p.type==='findings'){refresh().catch(()=>{});return;}
+    if(p.type==='findings'||p.type==='interventions'){refresh().catch(()=>{});return;}
     if(p.type==='resync'){liveDraft=null;showPartial('');refresh().catch(()=>{});return;}
     if(p.type==='partial'){
       liveDraft=p.text?p:null;
@@ -454,9 +460,9 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     finally{if(!disposed)draw();}
   }
   async function updateRecording(rid){if(rid)await requestAnalysis(false,rid);}
-  function release(){capture?.disconnect();audioInput?.close();context?.close().catch(()=>{});capture=audioInput=context=null;}
+  function release(){interventionsPanel.stopLocalSpeech();capture?.disconnect();audioInput?.close();context?.close().catch(()=>{});capture=audioInput=context=null;}
   function flush(){if(!pendingBuffers.length||socket?.readyState!==WebSocket.OPEN)return;const pcm=new Uint8Array(pendingBuffers.reduce((n,b)=>n+b.byteLength,0));let offset=0;for(const b of pendingBuffers){pcm.set(new Uint8Array(b),offset);offset+=b.byteLength;}pendingBuffers=[];socket.send(pcm);}
-  async function stop(){if(!socket||stopping)return;stopping=true;status('Saving final speech…');if(capture){await new Promise(resolve=>{const timeout=setTimeout(()=>{captureFlushed=null;resolve();},500);captureFlushed=()=>{clearTimeout(timeout);captureFlushed=null;resolve();};capture.port.postMessage({type:'flush'});});}release();flush();if(socket.readyState===WebSocket.OPEN)socket.send('stop');else socket.close();status('Saving final speech…');draw();}
+  async function stop(){interventionsPanel.stopLocalSpeech();if(!socket||stopping)return;stopping=true;status('Saving final speech…');if(capture){await new Promise(resolve=>{const timeout=setTimeout(()=>{captureFlushed=null;resolve();},500);captureFlushed=()=>{clearTimeout(timeout);captureFlushed=null;resolve();};capture.port.postMessage({type:'flush'});});}release();flush();if(socket.readyState===WebSocket.OPEN)socket.send('stop');else socket.close();status('Saving final speech…');draw();}
   async function start(){
     if(starting||disposed)return;
     starting=true;stopping=false;pendingBuffers=[];warning('');$('#meeting-player').pause();draw();
@@ -516,7 +522,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const timer=setInterval(()=>{if(socket&&!stopping&&!analysisTask&&captureRecording)updateRecording(captureRecording);},60000);
   const remoteTimer=setInterval(()=>{if(!disposed&&(!socket||meeting.recordings.some(r=>r.transcription?.phase==='verifying')))refresh().catch(()=>{});},3000);
   const unload=e=>{if(socket){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
-  current={dispose(){disposed=true;findingsPanel.dispose();eventFeed?.close();clearInterval(timer);clearInterval(remoteTimer);clearTimeout(searchTimer);resizeObserver.disconnect();window.removeEventListener('resize',updateDockSpace);window.removeEventListener('wheel',onReadIntent);window.removeEventListener('touchmove',onReadIntent);window.removeEventListener('keydown',onReadIntent);activity.close();workspace.removeEventListener('focusin',onFocus);window.removeEventListener('beforeunload',unload);release();flush();$('#meeting-player')?.pause();$('#meeting-source-dialog')?.close();dock.remove();document.documentElement.classList.remove('meeting-open');document.documentElement.style.removeProperty('--meeting-dock-height');document.documentElement.style.removeProperty('--meeting-nav-height');if(socket?.readyState===WebSocket.OPEN)socket.send('stop');else socket?.close();}};
+  current={dispose(){disposed=true;interventionsPanel.dispose();findingsPanel.dispose();eventFeed?.close();clearInterval(timer);clearInterval(remoteTimer);clearTimeout(searchTimer);resizeObserver.disconnect();window.removeEventListener('resize',updateDockSpace);window.removeEventListener('wheel',onReadIntent);window.removeEventListener('touchmove',onReadIntent);window.removeEventListener('keydown',onReadIntent);activity.close();workspace.removeEventListener('focusin',onFocus);window.removeEventListener('beforeunload',unload);release();flush();$('#meeting-player')?.pause();$('#meeting-source-dialog')?.close();dock.remove();document.documentElement.classList.remove('meeting-open');document.documentElement.style.removeProperty('--meeting-dock-height');document.documentElement.style.removeProperty('--meeting-nav-height');if(socket?.readyState===WebSocket.OPEN)socket.send('stop');else socket?.close();}};
   status(meeting.status==='ended'?'Meeting ended':meeting.recording?'Recording on another page':meeting.recordings.length?'Audio saved':'Ready to record');draw();loadSelectedAudio();
 }
 

@@ -209,10 +209,21 @@ meeting_finding_progress = owned_table("meeting_finding_progress", meeting_ref()
     Column("error", Text, nullable=False),
     constraints=(UniqueConstraint("meeting_id"),))
 
+meeting_interventions = owned_table("meeting_interventions", meeting_ref(),
+    Column("kind", String, nullable=False), Column("question", Text, nullable=False),
+    Column("reason", Text, nullable=False), Column("evidence", JSON, nullable=False),
+    Column("status", String, nullable=False), Column("revision", Integer, nullable=False),
+    Column("state", JSON, nullable=False))
+meeting_intervention_reviews = owned_table("meeting_intervention_reviews", meeting_ref(),
+    Column("intervention_id", String, ForeignKey("meeting_interventions.id", ondelete="CASCADE"), nullable=False),
+    Column("action", String, nullable=False), Column("before", JSON, nullable=False),
+    Column("after", JSON, nullable=False))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
-    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress]
+    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
+    meeting_interventions, meeting_intervention_reviews]
 
 
 class Store:

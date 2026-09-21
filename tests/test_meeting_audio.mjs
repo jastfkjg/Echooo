@@ -13,6 +13,32 @@ const stream=(...kinds)=>{
 };
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 
+test('local-output echo cancellation only processes microphone, with safe legacy fallback',async()=>{
+  for(const mode of ['all','legacy','rejected','unknown']) {
+    const shared=stream('video','audio'),mic=stream('audio'),calls=[];
+    const track=mic.getAudioTracks()[0];
+    if(mode!=='unknown')track.getCapabilities=()=>({echoCancellation:mode==='legacy'?[true,false]:[true,false,'all']});
+    track.applyConstraints=async value=>{calls.push(value);if(mode==='rejected')throw new Error('Unavailable');};
+    shared.getAudioTracks()[0].applyConstraints=()=>assert.fail('Shared tab must not be filtered');
+    const input=new MeetingAudio({mediaDevices:{getDisplayMedia:async()=>shared,getUserMedia:async options=>{
+      assert.equal(options.audio.echoCancellation,true);return mic;
+    }}});
+    await input.open();
+    assert.deepEqual(calls,['all','rejected'].includes(mode)?[{echoCancellation:{exact:'all'}}]:[]);
+    assert.ok([...shared.getTracks(),track].every(t=>t.readyState==='live'));
+    input.close();
+  }
+});
+
+test('closing while echo constraints are pending releases tracks and cannot start capture',async()=>{
+  const mic=stream('audio'),pending=deferred(),track=mic.getAudioTracks()[0];
+  track.getCapabilities=()=>({echoCancellation:[true,'all']});
+  track.applyConstraints=()=>pending.promise;
+  const input=new MeetingAudio({mediaDevices:{getUserMedia:async()=>mic}});
+  const opened=input.open(false);await Promise.resolve();input.close();pending.resolve();
+  await assert.rejects(opened,/cancelled/);assert.equal(track.stops,1);
+});
+
 test('tab permission is first; audio missing from a shared screen fails before microphone capture',async()=>{
   const shared=stream('video');let micCalls=0;
   const input=new MeetingAudio({mediaDevices:{getDisplayMedia:async options=>{

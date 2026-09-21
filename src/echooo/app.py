@@ -39,11 +39,13 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
     async def lifespan(app):
         app.state.meeting_transcriptions.resume()
         app.state.meeting_findings.resume()
+        app.state.meeting_interventions.resume()
         app.state.meeting_bots.start()
         yield
         for clients in list(rooms.clients.values()):
             for client in tuple(clients):
                 await client.stop("The service is shutting down.")
+        await app.state.meeting_interventions.close()
         await app.state.meeting_bots.close()
         await app.state.meeting_transcriptions.close()
         await app.state.meeting_findings.close()
