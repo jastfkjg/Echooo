@@ -482,4 +482,19 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .intervention-row details { margin: .75rem 0; }
 .intervention-row .actions { margin-top: 1rem; flex-wrap: wrap; gap: .5rem; }
 .intervention-row button { min-height: 44px; }
-#intervention-wording { width: 100%; box-sizing: border-box; }
+.intervention-row textarea { width:100%; box-sizing:border-box; margin-top:8px; resize:vertical; }
+.intervention-row .actions .btn { min-height:44px; padding:10px 16px; font-size:13px; }
+.intervention-row .intervention-more { margin:0; position:relative; }
+.intervention-more summary { display:flex; align-items:center; cursor:pointer; list-style:none; border-radius:7px; }
+.intervention-more summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+.intervention-more summary::-webkit-details-marker { display:none; }
+.intervention-more[open] > button { position:absolute; left:0; top:calc(100% + 4px); z-index:2; white-space:nowrap; background:var(--bg); }
+.meeting-interventions > p:empty { display:none; }
+.intervention-row > .muted { margin:0 0 8px; font-size:13px; }
+.intervention-row > .intervention-question { margin:0 0 12px; }
+.intervention-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; font-size:13px; }
+.intervention-kind { display:inline-block; padding:3px 10px; border:1px solid var(--accent); border-radius:6px; background:var(--soft); color:var(--accent); font-weight:600; }
+.intervention-reason { color:var(--fg); line-height:1.6; max-width:75ch; margin-bottom:12px; }
+.intervention-row .intervention-evidence { margin:12px 0; padding:12px 16px; border-left:3px solid var(--line); background:var(--soft); }
+.intervention-evidence p { white-space:pre-wrap; line-height:1.65; font-size:15px; }
+.intervention-evidence footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 16px; margin-top:6px; color:var(--muted); font-size:13px; }

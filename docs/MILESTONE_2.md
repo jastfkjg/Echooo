@@ -8,8 +8,27 @@ never authorizes speaking or adds anything to the approved meeting record.
 ## Behavior
 
 - Both browser and bot transcripts trigger a separate background check of saved
-  final passages, after a six-second batching interval. Partial transcripts never
-  generate proposals. A live LLM is required; mock mode does not fabricate suggestions.
+  final passages. A chronological projection joins same-speaker fragments into
+  versioned speech units; late repairs are placed by audio timestamps, not insertion
+  order. Terminal STT punctuation (or a standalone text note) marks a boundary;
+  this is a conservative heuristic, not a grammatical completeness guarantee.
+  Complete units settle for 1.2 seconds, with a 0.4-second scheduling tick. Incomplete
+  speech is never force-submitted on timeout: polling stops after 3 seconds and
+  resumes when new transcript arrives. A live LLM is required.
+- New/revised units drive incremental checks, with up to 40 recent complete units
+  plus older proposal/finding evidence (48,000-character total bound). Cross-fragment quotes
+  map back to independently validated original evidence. Detection uses semantic
+  model judgment, not keyword classification. Implicit changes invite neutral
+  confirmation; explicit supersession, different activities and scopes are distinct.
+- Clear issues need no additional turn. Only an uncertain model result can request
+  one recheck after 2 seconds. The original check and recheck share a 15-second
+  deadline; an individual first model call is capped at 12 seconds. These are
+  service time limits, not a guarantee of successful suggestions within that time.
+  Append-only discussion gets one bounded relevance refresh instead of unconditional
+  cancellation. Changed source evidence still invalidates drafts. Approval and speech
+  retain fresh relevance checks. Model failures are visible, not treated as no issue.
+- Owner-only check history records outcome, latency, input versions and source IDs.
+  It does not store model reasoning or duplicate private transcript text.
 - Questions, reasons, original wording, evidence snapshots and owner reviews are
   stored independently of findings. Reloading preserves them. Dismissed, deferred
   and delivered suggestions participate in semantic duplicate suppression; identical
@@ -17,12 +36,23 @@ never authorizes speaking or adds anything to the approved meeting record.
 - Later discussion can mark a proposal obsolete. Corrections to its evidence or
   ending the meeting invalidate pending proposals. Approving and delivering both
   require a fresh semantic relevance check against the current discussion.
-- **Review & ask** opens the editable wording. **Approve & ask** authorizes only
-  that text. It is sent directly to the existing TTS pipeline, not to the answer
+- **Ask in meeting** or **Play locally** directly authorizes the displayed wording,
+  without a confirmation dialog. **Edit** opens an inline draft; the primary action
+  submits that exact draft. It is sent to TTS, not to the answer
   generator for rewriting. The owner review and original wording remain inspectable.
+- The issue type is a visible badge and its reason stays below the question.
+  **Supporting conversation** folds detailed evidence and review history. Adjacent
+  same-speaker evidence fragments are grouped chronologically with one attribution,
+  time range and source control per group. Exact continuous excerpts are joined;
+  omitted or unverifiable transitions remain marked or separate. Source controls
+  retain every original evidence ID; transcript data and approval checks are unchanged.
+  **More → Save for later** moves an item into a collapsed saved section, without
+  reminders or automatic speech. **Dismiss** moves it into history. Drafts survive
+  live updates while the proposal revision is unchanged; changed revisions require
+  reviewing the latest question. Duplicate submissions are blocked while checking.
 - Online meeting speech requires an active Attendee participant, live STT, server
   TTS and **Answer when called** enabled.
-- During browser-only recording, **Approve & play locally** uses the browser's
+- During browser-only recording, **Play locally** uses the browser's
   speech synthesis and the device's audio output. It requires no Attendee or server
   TTS. Approval and pre-playback relevance checks still apply. A one-shot receipt
   limits playback to the approving tab; refresh never automatically replays it.
@@ -35,14 +65,14 @@ never authorizes speaking or adds anything to the approved meeting record.
   similarity filter deletes participants' repetitions, quotations or objections.
   Browser AEC is best-effort: residual acoustic echo can still be transcribed; this
   is not an application-level residual-echo classifier. Use headphones if needed.
-  **Cancel speech** stops playback; new saved transcript changes also stop it through
+  **Stop** stops playback; new saved transcript changes also stop it through
   the heartbeat check, not immediate voice activity detection. Stopping recording
   or leaving the page also stops local speech.
   Local voices/languages depend on the browser and operating system. This path
   plays through the device; it does not inject audio into a remote meeting.
 
 - The existing Stop, voice interruption, disable-voice and leave controls cancel
-  speech. **Cancel speech** also cancels one queued suggestion. New saved transcript
+  speech. **Stop** also cancels one queued suggestion. New saved transcript
   changes during approved speech stop further output conservatively. Words already
   played cannot be retracted. Interrupted delivery is never marked completed.
 - Failed or cancelled delivery can be explicitly reviewed again in **Previous
@@ -127,9 +157,9 @@ and pre-speech relevance. A finite evaluation does not establish universal accur
    proposal: the model must judge that clarification materially affects the outcome.
 
 4. Inspect **Supporting conversation** and **Open transcript**. Verify Echooo has
-   stayed silent. Choose **Later**, reload, and verify the suggestion is still deferred.
+   stayed silent. Choose **More → Save for later**, reload, and verify it remains saved.
 
-5. Choose **Review & ask**, edit the wording, then **Approve & ask**. Verify the spoken
+5. Choose **Edit**, edit the wording, then **Ask in meeting**. Verify the spoken
    question matches that wording and **Review history** preserves the original. The
    completed question should appear under Echooo AI in the transcript.
 
@@ -137,7 +167,7 @@ and pre-speech relevance. A finite evaluation does not establish universal accur
    should be refused as obsolete, or the background check should already have marked
    it **No longer current**. Also test correcting its supporting transcript.
 
-7. Approve another question and immediately use **Stop speaking** or **Cancel speech**.
+7. Approve another question and immediately use **Stop speaking** or **Stop**.
    Check that it does not continue or replay after refresh/restart. A failed provider
    should show **Failed**, with manual review needed before a retry.
 
@@ -147,7 +177,7 @@ and pre-speech relevance. A finite evaluation does not establish universal accur
    spoken question alone must not add a confirmed finding.
 
 For a local-only acceptance, use **Record audio → Microphone only → Start recording**
-without inviting Echooo. Follow steps 3–5, choosing **Approve & play locally**. Check
+without inviting Echooo. Follow steps 3–5, choosing **Play locally**. Check
 that the device speaks the approved wording, input resumes afterwards, cancellation
 works and the question is not extracted as a human finding. Browser/OS audio must be
 available. Automated tests simulate browser speech callbacks; real audible playback
@@ -160,6 +190,7 @@ providers. Unit/browser checks and synthetic model evaluations are recorded sepa
 
 - `GET /api/meetings/{id}/interventions`: proposals, reviews and processing status.
 - `POST /api/meetings/{id}/interventions/check`: enqueue a check; returns 202.
+- `GET /api/meetings/{id}/interventions/checks`: latest 50 diagnostic checks.
 - `POST /api/meetings/{id}/interventions/{proposal_id}/review`:
   `{ "action": "approve|defer|reject|cancel", "revision": 1, "question": "optional approved wording" }`.
   Only `approve` accepts changed wording. Stale revisions return 409.

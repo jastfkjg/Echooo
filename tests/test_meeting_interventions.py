@@ -29,6 +29,65 @@ class IssueModel:
                 'quote': 'invented' if self.invalid else data['records'][0]['content']}]}], 'resolved_ids': self.resolved}
 
 
+async def test_incremental_detection_and_audit(governed, client):
+    a, m = governed
+    await m.detect(a.who, a.mid, incremental=True)
+    await m.detect(a.who, a.mid, incremental=True)
+    assert m.ai.calls == 1
+    checks = client.get(f'/api/meetings/{a.mid}/interventions/checks')
+    assert checks.status_code == 200
+    assert m.view(a.who, a.mid)['intervention_progress']['last_check']['outcome'] == 'suggested'
+    await m.detect(a.who, a.mid)
+    assert m.view(a.who, a.mid)['intervention_progress']['last_check']['outcome'] == 'duplicate'
+
+
+async def test_followup_is_limited_to_one_retry(governed):
+    a, m = governed
+    class Uncertain:
+        async def json_call(self, prompt, data, fast=False):
+            return {'proposals':[], 'needs_followup':True}
+    m.ai = Uncertain()
+    assert await m.detect(a.who, a.mid, incremental=True) == 'followup'
+    assert await m.detect(a.who, a.mid, incremental=True) is None
+    assert not m.followups
+
+
+@pytest.mark.parametrize('keep', [True, False])
+async def test_append_only_rechecks_instead_of_discarding(governed, keep):
+    a, m = governed
+    class Append(IssueModel):
+        async def json_call(self, prompt, data, fast=False):
+            if 'candidates' in data:
+                return {'keep_ids':['0'] if keep else []}
+            result = await super().json_call(prompt, data, fast=fast)
+            with a.store.scope(a.who) as r:
+                r.add(db.utterances, meeting_id=a.mid, recording_id=None, speaker='Bob',
+                      content='We are still discussing release readiness.', start_ms=5000, end_ms=6000)
+            return result
+    m.ai = Append()
+    await m.detect(a.who, a.mid)
+    assert bool(m.view(a.who, a.mid)['interventions']) is keep
+
+
+def test_stable_input_wait_is_bounded(governed):
+    from echooo.meeting_findings import source_hash
+    a, m = governed
+    raw = dict(id='fragment', recording_id='r', speaker='Alice', content='We plan to',
+               start_ms=0, end_ms=100, created_at=time.time())
+    key = a.who, a.mid, raw['id']
+    m.changed_at[key] = (source_hash(raw), time.time())
+    units, waiting, _ = m.stable_context(a.who, a.mid, [raw], [])
+    assert not units and waiting
+    m.changed_at[key] = (source_hash(raw), time.time()-4)
+    units, waiting, _ = m.stable_context(a.who, a.mid, [raw], [])
+    assert not units and not waiting
+    raw['content'] += ' release.'
+    m.changed_at[key] = (source_hash(raw), time.time())
+    assert not m.stable_context(a.who, a.mid, [raw], [])[0]
+    m.changed_at[key] = (source_hash(raw), time.time()-2)
+    assert len(m.stable_context(a.who, a.mid, [raw], [])[0]) == 1
+
+
 @pytest.fixture
 def governed(agent):
     m = agent.manager.interventions

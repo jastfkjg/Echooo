@@ -1,5 +1,5 @@
 import {mountFindings} from './meeting-findings.js?v=12';
-import {mountInterventions} from './meeting-interventions.js?v=3';
+import {mountInterventions} from './meeting-interventions.js?v=questions-ui-2';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
 import {MeetingAudio} from './meeting-audio.js?v=tab-audio-4';

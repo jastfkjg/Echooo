@@ -11,6 +11,12 @@ from echooo.meeting_interventions import PROMPT, CHECK
 
 
 CASES = [
+    ('implicit schedule change with repeated new value', [
+        'The inspection is on Wednesday and shipment is on Friday.',
+        'Make sure inspection is finished on Tuesday and shipment happens on Thursday.',
+        'Yes, shipment will happen on Thursday.'], 'contradiction', []),
+    ('two incompatible commitments in one speech unit', [
+        'The signed agreement requires delivery on the third of October; our current committed plan delivers that same order on the tenth of October, and nobody has agreed to revise either commitment.'], 'contradiction', []),
     ('missing responsibility', [
         'The access review is required before tomorrow\'s release. Nobody has taken responsibility for it.',
         'We cannot release without it, but we have not assigned it.',

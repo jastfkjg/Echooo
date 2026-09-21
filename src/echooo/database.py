@@ -219,11 +219,14 @@ meeting_intervention_reviews = owned_table("meeting_intervention_reviews", meeti
     Column("action", String, nullable=False), Column("before", JSON, nullable=False),
     Column("after", JSON, nullable=False))
 
+meeting_intervention_checks = owned_table('meeting_intervention_checks', meeting_ref(),
+    Column('outcome', String, nullable=False), Column('detail', JSON, nullable=False))
+
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
     meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
-    meeting_interventions, meeting_intervention_reviews]
+    meeting_interventions, meeting_intervention_reviews, meeting_intervention_checks]
 
 
 class Store:

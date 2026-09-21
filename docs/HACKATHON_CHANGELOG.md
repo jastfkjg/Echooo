@@ -1,5 +1,47 @@
 # Hackathon implementation log
 
+## 21 September 2026 — Readable intervention evidence
+
+- Kept the intervention reason visible below the question and promoted its type
+  into a bordered, theme-aware badge. Only supporting transcript/history is folded.
+- Grouped adjacent same-speaker source excerpts chronologically, retaining one
+  attribution, time range and source control per group. Unverified transitions use
+  ellipses; intervening speech, recordings and long gaps remain separate. No source
+  text is rewritten and all original evidence IDs remain available for navigation.
+- Validation: all 106 frontend tests passed, including ordering, grouping boundaries,
+  omissions, Chinese spacing, escaping and evidence immutability. Isolated browser
+  inspection verified visible reasons, consolidated excerpts and multi-ID navigation.
+
+## 21 September 2026 — Focused suggestion controls
+
+- Replaced mandatory speech-review dialogs with explicit delivery-specific primary
+  actions and inline editing. Kept server approval, exact-wording audit and relevance
+  checks unchanged; drafts survive live refreshes at the same proposal revision.
+- Folded rationale, evidence and review history under Why this question; moved
+  Save for later into More and a separate collapsed saved section. Unified secondary
+  controls and retained Stop during speech checks.
+- Validation: 103 frontend tests and 34 related backend tests passed. Isolated
+  browser checks covered direct edited approval, duplicate-submit prevention,
+  refresh/focus preservation, saved grouping and 375px layout without overflow.
+  Browser checks use mock API responses, not a real meeting or audible playback.
+
+## 21 September 2026 — Stable and timely suggested questions
+
+- Added chronological, versioned speech-unit assembly and exact cross-fragment
+  evidence mapping; incomplete recording fragments never enter the detector.
+- Replaced six-second batching with 1.2-second settling and incremental checks.
+  Uncertain results receive at most one two-second delayed recheck within the
+  original 15-second budget; append-only updates get bounded relevance validation.
+- Added owner-scoped diagnostic check history and compact processing/empty states.
+  Semantic criteria distinguish implicit changes from explicit supersession and
+  compare commitments only within the same activity and scope.
+- Validation: 325 backend tests passed (1 skipped), 102 frontend tests passed;
+  11/11 synthetic live-model scenarios passed, including implicit schedule changes
+  and incompatible commitments in a single speech unit. Added 8 automated cases
+  for ordering, evidence mapping, incomplete input, incremental checks, bounded
+  follow-up and append-only relevance. Physical microphone/end-to-end latency
+  still requires local acceptance; punctuation-based completeness is heuristic.
+
 ## 21 September 2026 — Milestone 2, governed participation
 
 - Added private, evidence-backed intervention proposals with persistent owner review
