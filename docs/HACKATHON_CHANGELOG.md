@@ -1,5 +1,24 @@
 # Hackathon implementation log
 
+## 21 September 2026 — Duplicate suppression and local speech diagnostics
+
+- Suppressed exact repeated questions with overlapping unchanged evidence, including
+  changed citation subsets and duplicates in the same response. Legacy duplicate
+  rows remain auditable but are hidden; dismissing one cannot expose its duplicate.
+- Removed machine speech handles from user-facing question/reason prose, including
+  legacy records. Source IDs remain intact in structured evidence.
+- Aligned detection and speech-check semantics and audited speech verdicts/reasons.
+  A replay exposed a false verdict with an unresolved-issue explanation; structured
+  boolean/reason-code disagreements now fail visibly instead of archiving the item.
+  Approval refusals remain reviewable. Browser start reuses a valid approval only
+  for identical transcript content; changed content still requires revalidation.
+- Kept playback errors visible across refreshes and failures available to retry.
+  Added paused-engine recovery and specific browser sound-policy feedback.
+- Validation: 38 targeted backend tests, 108 frontend tests, and 11/11 live-model
+  synthetic checks passed. Full backend suite passed 328 tests (1 skipped) before
+  adding the final legacy-duplicate test, which passed in the targeted run.
+  No real-device audible playback is claimed by these tests.
+
 ## 21 September 2026 — Readable intervention evidence
 
 - Kept the intervention reason visible below the question and promoted its type

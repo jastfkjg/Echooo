@@ -48,3 +48,16 @@ test('stopped recording cancels speech and never claims completion',async()=>{
   speech.sync({recording:false,status:'active',interventions:[{id:'p',revision:2,status:'speaking'}]});
   assert.equal(actions.at(-1),'cancelled');
 });
+test('partial snapshots do not silently cancel a valid receipt',async()=>{
+  const {speech}=setup();await speech.play(receipt);
+  speech.sync({status:'active',interventions:[{id:'p',revision:2,status:'speaking'}]});
+  assert.ok(speech.active);speech.stop();
+});
+test('paused synthesis is resumed before speaking and browser errors are specific',async()=>{
+  const {speech,utterances}=setup();let resumed=false,message='';
+  speech.synthesis.paused=true;speech.synthesis.resume=()=>resumed=true;
+  speech.error=text=>message=text;
+  await speech.play(receipt);assert.ok(resumed);
+  utterances[0].onerror({error:'not-allowed'});
+  assert.match(message,/blocked by the browser/);assert.equal(speech.active,null);
+});

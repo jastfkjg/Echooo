@@ -28,7 +28,9 @@ async def test_local_approved_wording_once_and_completed_projection(governed):
     a,m,p,rec,receipt,send = await local(governed)
     assert a.queue.empty()
     assert receipt['token'] not in str(m.view(a.who,a.mid))
+    calls=m.ai.calls
     assert (await send('start'))['question']=='Who owns the launch checklist?'
+    assert m.ai.calls==calls  # No second semantic verdict for unchanged approved input.
     with pytest.raises(Exception,match='already started'):
         await send('start')
     assert (await send('heartbeat'))['status']=='speaking'
@@ -47,9 +49,11 @@ async def test_browser_receipt_required_and_relevance_rechecked(governed):
     with pytest.raises(Exception,match='no longer valid'):
         await send('start',token='wrong')
     m.ai.relevant=False
+    with a.store.scope(a.who) as r:
+        r.add(db.utterances,meeting_id=a.mid,recording_id=None,speaker='Bob',content='Alice owns the checklist now.',start_ms=5000,end_ms=6000)
     with pytest.raises(Exception,match='no longer relevant'):
         await send('start')
-    assert m.view(a.who,a.mid)['interventions'][0]['status']=='stale'
+    assert m.view(a.who,a.mid)['interventions'][0]['status']=='failed'
 
 
 @pytest.mark.parametrize('content', [

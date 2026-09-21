@@ -29,6 +29,52 @@ class IssueModel:
                 'quote': 'invented' if self.invalid else data['records'][0]['content']}]}], 'resolved_ids': self.resolved}
 
 
+async def test_same_question_with_different_evidence_subset_is_not_inserted(governed):
+    a,m=governed
+    await m.detect(a.who,a.mid)
+    class Expanded(IssueModel):
+        async def json_call(self,prompt,data,fast=False):
+            result=await super().json_call(prompt,data,fast)
+            result['proposals'][0]['evidence'].append({'utterance_id':data['records'][1]['id'],'quote':data['records'][1]['content']})
+            result['proposals'].append(dict(result['proposals'][0]))
+            return result
+    m.ai=Expanded()
+    await m.detect(a.who,a.mid)
+    assert len(m.snapshot(a.who,a.mid)[2])==1
+
+
+def test_internal_handles_are_removed_only_from_display_prose():
+    from echooo.meeting_interventions import display_text
+    token='speech-'+'a'*32
+    assert display_text(f'First date ({token}). Later date ({token}-123456789abc).')=='First date. Later date.'
+
+
+async def test_legacy_duplicates_hide_without_deleting_audit_or_resurfacing_after_dismiss(governed):
+    a,m=governed
+    p=await propose(governed)
+    with a.store.scope(a.who) as r:
+        r.add(db.meeting_interventions,**{k:p[k] for k in ('meeting_id','kind','question','reason','evidence','status','revision','state')})
+    assert len(m.snapshot(a.who,a.mid)[2])==2
+    assert len(m.view(a.who,a.mid)['interventions'])==1
+    await m.review(a.who,a.mid,p['id'],Review(action='reject',revision=1))
+    assert [x['status'] for x in m.view(a.who,a.mid)['interventions']]==['rejected']
+    assert len(m.snapshot(a.who,a.mid)[2])==2
+
+
+async def test_inconsistent_relevance_fails_visibly_without_archiving(governed):
+    a,m=governed
+    p=await propose(governed)
+    class Inconsistent:
+        async def json_call(self,*args,**kwargs):
+            return {'relevant':False,'reason_code':'unresolved'}
+    m.ai=Inconsistent()
+    with pytest.raises(Exception,match='inconsistent result'):
+        await m.review(a.who,a.mid,p['id'],Review(action='approve',revision=1))
+    view=m.view(a.who,a.mid)
+    assert view['interventions'][0]['status']=='proposed'
+    assert view['intervention_progress']['last_check']['outcome']=='invalid_relevance'
+
+
 async def test_incremental_detection_and_audit(governed, client):
     a, m = governed
     await m.detect(a.who, a.mid, incremental=True)
@@ -177,13 +223,13 @@ async def test_resolved_question_cannot_be_spoken(governed, stage):
         await m.review(a.who,a.mid,p['id'],Review(action='approve',revision=1))
     m.ai.relevant = False
     if stage == 'approval':
-        with pytest.raises(Exception, match='no longer supported'):
+        with pytest.raises(Exception, match='Nothing was played'):
             await m.review(a.who,a.mid,p['id'],Review(action='approve',revision=1))
         assert a.queue.empty()
     else:
         with pytest.raises(ValueError, match='no longer relevant'):
             await m.prepare_speech(a,a.queue.get_nowait())
-    assert m.view(a.who,a.mid)['interventions'][0]['status'] == 'stale'
+    assert m.view(a.who,a.mid)['interventions'][0]['status'] == ('proposed' if stage == 'approval' else 'stale')
 
 
 async def test_corrections_and_end_invalidate_suggestions(governed):

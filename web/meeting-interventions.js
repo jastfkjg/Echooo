@@ -1,7 +1,7 @@
-import {LocalQuestionSpeech} from './local-question-speech.js?v=2';
+import {LocalQuestionSpeech} from './local-question-speech.js?v=3';
 const esc = (v='') => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels={proposed:'Needs approval',deferred:'Deferred',approved:'Waiting to speak',speaking:'Speaking',spoken:'Spoken',stale:'No longer current',rejected:'Dismissed',cancelled:'Cancelled',failed:'Failed'};
-const active = p => ['proposed','deferred','approved','speaking'].includes(p.status);
+const active = p => ['proposed','deferred','approved','speaking','failed'].includes(p.status);
 
 // Presentation only: keep every original evidence ID and never rewrite its words.
 export function evidenceGroups(evidence, records=[]){
@@ -110,7 +110,7 @@ export function mountInterventions(root,{api,base,refresh,showSource,getLocalRec
     const local=isLocal(snapshot);
     busy=true;render(snapshot);error.textContent='';
     try{if(action)await review(action==='approve'?question:undefined,action==='approve'&&local);else await api(`${base}/interventions/check`,'POST');if(action)editing=null;await refresh();}
-    catch(e){error.textContent=e.message;}
+    catch(e){localError=e.message;error.textContent=localError;}
     finally{busy=false;const message=error.textContent;render(snapshot);error.textContent=message;}
   };
   return {render,stopLocalSpeech:()=>localSpeech.stop(),dispose(){disposed=true;window.removeEventListener('pagehide',stopOnPageHide);localSpeech.stop();}};

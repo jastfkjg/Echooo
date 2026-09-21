@@ -54,10 +54,22 @@ never authorizes speaking or adds anything to the approved meeting record.
   TTS and **Answer when called** enabled.
 - During browser-only recording, **Play locally** uses the browser's
   speech synthesis and the device's audio output. It requires no Attendee or server
-  TTS. Approval and pre-playback relevance checks still apply. A one-shot receipt
+  TTS. Approval checks relevance; pre-playback reuses that verdict only when the
+  complete transcript fingerprint is unchanged and the short-lived receipt remains
+  valid. Otherwise it checks the latest context again. A one-shot receipt
   limits playback to the approving tab; refresh never automatically replays it.
   The browser reports completion, failure or cancellation, with a short heartbeat
   lease so disconnected playback is not recorded as completed.
+- Exact repeated questions with overlapping unchanged evidence are suppressed even
+  when citation subsets differ; existing active duplicates are grouped in the API
+  view without deleting their audit records. Semantic paraphrase suppression still
+  depends on the model. Internal speech handles are removed from displayed prose.
+- Speech checks record allowed/blocked/invalid outcomes and model reason codes.
+  Boolean/code contradictions fail closed without declaring the topic resolved.
+  Rejected approval stays reviewable with a persistent explanation; playback failures
+  remain in the current list for retry. Browser sound-policy errors are explicit,
+  paused synthesis is resumed, and missing recording fields in partial snapshots
+  do not by themselves cancel playback.
 - Local playback keeps microphone and selected-tab capture running without blanking
   audio. Microphone echo cancellation requests `all` when the track advertises that
   capability, otherwise it keeps ordinary browser AEC. Shared-tab audio is unchanged.
