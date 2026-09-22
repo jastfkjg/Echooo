@@ -500,3 +500,5 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .intervention-evidence footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 16px; margin-top:6px; color:var(--muted); font-size:13px; }
 
 .meeting-controls #recording-answer-status,.meeting-controls #recording-answer-text{flex-basis:100%;margin:0;overflow-wrap:anywhere}
+
+.meeting-recording-dialog{max-width:460px}.meeting-audio-choices{display:grid;gap:12px;padding:24px}.meeting-audio-choice{display:flex;flex-direction:column;align-items:flex-start;text-align:left;white-space:normal;gap:6px;padding:16px;min-height:80px}.meeting-audio-choice strong{font-size:15px;font-weight:600}.meeting-audio-choice span{font-size:13px;color:var(--muted);line-height:1.5}

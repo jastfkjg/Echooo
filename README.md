@@ -57,8 +57,8 @@ Select a project when creating a meeting. All its eligible shareable memories ar
 For browser capture:
 
 1. Open **Meetings → New meeting**.
-2. Choose **Tab + microphone** in desktop Chrome, select the meeting or video tab, and enable **Share tab audio**. Use **Microphone only** for in-person meetings.
-3. Start recording, follow the transcript, and open **Summary & notes** for notes with source references.
+2. Click **Start recording**, then choose **Microphone only** for in-person meetings or **Tab + microphone** in desktop Chrome. For tab recording, select the meeting or video tab and enable **Share tab audio**.
+3. Follow the transcript and open **Summary & notes** for notes with source references.
 4. Stop recording to finish transcription and, with AssemblyAI configured, refine machine-generated text and speaker labels and fill gaps while preserving manual edits. Select a passage to play its original audio; download recordings as WAV.
 
 Tell participants before recording and keep the page open. Each recording is limited to 30 minutes; start another in the same meeting to continue. Tab sharing captures the selected tab's audio, not other desktop apps. Only audio is saved.
