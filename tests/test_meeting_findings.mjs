@@ -1,9 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decisionListHTML, approvedRecordHTML} from '../web/meeting-findings.js';
+import {decisionListHTML, approvedRecordHTML, mountFindings} from '../web/meeting-findings.js';
 
 const item = {id:'finding-1',status:'provisional',statement:'Use <script>alert(1)</script>',evidence_current:true,
   evidence:[{utterance_id:'u',recording_id:'r',speaker:'Alice & Bob',start_ms:1200,end_ms:3300,quote:'We decided <b>yes</b>'}]};
+
+test('switching to a processing recording updates both review counts immediately',()=>{
+  // Minimal DOM surface used by render; assertions exercise the processing early return.
+  const nodes=new Map();
+  const node=selector=>{
+    if(!nodes.has(selector))nodes.set(selector,{textContent:'',dataset:{},open:false,
+      querySelector:node,querySelectorAll:()=>[],setAttribute(){},close(){}});
+    return nodes.get(selector);
+  };
+  const root=node('root');let scope='r',badge;
+  const panel=mountFindings(root,{getRecordScope:()=>scope,onPending:count=>badge=count});
+  const value={findings:Array.from({length:7},(_,i)=>({...item,id:`old-${i}`})),
+    recordings:[{id:'r'},{id:'new',transcription:{phase:'live'}}]};
+  panel.render(value);
+  assert.equal(badge,7);
+  assert.equal(node('[data-finding-count]').textContent,'7 awaiting review');
+  scope='new';panel.render(value);
+  assert.equal(badge,0);
+  assert.equal(node('[data-finding-count]').textContent,'');
+  assert.match(node('[data-finding-status]').textContent,/Processing transcript/);
+  const updated={...value,findings:[...value.findings,{...item,id:'new-finding',evidence:[{...item.evidence[0],recording_id:'new'}]}]};
+  panel.render(updated);
+  assert.equal(badge,1);
+  assert.equal(node('[data-finding-count]').textContent,'1 awaiting review');
+  scope='r';panel.render(updated);
+  assert.equal(badge,7);
+  panel.dispose();
+});
 
 test('untrusted model statements, names and quotes are escaped in review and final record',()=>{
   const html=decisionListHTML([item]);

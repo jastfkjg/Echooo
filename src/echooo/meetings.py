@@ -26,6 +26,7 @@ from echooo.service import Problem, need
 from echooo.auth import AuthError
 from echooo.meeting_knowledge import MeetingKnowledge, KnowledgeInput
 from echooo.meeting_speech import speech_transcript
+from echooo.meeting_browser_answers import BrowserMeetingAnswers, history as browser_answer_history
 from echooo.meeting_findings import MeetingFindings, install_finding_routes, purge_findings
 
 
@@ -157,6 +158,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
                 "assistant_utterances": speech_transcript(r, mid, recordings),
                 "answer_checks": r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.meeting_id == mid),
+                "browser_answers": browser_answer_history(bots, who, mid),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
                 "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
@@ -224,6 +226,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             purge_findings(r, mid, ids)
             purge_interventions(r, mid, ids)
             app.state.service.purge_meeting_evidence(r, mid, ids)
+            for event in r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid,
+                    db.meeting_agent_events.c.connection_id == 'browser-recording:' + rid):
+                r.remove(db.meeting_agent_events, event['id'])
             r.remove(db.recordings, rid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
         return view(who, mid)
@@ -284,7 +289,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews', 'answer_checks')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews', 'answer_checks', 'browser_answers')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})
@@ -668,6 +673,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         rate = settings.assemblyai_sample_rate
         sequence = 0
         writer = None
+        answers = None
         send_lock = asyncio.Lock()
 
         async def send(event):
@@ -697,12 +703,15 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for u in rows:
                 with contextlib.suppress(Exception):
                     await send({'type': 'utterance', 'utterance': u})
+            if answers and event.type in {STTEventType.FINAL, STTEventType.PARTIAL}:
+                await answers.transcript(event, rows)
 
         try:
             await ws.accept()
             with store.scope(who) as r:
                 rec = r.add(db.recordings, meeting_id=mid, sample_rate=rate, samples=0)
             writer = TranscriptWriter(store, who, mid, rec['id'], transcriptions.feed)
+            answers = BrowserMeetingAnswers(bots, who, mid, rec['id'], send, validate)
             phase = 'connecting' if settings.stt_provider != 'mock' else 'unverified'
             rec['transcription'] = transcriptions.state(who, mid, rec['id'], phase=phase, message='')
             if settings.stt_provider != 'mock':
@@ -732,16 +741,27 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                     if live:
                         live.feed(pcm, samples)
                 elif packet.get('text') == 'stop':
+                    await answers.close()
                     if live:
                         await live.finish()
                         live = None
                     await send({'type': 'stopped'})
                     break
+                elif packet.get('text'):
+                    try:
+                        control = json.loads(packet['text'])
+                        if isinstance(control, dict) and control.get('type') in {
+                                'direct_config', 'direct_stop', 'direct_speech', 'local_speech_guard'}:
+                            await answers.control(control)
+                    except (ValueError, TypeError):
+                        await send({'type': 'warning', 'message': 'Invalid recording control.'})
         except Exception as exc:
             logger.warning('Meeting capture disconnected: recording=%s type=%s', rec and rec['id'], type(exc).__name__)
             with contextlib.suppress(Exception):
                 await send({'type': 'warning', 'message': 'Recording disconnected. Acknowledged audio is saved.'})
         finally:
+            if answers:
+                await answers.close()
             if live:
                 await live.finish()
             if writer:

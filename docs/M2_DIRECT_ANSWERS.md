@@ -79,9 +79,9 @@ search paths. These exclude STT/TTS and are not deployed latency guarantees.
 
 ## Manual deployed test flow
 
-Use a live LLM, AssemblyAI, server TTS, and the Attendee connector, with **Answer when
-called** enabled. Browser-only local recording does not exercise this direct-answer
-path.
+For online meetings, use a live LLM, AssemblyAI, server TTS, and Attendee with
+**Answer when called** enabled. For local Recording, use a live LLM and AssemblyAI;
+the recording browser supplies speech synthesis and needs no Attendee credentials.
 
 1. State a team communication decision, then ask Echooo which platform was selected.
    Expect a brief spoken answer and a source link without host approval.
@@ -101,3 +101,42 @@ path.
 
 Real meeting audio, echo behavior, and deployed acceptance require this manual run;
 synthetic model evaluation does not certify them.
+
+## Browser Recording
+
+- Each recording socket owns an independent direct-answer session. Only newly saved
+  final transcripts with an opening address such as “Hello, Echooo” trigger the
+  shared recent-context/search/answer pipeline. Partial transcripts never initiate
+  answers. Turn deduplication and speaker revisions cannot replay earlier questions.
+- **Answer when called** defaults on; **Stop speaking** cancels generation or speech.
+  The page shows progress and reply text, including when browser sound is blocked.
+  Completed replies appear as separate Echooo transcript entries. Activity/export
+  retain failed/interrupted replies, citations and support checks as well.
+- A one-use token is delivered only to the recording socket. Playback requires a
+  fresh start acknowledgement, checks evidence/knowledge again, and reports completion
+  only after the browser's start/end callbacks. Heartbeats renew an 8-second server
+  lease; start waits at most 5 seconds in the browser and total speech at most 120
+  seconds on the server. Disconnect, stop or navigation cancels; history never plays.
+- Capture and human transcripts continue during speech. Browser microphone AEC remains
+  enabled. All local assistant speech (including approved suggestions) guards command
+  dispatch using the recording sample clock plus a 2-second tail, so delayed echoed
+  transcripts cannot initiate a reply. Incoming speech conservatively stops a direct
+  reply; that overlapping turn is saved but not dispatched. Ask again after playback
+  stops and the tail expires. On an unacknowledged cancellation, the guard remains
+  until its lease expires. This does not promise physical echo removal from raw audio.
+- No new service, schema migration or credentials: existing STT/LLM usage applies;
+  browser speech adds no application TTS API call. Demo STT does not transcribe.
+
+Run `.venv/bin/pytest -q tests/test_browser_answers.py` and
+`node --test tests/test_browser_answer_speech.mjs tests/test_local_question_speech.mjs`.
+These cover the live capture socket with simulated STT, historical retrieval,
+one-shot receipts, stale evidence, interruption, delayed echo, disconnect, expiry,
+browser errors, persistence and byte-for-byte PCM preservation.
+
+Local manual check: start Recording with **Microphone only**, say “Echooo, what did
+we decide?”, and wait for the final transcript. Check progress, text and spoken reply.
+Speak over the reply and verify playback stops while your words remain recorded;
+after the tail, ask again. Repeat using speakers, headphones and Tab + microphone,
+then refresh during playback and confirm there is no replay. Also test sound blocked,
+network loss and Stop while searching. Real acoustic/autoplay behavior requires this
+device/browser check; automated tests use simulated speech synthesis and STT.

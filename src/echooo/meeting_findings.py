@@ -99,6 +99,14 @@ category, verify that the statement preserves the speaker's intent and temporal
 meaning. Correct the category and statement when supported, or omit unsupported
 proposals. Retain supported proposals of other categories. Return the complete
 verified findings using the same JSON schema. Do not add unrelated findings.
+When validation_issues are supplied, repair those proposals against original evidence.
+A deadline_text must be an exact excerpt from a cited passage; add missing source
+citations when the deadline is supported elsewhere in the supplied records. If a
+supported deadline spans passages, cite each separately and leave deadline_text null
+unless one exact excerpt suffices. Do not invent normalized date precision.
+If a deadline is unsupported, remove it from both metadata AND statement, retaining
+only independently supported work; omit the proposal if no supported task remains.
+Never fix validation merely by clearing metadata while retaining an unsupported claim.
 """
 
 
@@ -116,6 +124,25 @@ def evidence_current(item, by_id):
         e['source_hash'] == source_hash(by_id[e['utterance_id']]) or
         (e['utterance_id'] in aliases and e['source_hash'] == source_hash({**by_id[e['utterance_id']], 'speaker': e['speaker']})))
         for e in item['evidence'])
+
+
+class DeadlineEvidenceError(ValueError):
+    """A structurally valid action needs its deadline evidence repaired."""
+
+
+def checked_candidates(value, records, new_ids):
+    """Isolate deadline failures without weakening evidence validation."""
+    if not isinstance(value, dict) or not isinstance(value.get('findings', value.get('decisions')), list):
+        raise ValueError('Invalid decision output')
+    candidates, issues, blocked = [], [], set()
+    for index, item in enumerate(value.get('findings', value.get('decisions', []))[:8]):
+        try:
+            candidates.extend(clean_decisions({'findings': [item]}, records, new_ids))
+        except DeadlineEvidenceError:
+            ids = {e['utterance_id'] for e in item['evidence']} & new_ids
+            blocked.update(ids)
+            issues.append({'index': index, 'reason': 'Unsupported deadline text'})
+    return candidates, issues, blocked
 
 
 def clean_decisions(value, records, new_ids):
@@ -169,7 +196,7 @@ def clean_decisions(value, records, new_ids):
                 details['owner'] = None
             raw = details['deadline_text']
             if raw and not any(normalized(raw) in normalized(u['content']) for u in cited):
-                raise ValueError('Unsupported deadline text')
+                raise DeadlineEvidenceError('Unsupported deadline text')
             if details['deadline']:
                 try:
                     day = date.fromisoformat(details['deadline'][:10])
@@ -411,13 +438,25 @@ class MeetingFindings:
                 try:
                     value = await asyncio.wait_for(self.ai.json_call(PROMPT, payload, fast=True), 40)
                     stage = 'validation'
-                    candidates = clean_decisions(value, context + batch, new_ids)
-                    if any(c['kind'] == 'action_item' or c['details'].get('resolved') for c in candidates):
+                    candidates, issues, blocked = checked_candidates(value, context + batch, new_ids)
+                    if issues or any(c['kind'] == 'action_item' or c['details'].get('resolved') for c in candidates):
                         stage = 'semantic_verification'
-                        verified = await asyncio.wait_for(self.ai.json_call(VERIFY_PROMPT,
-                            {**payload, 'draft_findings': value.get('findings', value.get('decisions', []))},
-                            fast=True), 40)
-                        candidates = clean_decisions(verified, context + batch, new_ids)
+                        try:
+                            verified = await asyncio.wait_for(self.ai.json_call(VERIFY_PROMPT,
+                                {**payload, 'draft_findings': value.get('findings', value.get('decisions', [])),
+                                 'validation_issues': issues}, fast=True), 40)
+                            candidates, issues, blocked = checked_candidates(verified, context + batch, new_ids)
+                        except (ValueError, TimeoutError, httpx.HTTPError):
+                            if not issues:
+                                raise
+                            # Preserve independently valid non-action findings even if repair fails.
+                            needs_verification = [c for c in candidates if c['kind'] == 'action_item' or c['details'].get('resolved')]
+                            blocked.update(e['utterance_id'] for c in needs_verification
+                                for e in c['evidence'] if e['utterance_id'] in new_ids)
+                            candidates = [c for c in candidates if c not in needs_verification]
+                    if blocked:
+                        logger.warning('Finding deadline repair deferred meeting=%s passages=%s candidates=%s',
+                            mid, sorted(blocked), [issue['index'] for issue in issues])
                     known = {f['id'] for f in existing}
                     if any(c['details'].get('resolved') and not any(
                             f['id'] == c['details'].get('supersedes') and f['kind'] == 'unresolved_question'
@@ -508,7 +547,8 @@ class MeetingFindings:
                         by_id = {f['id']: f for f in existing}
                     p = self.progress(r, mid)
                     processed = {k: v for k, v in p['processed'].items() if k in current}
-                    processed.update({u['id']: source_hash(u) for u in batch})
+                    processed.update({u['id']: source_hash(u) for u in batch if u['id'] not in blocked})
+                    deferred.update(blocked)
                     r.change(db.meeting_finding_progress, p['id'], processed=processed)
                 self.emit(who, mid)
             self.emit(who, mid)

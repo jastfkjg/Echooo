@@ -35,13 +35,23 @@ export function interventionHTML(p, reviews=[], ended=false, {local=false, editi
   return `<article class="intervention-row" data-intervention="${esc(p.id)}"><div class="intervention-meta"><span class="intervention-kind">${p.kind==='contradiction'?'Conflicting information':'Missing detail'}</span>${p.status==='proposed'?'':`<span class="muted">${esc(labels[p.status]||p.status)}</span>`}</div>${question}<p class="intervention-reason">${esc(p.reason)}</p><details data-suggestion-details="${esc(p.id)}"><summary>Supporting conversation</summary>${evidence}${reviews.length?`<details data-suggestion-details="history-${esc(p.id)}"><summary>Review history · ${reviews.length}</summary>${reviews.map(r=>`<p>${esc(r.action)} · ${esc(new Date(r.created_at*1000).toLocaleString())}</p>${r.before.question!==r.after.question?`<blockquote>${esc(r.before.question)} → ${esc(r.after.question)}</blockquote>`:''}`).join('')}</details>`:''}</details><div class="actions">${actions}${['approved','speaking'].includes(p.status)?'<button class="btn" data-proposal-action="cancel">Stop</button>':''}</div>${p.state?.delivery_error?`<p class="meeting-warning">${esc(p.state.delivery_error)}</p>`:''}</article>`;
 }
 
-export function mountInterventions(root,{api,base,refresh,showSource,getLocalRecording=()=>null}){
+export function mountInterventions(root,{api,base,refresh,showSource,getLocalRecording=()=>null,onLocalSpeech=async()=>{}}){
   let snapshot, busy=false,disposed=false,localError='',editing=null;
   const isLocal=value=>!value.connector?.bot||['ended','fatal_error','data_deleted','not_created'].includes(value.connector.bot.state);
   root.innerHTML='<div class="meeting-section-heading"><h2>Suggested questions</h2><button class="btn" data-check-suggestions>Check again</button></div><p data-intervention-status role="status" aria-live="polite"></p><p data-intervention-error role="alert"></p><div data-intervention-list></div>';
   const status=root.querySelector('[data-intervention-status]'),error=root.querySelector('[data-intervention-error]'),list=root.querySelector('[data-intervention-list]');
   const localSpeech=new LocalQuestionSpeech({api,base,
     changed:()=>{if(!disposed)refresh().catch(()=>{});},error:message=>{localError=message;if(!disposed)error.textContent=message;}});
+  const speechRequest=localSpeech.request.bind(localSpeech);
+  localSpeech.request=async(receipt,action)=>{
+    const active=action==='start'||action==='heartbeat';
+    try{
+      if(active)await onLocalSpeech(true);
+      const result=await speechRequest(receipt,action);
+      if(!active)await onLocalSpeech(false).catch(()=>{});
+      return result;
+    }catch(error){await onLocalSpeech(false).catch(()=>{});throw error;}
+  };
   const stopOnPageHide=()=>localSpeech.stop();
   window.addEventListener('pagehide',stopOnPageHide);
   function render(value){

@@ -134,6 +134,9 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
     value={...value,findings:(value.findings||[]).map(labelFinding),approved_record:Object.fromEntries(Object.entries(value.approved_record||{}).map(([key,entries])=>[key,Array.isArray(entries)?entries.map(labelFinding):entries]))};
     snapshot=value;
     const scope=getRecordScope(),allItems=value.findings||[],items=findingsForRecording(allItems,scope);
+    const pending=items.filter(needsReview).length;
+    onPending(pending);
+    root.querySelector('[data-finding-count]').textContent=pending?`${pending} awaiting review`:'';
     if(scope!==lastScope){root.querySelector('[data-finding-notice]').hidden=true;noticeFinding=null;lastScope=scope;}
     const globalProgress=value.finding_progress||{phase:'idle'};
     const scopedPending=scope!==undefined&&globalProgress.pending_by_recording?globalProgress.pending_by_recording[scope]||0:globalProgress.pending;
@@ -166,7 +169,6 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
       for(const node of list.querySelectorAll('[data-finding-details]'))node.open=opened.has(node.dataset.findingDetails);
     }
     const resultCount=Object.values(value.approved_record||{}).reduce((count,v)=>count+(Array.isArray(v)?findingsForRecording(v,scope).length:0),0);
-    const pending=items.filter(needsReview).length;
     const complete=items.length>0&&!pending&&!busy&&!progress.pending&&
       !['processing','queued','retrying','error','unavailable'].includes(progress.phase);
     for(const button of root.querySelectorAll('[data-view-results]')){
@@ -181,8 +183,6 @@ export function mountFindings(root, {api, base, refresh, showSource, recordRoot=
     nextButton.hidden=pending>0||busy||!next;
     nextButton.textContent=next?`Review next recording (${next.count}) →`:'';
     nextButton.dataset.nextId=next?.id||'';
-    onPending(pending);
-    root.querySelector('[data-finding-count]').textContent=pending?`${pending} awaiting review`:'';
     root.querySelector('[data-extract-decisions]').textContent=progress.phase==='error'?'Retry Extraction':'Check for findings';
     root.querySelector('[data-extract-decisions]').disabled=busy||['processing','queued','retrying','unavailable'].includes(progress.phase);
     {
