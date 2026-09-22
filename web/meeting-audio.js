@@ -71,6 +71,8 @@ export class MeetingAudio {
           catch { /* Keep the initially requested ordinary AEC and continuous capture. */ }
         }
       }
+      // Inspect the effective setting, not merely the requested constraint.
+      this.echoCancellation = microphone.getAudioTracks()[0]?.getSettings?.().echoCancellation ?? null;
       if (this.closed) throw new Error('Recording setup was cancelled.');
       return this;
     } catch (error) {

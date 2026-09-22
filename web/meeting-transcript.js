@@ -5,10 +5,12 @@ export function speakerName(value) {
 
 // Presentation groups only: original utterances and audio anchors stay intact.
 export function groupTranscript(records) {
+  const normalized=text=>text.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}]/gu,'');
+  const replyTexts=new Set(records.filter(u=>u.assistant).map(u=>normalized(u.content)));
   const groups = [];
   for (const record of records) {
     const last = groups.at(-1), speaker = speakerName(record.speaker);
-    if (last && !record.assistant && !last.records[0].assistant && last.speaker === speaker && last.recordingId === record.recording_id &&
+    if (last && !replyTexts.has(normalized(record.content)) && !replyTexts.has(normalized(last.records.at(-1).content)) && !record.assistant && !last.records[0].assistant && last.speaker === speaker && last.recordingId === record.recording_id &&
         record.start_ms - last.records.at(-1).end_ms <= 12000 &&
         record.start_ms - last.records[0].start_ms <= 45000 &&
         last.length + record.content.length <= 450) {
@@ -18,7 +20,22 @@ export function groupTranscript(records) {
       groups.push({speaker, recordingId:record.recording_id, records:[record], length:record.content.length});
     }
   }
-  return groups;
+  // An uncertain presentation association, never a source reclassification.
+  const replies=groups.filter(g=>g.records.length===1&&g.records[0].assistant&&!g.records[0].timing_estimated&&g.recordingId);
+  const folded=new Set();
+  for(const g of groups){
+    if(g.records.some(u=>u.assistant||u.user_edited)||!g.recordingId||!/^Speaker [A-Z]+(?: \(connection \d+\))?$/.test(g.speaker))continue;
+    const text=normalized(g.records.map(u=>u.content).join(' '));
+    if(text.length<40)continue;
+    const matches=replies.filter(reply=>{
+      const a=reply.records[0],start=g.records[0].start_ms,end=g.records.at(-1).end_ms;
+      return reply.recordingId===g.recordingId&&a.end_ms>a.start_ms&&
+        start>=a.start_ms-250&&start<=a.end_ms&&end>=a.start_ms&&end<=a.end_ms+2000&&
+        normalized(a.content)===text;
+    });
+    if(matches.length===1){(matches[0].echoGroups??=[]).push(g);folded.add(g);}
+  }
+  return groups.filter(g=>!folded.has(g));
 }
 
 export const transcriptRecords = meeting => [...meeting.utterances,...(meeting.assistant_utterances||[])];

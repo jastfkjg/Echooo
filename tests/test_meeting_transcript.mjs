@@ -105,3 +105,49 @@ test('assistant responses retain individual turns even when consecutive',()=>{
   const rows=[row('a','First reply',1000,{speaker:'Echooo AI',assistant:true}),row('b','Second reply',4500,{speaker:'Echooo AI',assistant:true})];
   assert.equal(groupTranscript(rows).length,2);
 });
+
+const replyText="Hello! I'm Echooo, your independent meeting assistant. How can I help you today?";
+const spoken=(extra={})=>row('reply',replyText,10000,{speaker:'Echooo AI',assistant:true,end_ms:15000,timing_estimated:false,...extra});
+const captured=(extra={})=>row('capture',replyText,10100,{speaker:'Speaker A · 4764',end_ms:15200,...extra});
+
+test('exact concurrent playback capture folds under AI without mutating source records',()=>{
+  const records=[spoken(),captured()],before=JSON.stringify(records);
+  const groups=groupTranscript(records);
+  assert.equal(groups.length,1);
+  assert.equal(groups[0].speaker,'Echooo AI');
+  assert.equal(groups[0].echoGroups[0].records[0].id,'capture');
+  assert.equal(JSON.stringify(records),before);
+  assert.deepEqual(transcriptMatches(records,'independent'),['reply','capture']);
+  assert.equal(playingUtterance(records,11000),'capture');
+});
+
+test('later repetitions, corrections, quotations, other recordings and uncertain timing stay visible',()=>{
+  const variants=[
+    captured({start_ms:18000,end_ms:23000}),captured({recording_id:'r2'}),
+    captured({user_edited:true}),captured({speaker:'Alice'}),
+    captured({content:'You said: '+replyText}),captured({content:replyText+' I disagree.'}),
+    captured({start_ms:9000}),captured({content:'Hello!'})
+  ];
+  for(const u of variants)assert.equal(groupTranscript([spoken(),u]).length,2);
+  assert.equal(groupTranscript([spoken({timing_estimated:true}),captured()]).length,2);
+  assert.equal(groupTranscript([spoken({recording_id:null}),captured({recording_id:null})]).length,2);
+});
+
+test('new participant speech never gets absorbed into a collapsed capture',()=>{
+  const after=row('human','Let us discuss the release.',15500,{speaker:'Speaker A · 4764'});
+  const groups=groupTranscript([spoken(),captured(),after]);
+  assert.equal(groups.length,2);
+  assert.equal(groups[0].echoGroups[0].records.length,1);
+  assert.equal(groups[1].records[0].id,'human');
+});
+
+test('playback grouping does not change evidence coverage or the underlying recording data',()=>{
+  const records=[captured()];
+  const meeting={revision:1,utterances:records,assistant_utterances:[spoken()],sections:[{status:'pending',evidence_ids:['capture']}],
+    overviews:[{scope_key:'r1',revision:1,evidence_ids:['capture']}]};
+  const content=recordingContent(meeting,'r1');
+  assert.equal(content.records.length,2);
+  assert.equal(content.sections.length,1);
+  assert.equal(content.overviewCurrent,true);
+  assert.equal(meeting.utterances,records);
+});

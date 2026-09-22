@@ -18,12 +18,15 @@ test('local-output echo cancellation only processes microphone, with safe legacy
     const shared=stream('video','audio'),mic=stream('audio'),calls=[];
     const track=mic.getAudioTracks()[0];
     if(mode!=='unknown')track.getCapabilities=()=>({echoCancellation:mode==='legacy'?[true,false]:[true,false,'all']});
-    track.applyConstraints=async value=>{calls.push(value);if(mode==='rejected')throw new Error('Unavailable');};
+    let effective=true;
+    track.getSettings=()=>({echoCancellation:effective});
+    track.applyConstraints=async value=>{calls.push(value);if(mode==='rejected')throw new Error('Unavailable');effective='all';};
     shared.getAudioTracks()[0].applyConstraints=()=>assert.fail('Shared tab must not be filtered');
     const input=new MeetingAudio({mediaDevices:{getDisplayMedia:async()=>shared,getUserMedia:async options=>{
       assert.equal(options.audio.echoCancellation,true);return mic;
     }}});
     await input.open();
+    assert.equal(input.echoCancellation,mode==='all'?'all':true);
     assert.deepEqual(calls,['all','rejected'].includes(mode)?[{echoCancellation:{exact:'all'}}]:[]);
     assert.ok([...shared.getTracks(),track].every(t=>t.readyState==='live'));
     input.close();

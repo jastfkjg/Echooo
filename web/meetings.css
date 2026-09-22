@@ -152,9 +152,9 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 }
 
 /* Two visible alternatives: invite the assistant, or capture this device's audio. */
-.meeting-controls { grid-template-columns:auto minmax(0,1fr); gap:24px; padding:12px 0; margin:8px 0 12px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
-.meeting-controls .meeting-bot,.meeting-controls .meeting-capture { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; min-width:0; min-height:0; padding:0; margin:0; border:0; }
-.meeting-controls .meeting-capture { padding-left:24px; border-left:1px solid var(--line); }
+.meeting-controls { grid-template-columns:repeat(2,minmax(0,1fr)); gap:48px; padding:16px 0; margin:8px 0 12px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.meeting-controls .meeting-bot,.meeting-controls .meeting-capture { display:grid; grid-template-columns:112px minmax(0,1fr); align-items:center; align-content:start; gap:16px 24px; min-width:0; min-height:0; padding:0; margin:0; border:0; }
+.meeting-controls .meeting-capture { padding-left:0; border-left:0; }
 .meeting-method-copy h2,.meeting-controls .meeting-bot h2 { display:block; margin:0; font-size:14px; font-weight:600; }
 .meeting-method-copy p,.meeting-controls .meeting-bot .meeting-method-copy p { margin:3px 0 0; font-size:12px; line-height:1.5; }
 .meeting-method-actions,.meeting-controls .meeting-session-bar { display:flex; align-items:center; gap:10px; min-height:44px; padding:0; border:0; border-radius:0; background:none; flex-wrap:nowrap; }
@@ -164,7 +164,12 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .meeting-controls .meeting-audio-source .select-value { white-space:nowrap; }
 .meeting-controls .meeting-bot #bot-status { margin:0; font-size:12px; line-height:1.5; }
 .meeting-controls .meeting-warning { margin:0; }
-.meeting-controls .meeting-agent-controls { margin:0; }
+.meeting-controls .meeting-agent-controls { grid-column:1 / -1; margin:4px 0 0; gap:12px 24px; padding-top:12px; border-top:1px solid var(--line); }
+.meeting-controls .meeting-agent-controls label { min-height:44px; }
+.meeting-controls .meeting-agent-controls .btn { min-height:44px; padding:10px 16px; white-space:nowrap; }
+.meeting-controls > section > p { grid-column:1 / -1; margin:0; }
+.meeting-controls #recording-answer-status { color:var(--muted); font-size:13px; line-height:1.5; }
+.meeting-controls #recording-answer-text { max-width:65ch; font-size:14px; line-height:1.65; }
 .meeting-processing { display:flex; align-items:center; gap:16px; padding:0 0 8px; }
 .meeting-processing .meeting-health { flex:initial; }
 .meeting-search-toggle { width:44px; height:44px; display:grid; place-items:center; color:var(--muted); }
@@ -502,3 +507,9 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .meeting-controls #recording-answer-status,.meeting-controls #recording-answer-text{flex-basis:100%;margin:0;overflow-wrap:anywhere}
 
 .meeting-recording-dialog{max-width:460px}.meeting-audio-choices{display:grid;gap:12px;padding:24px}.meeting-audio-choice{display:flex;flex-direction:column;align-items:flex-start;text-align:left;white-space:normal;gap:6px;padding:16px;min-height:80px}.meeting-audio-choice strong{font-size:15px;font-weight:600}.meeting-audio-choice span{font-size:13px;color:var(--muted);line-height:1.5}
+
+/* Preserve possible acoustic duplicates without repeating full replies in the feed. */
+.meeting-playback-echo { margin-top:12px; font-size:12px; color:var(--muted); }
+.meeting-playback-echo > summary { cursor:pointer; padding:10px 0; min-height:44px; }
+.meeting-playback-echo > p { margin:0 0 12px; line-height:1.6; max-width:70ch; }
+.meeting-playback-echo .meeting-paragraph { margin:0; background:var(--panel); }

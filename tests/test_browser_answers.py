@@ -121,12 +121,18 @@ async def test_bad_tokens_duplicate_start_and_foreign_events_cannot_play(browser
     assert not (await receipt(browser, 'start'))['ok']
 
 
-async def test_echo_and_interruption_preserve_original_words_and_block_delayed_commands(browser):
+async def test_untimed_and_old_audio_do_not_interrupt_and_manual_stop_still_works(browser):
     b = browser
     await final(b)
     await receipt(b, 'start')
-    # New incoming speech stops output, even if mixed audio cannot identify who spoke.
-    await b.transcript(STTEvent(STTEventType.PARTIAL, 'Echooo, repeat that.'), [])
+    # Untimed partials and pre-playback audio cannot establish a new interruption.
+    for text in ['Hello, I am your meeting assistant.', 'Echooo, repeat that.', 'Wait, I have another question.']:
+        await b.transcript(STTEvent(STTEventType.PARTIAL, text), [])
+        await final(b, text, start=9500, end=10000)
+        assert events(b)[0]['status'] == 'speaking'
+        assert len(events(b)) == 1
+    assert not any(p['type'] == 'direct_cancel' for p in b.packets)
+    await b.control({'type': 'direct_stop'})
     assert events(b)[0]['status'] == 'interrupted'
     assert (await receipt(b, 'cancelled'))['ok']
     delayed = await final(b, 'Echooo, repeat that.', start=9500, end=10500)
@@ -136,6 +142,21 @@ async def test_echo_and_interruption_preserve_original_words_and_block_delayed_c
     # A genuinely later question is eligible again; no blacklist of echoed words.
     await final(b, 'Echooo, repeat that.', start=14000, end=15000)
     assert len(events(b)) == 2
+
+
+async def test_echoed_reply_can_finish_without_starting_another_answer(browser):
+    b = browser
+    await final(b)
+    ack = await receipt(b, 'start')
+    await b.transcript(STTEvent(STTEventType.PARTIAL, ack['question']), [])
+    echoed = await final(b, ack['question'], start=10000, end=10500)
+    assert events(b)[0]['status'] == 'speaking'
+    assert not any(p['type'] == 'direct_cancel' for p in b.packets)
+    assert (await receipt(b, 'spoken'))['ok']
+    await b.task
+    assert len(events(b)) == 1 and events(b)[0]['status'] == 'spoken'
+    with b.store.scope(b.who) as r:
+        assert r.get(db.utterances, echoed['id'])['content'] == ack['question']
 
 
 async def test_stale_answer_rejected_before_browser_playback(browser):
@@ -280,6 +301,7 @@ def test_capture_routes_live_finals_to_answers_and_keeps_interruption_audio(clie
         ws.send_json({**token, 'type': 'direct_speech', 'action': 'start', 'request_id': 'start'})
         assert until(ws, 'direct_ack')['ok']
         ws.send_bytes(pcm)
+        assert until(ws, 'utterance')['utterance']['content'] == 'Echooo, wait.'
         assert until(ws, 'direct_cancel')['id'] == token['id']
         ws.send_text('stop')
         until(ws, 'stopped')
@@ -309,3 +331,111 @@ async def test_recording_deletion_removes_browser_answer_and_speech_history(brow
     assert result.json()['browser_answers'] == result.json()['assistant_utterances'] == []
     with b.store.scope(b.who) as r:
         assert not r.list(db.meeting_speech) and not r.list(db.meeting_agent_events)
+
+
+def partial(text, start=11000, end=11400):
+    return STTEvent(STTEventType.PARTIAL, text, raw={'words': [{'text': text, 'start': start, 'end': end}]})
+
+
+async def test_brief_interruption_pauses_then_resumes_same_reply(browser):
+    b = browser
+    await final(b)
+    await receipt(b, 'start')
+    await b.transcript(partial('A different thought'), [])
+    assert b.phase == 'paused'
+    await wait_for(lambda: any(p.get('action') == 'pause' for p in b.packets))
+    await b.barge_task
+    assert b.phase == 'speaking'
+    assert b.packets[-1]['action'] == 'resume'
+    assert events(b)[0]['status'] == 'speaking'
+
+
+async def test_sustained_interruption_stops_then_final_is_semantically_routed(browser):
+    b = browser
+    await final(b)
+    await receipt(b, 'start')
+    await b.transcript(partial('Can you explain'), [])
+    await asyncio.sleep(.32)
+    await b.transcript(partial('Can you explain the reasoning', end=11800), [])
+    await b.barge_task
+    assert events(b)[0]['status'] == 'interrupted'
+    assert b.conversation_active()
+    contexts = []
+    async def classify(system, context, **kwargs):
+        contexts.append(context)
+        return {'action': 'respond'}
+    b.intelligence.json_call = classify
+    await final(b, 'Can you explain the reasoning?', start=11000, end=12000)
+    await wait_for(lambda: len(events(b)) == 2)
+    assert contexts and events(b)[1]['request'] == 'Can you explain the reasoning?'
+
+
+@pytest.mark.parametrize('action,expected', [('respond', 2), ('listen', 1), ('end', 1)])
+async def test_followup_uses_shared_turn_model_and_public_context(browser, action, expected):
+    b = browser
+    await final(b)
+    await receipt(b, 'start')
+    await receipt(b, 'spoken')
+    await b.task
+    async def model(system, context, **kwargs):
+        from echooo.meeting_agent import TURN_SYSTEM
+        assert system == TURN_SYSTEM
+        assert context['recent_questions'][-1]['reply']
+        assert context['audience'] == 'voice'
+        return {'action': action}
+    b.intelligence.json_call = model
+    await final(b, 'Could you expand on that?', start=14000, end=15000)
+    task = b.decision_task
+    assert task is not None
+    await task
+    assert len(events(b)) == expected
+    if action == 'end':
+        assert not b.conversation_active()
+
+
+async def test_expired_followup_and_stop_cancel_late_classifier(browser):
+    b = browser
+    await final(b)
+    await receipt(b, 'start')
+    await receipt(b, 'spoken')
+    await b.task
+    b.conversation_until = time.monotonic() - 1
+    await final(b, 'Could you expand on that?', start=14000, end=15000)
+    assert b.decision_task is None
+    b.conversation_until = time.monotonic() + 15
+    entered = asyncio.Event()
+    async def slow(*args, **kwargs):
+        entered.set()
+        await asyncio.sleep(30)
+        return {'action': 'respond'}
+    b.intelligence.json_call = slow
+    await final(b, 'Could you expand on that?', start=16000, end=17000)
+    await entered.wait()
+    task = b.decision_task
+    await b.control({'type': 'direct_stop'})
+    await task
+    assert len(events(b)) == 1 and not b.conversation_active()
+
+
+async def test_delayed_echo_with_audio_timestamp_remains_filtered_after_wall_clock_tail(browser):
+    b = browser
+    await final(b)
+    ack = await receipt(b, 'start')
+    await receipt(b, 'spoken')
+    await b.task
+    b.echo_until = 0
+    await final(b, ack['question'], start=10000, end=11000)
+    assert len(events(b)) == 1 and b.decision_task is None
+
+
+async def test_owner_correction_is_marked_for_transcript_display_after_reload(browser, client):
+    b = browser
+    original = await final(b, 'This is a participant statement, not an assistant command.')
+    base = f'/api/meetings/{b.mid}'
+    assert not next(u for u in client.get(base).json()['utterances'] if u['id'] == original['id'])['user_edited']
+    response = client.patch(base + '/utterances/' + original['id'], json={
+        'speaker': 'Alice', 'content': original['content']})
+    assert response.status_code == 200
+    restored = next(u for u in client.get(base).json()['utterances'] if u['id'] == original['id'])
+    assert restored['user_edited'] and restored['speaker'] == 'Alice'
+    assert restored['content'] == original['content']

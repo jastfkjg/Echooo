@@ -1,10 +1,10 @@
-import {BrowserAnswerSpeech} from './browser-answer-speech.js?v=1';
+import {BrowserAnswerSpeech} from './browser-answer-speech.js?v=2';
 import {mountFindings} from './meeting-findings.js?v=13';
 import {mountInterventions} from './meeting-interventions.js?v=browser-answers-1';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
-import {MeetingAudio} from './meeting-audio.js?v=tab-audio-4';
-import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent, transcriptRecords} from './meeting-transcript.js?v=meeting-transcript-7';
+import {MeetingAudio} from './meeting-audio.js?v=browser-turns-1';
+import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent, transcriptRecords} from './meeting-transcript.js?v=meeting-transcript-8';
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const meetingTime = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 let current;
@@ -61,11 +61,11 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     error:message=>{if(!disposed){$('#recording-answer-status').hidden=false;$('#recording-answer-status').textContent=message;}},
     status:packet=>{
       if(disposed)return;
-      const labels={thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing playback…',speaking:'Speaking · recording continues',spoken:'Reply finished',interrupted:'Reply stopped',error:'Reply failed'};
+      const labels={thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing playback…',speaking:'Speaking · recording continues',paused:'Listening to interruption…',spoken:'Reply finished',interrupted:'Reply stopped',error:'Reply failed'};
       $('#recording-answer-status').hidden=false;
       $('#recording-answer-status').textContent=packet.error||labels[packet.status]||packet.status;
-      $('#recording-answer-text').textContent=packet.response||'';$('#recording-answer-text').hidden=!packet.response;
-      $('#recording-answer-stop').disabled=!['thinking','searching','sending','speaking'].includes(packet.status);
+      if(packet.response!==undefined){$('#recording-answer-text').textContent=packet.response;$('#recording-answer-text').hidden=!packet.response;}
+      $('#recording-answer-stop').disabled=!['thinking','searching','sending','speaking','paused'].includes(packet.status);
       refresh().catch(()=>{});
     },
   });
@@ -127,6 +127,13 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       }
       const selected=selectedView==='full'?g.records.find(u=>u.id===selectedPassage):null,actions=node.querySelector('.meeting-passage-actions');
       setHTML(actions,actionsHTML(selected));actions.hidden=!selected;
+      let echoes=node.querySelector(':scope > .meeting-playback-echo');
+      if(g.echoGroups?.length){
+        if(!echoes){echoes=document.createElement('details');echoes.className='meeting-playback-echo';node.append(echoes);}
+        const wasOpen=echoes.open;
+        setHTML(echoes,`<summary>Possible playback echo</summary><p class="muted">This may be echo or a participant repeating the reply. Original audio and text are preserved.</p>${g.echoGroups.map(e=>groupHTML(e,'full')).join('')}`);
+        echoes.open=wasOpen||g.echoGroups.some(e=>e.records.some(u=>u.id===selectedPassage||u.id===searchIds[searchIndex]));
+      }else echoes?.remove();
     });
     if(!groups.length)root.innerHTML=`<p class="meeting-placeholder">${botActive()?'Waiting for speech from the online meeting…':meeting.recordings.length?'No speech has been transcribed in this recording.':'Choose a recording method above to get started.'}</p>`;
   }
@@ -321,6 +328,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   }
   function openPassage(uid){
     const phrase=document.getElementById(`full-${uid}`);if(!phrase)return null;
+    for(let parent=phrase.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
     setPanel('transcript');return phrase;
   }
   function navigateMatch(direction){
@@ -495,7 +503,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
         if(p.type==='transcription'){const rec=meeting.recordings.find(r=>r.id===p.recording_id);if(rec)rec.transcription=p.state;updateHealth();findingsPanel.render(meeting);}
         if(p.type==='ready'){
           if(stopping)return;
-          browserSpeech.configure($('#recording-answer-enabled').checked);
+          browserSpeech.configure($('#recording-answer-enabled').checked,audioInput?.echoCancellation);
           $('#recording-answer-status').hidden=false;$('#recording-answer-status').textContent=$('#recording-answer-enabled').checked?'Say “Echooo” followed by your question.':'Voice answers are off.';
           $('#recording-answer-text').textContent='';$('#recording-answer-text').hidden=true;
           recordingRate=p.recording.sample_rate;captureRecording=p.recording.id;selectedRecording=captureRecording;meeting.recordings.push(p.recording);meeting.recording=true;setPanel('transcript');$('#meeting-follow').checked=true;warning('');draw();loadSelectedAudio();
@@ -516,7 +524,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     finally{starting=false;if(!disposed)draw();}
   }
   $('#recording-answer-enabled').onchange=()=>{
-    if(socket?.readyState===WebSocket.OPEN)browserSpeech.configure($('#recording-answer-enabled').checked);
+    if(socket?.readyState===WebSocket.OPEN)browserSpeech.configure($('#recording-answer-enabled').checked,audioInput?.echoCancellation);
     $('#recording-answer-status').hidden=false;$('#recording-answer-status').textContent=$('#recording-answer-enabled').checked?'Say “Echooo” followed by your question.':'Voice answers are off.';
   };
   $('#recording-answer-stop').onclick=()=>browserSpeech.cancelAnswer();

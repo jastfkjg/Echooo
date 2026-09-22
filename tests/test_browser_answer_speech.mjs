@@ -75,3 +75,26 @@ test('host-approved speech waits for shared guard acknowledgement',async()=>{
   s.speech.receive({type:'direct_ack',request_id:guard.request_id,ok:true});await pending;
   assert.equal(ready,true);s.speech.close();
 });
+
+test('pause/resume controls only affect the current receipt and never restart speech',async()=>{
+  const s=setup();let pauses=0,resumes=0;
+  s.speech.synthesis.pause=()=>pauses++;
+  s.speech.synthesis.resume=()=>resumes++;
+  s.speech.receive(offer);await tick();
+  const command={...offer,type:'direct_playback',action:'pause'};
+  s.speech.receive({...command,token:'wrong'});assert.equal(pauses,0);
+  s.speech.receive(command);s.speech.receive(command);assert.equal(pauses,1);
+  s.speech.receive({...command,action:'resume'});assert.equal(resumes,1);
+  assert.equal(s.utterances.length,1);
+  s.speech.cancelAnswer();
+  s.speech.receive({...command,action:'resume'});assert.equal(resumes,1);
+  s.speech.close();
+});
+
+test('unsupported pause fails closed without replay',async()=>{
+  const s=setup();s.speech.receive(offer);await tick();
+  s.speech.receive({...offer,type:'direct_playback',action:'pause'});
+  assert.equal(s.speech.active,null);
+  assert.match(s.errors[0],/Playback control failed/);
+  assert.equal(s.utterances.length,1);s.speech.close();
+});

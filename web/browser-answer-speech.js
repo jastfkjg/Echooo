@@ -22,8 +22,23 @@ export class BrowserAnswerSpeech extends LocalQuestionSpeech {
       catch(error){clearTimeout(timer);this.pending.delete(request_id);reject(error);}
     });
   }
-  request(receipt,action){return this.rpc({type:'direct_speech',id:receipt.id,token:receipt.token,action});}
-  configure(enabled){this.send({type:'direct_config',enabled});if(!enabled)this.cancelAnswer();}
+  async request(receipt,action){
+    const result=await this.rpc({type:'direct_speech',id:receipt.id,token:receipt.token,action});
+    if(action==='heartbeat'&&result.playback)this.playback({...receipt,action:result.playback==='paused'?'pause':'resume'});
+    return result;
+  }
+  playback(packet){
+    const run=this.active;
+    if(!run||run.id!==packet.id||run.token!==packet.token||!run.started)return;
+    if(packet.action==='pause'&&!run.paused){
+      this.synthesis.pause();run.paused=true;
+      this.status({id:run.id,status:'paused'});
+    }else if(packet.action==='resume'&&run.paused){
+      this.synthesis.resume();run.paused=false;
+      this.status({id:run.id,status:'speaking'});
+    }
+  }
+  configure(enabled,echoCancellation=null){this.send({type:'direct_config',enabled,echo_cancellation:echoCancellation});if(!enabled)this.cancelAnswer();}
   cancelAnswer(){this.stop();try{this.send({type:'direct_stop'});}catch{} }
   async guard(active){
     if(active)this.cancelAnswer();
@@ -37,6 +52,8 @@ export class BrowserAnswerSpeech extends LocalQuestionSpeech {
       this.eventId=packet.id;
       this.beforePlay();
       this.play(packet).catch(error=>this.error(error.message));
+    }else if(packet.type==='direct_playback'){
+      try{this.playback(packet);}catch(error){this.error('Playback control failed. Please ask again.');this.stop();}
     }else if(packet.type==='direct_cancel'){
       if(this.active?.id===packet.id)this.stop();
     }else if(packet.type==='direct_status'){

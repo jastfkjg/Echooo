@@ -105,9 +105,11 @@ synthetic model evaluation does not certify them.
 ## Browser Recording
 
 - Each recording socket owns an independent direct-answer session. Only newly saved
-  final transcripts with an opening address such as “Hello, Echooo” trigger the
-  shared recent-context/search/answer pipeline. Partial transcripts never initiate
-  answers. Turn deduplication and speaker revisions cannot replay earlier questions.
+  final transcripts with an opening address such as “Hello, Echooo” start a
+  conversation through the shared recent-context/search/answer pipeline. A 15-second
+  follow-up window uses the same semantic respond/listen/end classifier as Attendee;
+  acknowledgements and unrelated discussion do not automatically trigger replies.
+  Partial transcripts never initiate answers. Turn deduplication and speaker revisions cannot replay earlier questions.
 - **Answer when called** defaults on; **Stop speaking** cancels generation or speech.
   The page shows progress and reply text, including when browser sound is blocked.
   Completed replies appear as separate Echooo transcript entries. Activity/export
@@ -117,15 +119,25 @@ synthetic model evaluation does not certify them.
   only after the browser's start/end callbacks. Heartbeats renew an 8-second server
   lease; start waits at most 5 seconds in the browser and total speech at most 120
   seconds on the server. Disconnect, stop or navigation cancels; history never plays.
-- Capture and human transcripts continue during speech. Browser microphone AEC remains
-  enabled. All local assistant speech (including approved suggestions) guards command
-  dispatch using the recording sample clock plus a 2-second tail, so delayed echoed
-  transcripts cannot initiate a reply. Incoming speech conservatively stops a direct
-  reply; that overlapping turn is saved but not dispatched. Ask again after playback
-  stops and the tail expires. On an unacknowledged cancellation, the guard remains
-  until its lease expires. This does not promise physical echo removal from raw audio.
+- Capture and human transcripts continue during speech. Microphone AEC is requested,
+  preferring `all` when supported; the browser reports its effective setting for
+  diagnostics. Shared tab audio is not filtered. AEC is not proof of speaker identity.
+- Direct replies reuse Attendee's text echo filter, conversational turn classifier
+  and tentative-interruption controller. Audio timestamps exclude pre-playback speech;
+  untimed partials cannot interrupt. Matching output inside recorded playback windows
+  remains filtered even when STT arrives late. This filters control decisions only,
+  never deletes human words or PCM. Text matching remains heuristic, especially when
+  humans repeat the assistant or echo is mistranscribed.
+- New partial speech pauses playback for 550 ms; continued development across at
+  least 300 ms with sufficient text stops it, otherwise the same utterance resumes.
+  Final speech follows the existing meeting interruption/turn rules. Browser pause
+  and resume are receipt-scoped and heartbeats reconcile playback state. Manual Stop,
+  disabling replies and disconnect cancel pending follow-up decisions and end the
+  conversation. Approved local suggestions retain their separate host-review flow
+  and command guard; they do not acquire the direct-answer follow-up window.
 - No new service, schema migration or credentials: existing STT/LLM usage applies;
-  browser speech adds no application TTS API call. Demo STT does not transcribe.
+  browser speech adds no application TTS API call. Eligible follow-ups add one fast
+  turn-classification model call before answering. Demo STT does not transcribe.
 
 Run `.venv/bin/pytest -q tests/test_browser_answers.py` and
 `node --test tests/test_browser_answer_speech.mjs tests/test_local_question_speech.mjs`.
@@ -135,8 +147,12 @@ browser errors, persistence and byte-for-byte PCM preservation.
 
 Local manual check: start Recording with **Microphone only**, say “Echooo, what did
 we decide?”, and wait for the final transcript. Check progress, text and spoken reply.
-Speak over the reply and verify playback stops while your words remain recorded;
-after the tail, ask again. Repeat using speakers, headphones and Tab + microphone,
+Let a reply play through on speakers without speaking; verify echo does not stop
+it or create another answer. Then interrupt with a sustained new request; playback
+should stop and the final request should be considered as a follow-up. Test a brief
+false start (pause/resume), an unaddressed follow-up within 15 seconds, unrelated
+human discussion, and a question after the window expires. Verify that manual
+**Stop speaking** cancels playback and follow-up decisions. Repeat using speakers, headphones and Tab + microphone,
 then refresh during playback and confirm there is no replay. Also test sound blocked,
 network loss and Stop while searching. Real acoustic/autoplay behavior requires this
 device/browser check; automated tests use simulated speech synthesis and STT.

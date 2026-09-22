@@ -148,6 +148,8 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     def view(who, mid):
         with store.scope(who) as r:
             m = get(r, mid)
+            edited = {s['utterance_id'] for s in r.list(db.utterance_sources, db.utterance_sources.c.meeting_id == mid)
+                if s['state'].get('content_edited') or s['state'].get('speaker_edited')}
             states = {s['recording_id']: s['state'] for s in r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid)}
             recordings = r.list(db.recordings, db.recordings.c.meeting_id == mid)
             for rec in recordings:
@@ -155,7 +157,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
                     rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
             return {**m, 'knowledge': knowledge.view(who, mid), "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
-                "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
+                "utterances": [{**u, "user_edited": u["id"] in edited} for u in r.list(db.utterances, db.utterances.c.meeting_id == mid)],
                 "assistant_utterances": speech_transcript(r, mid, recordings),
                 "answer_checks": r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.meeting_id == mid),
                 "browser_answers": browser_answer_history(bots, who, mid),
@@ -404,7 +406,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 for s in r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid):
                     r.change(db.meeting_sections, s["id"], status="stale")
                 r.log("meeting.transcript_corrected", meeting_id=mid, utterance_id=uid)
-        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': {**u, **data.model_dump()}})
+        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': {**u, **data.model_dump(), 'user_edited': True}})
         return view(owner(request), mid)
 
     @app.post("/api/meetings/{mid}/minutes")
@@ -704,7 +706,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 with contextlib.suppress(Exception):
                     await send({'type': 'utterance', 'utterance': u})
             if answers and event.type in {STTEventType.FINAL, STTEventType.PARTIAL}:
-                await answers.transcript(event, rows)
+                await answers.transcript(event, rows, offset_ms)
 
         try:
             await ws.accept()
