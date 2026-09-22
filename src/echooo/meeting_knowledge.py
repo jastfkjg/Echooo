@@ -177,8 +177,10 @@ class MeetingKnowledge:
                     result.append({**cite, 'title': source['title'], 'content': source['content'] if source['version'] == cite['version'] else '',
                         'changed': source['version'] != cite['version'], 'domain_id': source['domain_id']})
                 else:
-                    changed = bool(cite.get('hash') and cite['hash'] != digest({
-                        'speaker': source['speaker'], 'content': source['content'][:2000]}))
+                    from echooo.meeting_retrieval import source_hash
+                    current_hash = (source_hash(source) if cite.get('hash_version') == 2 else
+                        digest({'speaker': source['speaker'], 'content': source['content'][:2000]}))
+                    changed = bool(cite.get('hash') and cite['hash'] != current_hash)
                     result.append({**cite, 'title': source['speaker'], 'content': '' if changed else source['content'], 'changed': changed,
                         'recording_id': source['recording_id'], 'start_ms': source['start_ms']})
             return result

@@ -182,6 +182,10 @@ meeting_answer_sources = owned_table("meeting_answer_sources", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("scope", JSON, nullable=False), Column("citations", JSON, nullable=False),
     constraints=(UniqueConstraint("event_id"),))
+meeting_answer_checks = owned_table("meeting_answer_checks", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("detail", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
 meeting_speech = owned_table("meeting_speech", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="SET NULL")),
@@ -225,7 +229,7 @@ meeting_intervention_checks = owned_table('meeting_intervention_checks', meeting
 OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
-    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
+    meeting_knowledge, meeting_answer_sources, meeting_answer_checks, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
     meeting_interventions, meeting_intervention_reviews, meeting_intervention_checks]
 
 

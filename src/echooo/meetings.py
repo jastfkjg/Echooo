@@ -156,6 +156,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             return {**m, 'knowledge': knowledge.view(who, mid), "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
                 "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
                 "assistant_utterances": speech_transcript(r, mid, recordings),
+                "answer_checks": r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.meeting_id == mid),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
                 "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
@@ -283,7 +284,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews', 'answer_checks')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})

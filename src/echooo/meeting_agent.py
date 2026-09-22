@@ -16,10 +16,11 @@ import httpx
 from sqlalchemy import select
 
 from echooo import database as db
+from echooo import meeting_answers
+from echooo.meeting_retrieval import recent_passages, transcript_stamp
 from echooo.intelligence import Intelligence
 from echooo.models import STTEventType
 from echooo.meeting_playback import MeetingPlayback
-from echooo.meeting_knowledge import digest
 from echooo.providers.factory import create_tts
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ claim access to another project or private knowledge. Briefly name the source in
 spoken answers when useful; never read internal IDs aloud.
 If knowledge is missing, use knowledge_status to explain the actual access limitation.
 Only eligible shareable project memories are available; private or unreviewed sources are excluded.
-Do not say your own wake name in a spoken reply. Return JSON: {"reply": "...", "citations": ["source id"]}."""
+Do not say your own wake name in a spoken reply. Follow the structured action protocol below."""
 
 
 def addressed(text, *, voice=False):
@@ -77,6 +78,7 @@ def stop_request(text):
 class MeetingAgent:
     @staticmethod
     def saved_view(manager, row):
+        answer_checks = meeting_answers.checks(manager.store, row['owner_id'], row['meeting_id'])
         with manager.store.scope(row['owner_id']) as r:
             prefs = r.list(db.meeting_agent_settings, db.meeting_agent_settings.c.connection_id == row['id'])
             if not prefs:
@@ -90,7 +92,8 @@ class MeetingAgent:
                 'voice_available': manager.settings.tts_provider != 'browser' and manager.settings.stt_provider != 'mock',
                 'phase': 'stopped' if row['desired_state'] == 'left' else 'waiting', 'error': '',
                 'events': [{**{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at')},
-                    'citations': manager.knowledge.citations(row['owner_id'], row['meeting_id'], e['id'])}
+                    'citations': manager.knowledge.citations(row['owner_id'], row['meeting_id'], e['id']),
+                    'answer_check': answer_checks.get(e['id'])}
                     for e in reversed(list(events))]}
 
     def __init__(self, manager, row):
@@ -122,15 +125,20 @@ class MeetingAgent:
         self.turn_revision = 0
         self.turn_decision = None
         self.speech_scope = None
+        self.answer_stamp = None
         self.intervention_context = None
         with self.store.scope(self.who) as r:
             prefs = r.list(db.meeting_agent_settings, db.meeting_agent_settings.c.connection_id == self.cid)
             self.prefs = prefs[0] if prefs else r.add(db.meeting_agent_settings,
                 meeting_id=self.mid, connection_id=self.cid, chat_enabled=True, voice_enabled=True)
             for event in r.list(db.meeting_agent_events, db.meeting_agent_events.c.connection_id == self.cid):
-                if event['status'] in {'queued', 'thinking', 'speaking', 'sending'}:
+                if event['status'] in {'queued', 'thinking', 'searching', 'speaking', 'sending'}:
                     r.change(db.meeting_agent_events, event['id'], status='interrupted',
                         error='Server restarted; this reply was not retried.')
+                    for check in r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.event_id == event['id']):
+                        if check['detail'].get('support') == 'pending':
+                            r.change(db.meeting_answer_checks, check['id'],
+                                detail={**check['detail'], 'support': 'unavailable', 'failure': 'restart'})
 
     def start(self):
         self.jobs = [asyncio.create_task(self.poll()), asyncio.create_task(self.work())]
@@ -147,7 +155,9 @@ class MeetingAgent:
                 db.meeting_agent_events.c.connection_id == self.cid).order_by(
                     db.meeting_agent_events.c.created_at.desc()).limit(limit)).mappings()
             events = [dict(row) for row in reversed(list(rows))]
+        answer_checks = meeting_answers.checks(self.store, self.who, self.mid)
         for event in events:
+            event['answer_check'] = answer_checks.get(event['id'])
             event['citations'] = self.manager.knowledge.citations(self.who, self.mid, event['id'])
         return events
 
@@ -160,7 +170,7 @@ class MeetingAgent:
             'audio_metrics': self.playback.metrics,
             'deciding_turn': bool(self.decision_task and not self.decision_task.done()),
             'turn_decision': self.turn_decision,
-            'events': [{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at', 'citations')}
+            'events': [{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at', 'citations', 'answer_check')}
                 for e in self.events() if e['status'] != 'observed']}
 
     def change(self, event, **values):
@@ -399,10 +409,6 @@ class MeetingAgent:
         current_scope = self.manager.knowledge.snapshot(self.who, self.mid)[4]
         receipts = self.manager.knowledge.receipts(self.who, self.mid)
         with self.store.scope(self.who) as r:
-            rows = r.c.execute(select(db.utterances.c.id, db.utterances.c.speaker, db.utterances.c.content).where(
-                db.utterances.c.owner_id == self.who, db.utterances.c.meeting_id == self.mid
-            ).order_by(db.utterances.c.created_at.desc()).limit(60)).mappings()
-            discussion = [dict(u) for u in reversed(list(rows))]
             # Filter BEFORE limit: public turns never even read another sender's private text.
             allowed = db.meeting_agent_events.c.audience.in_(['public', 'voice'])
             if event['audience'] == 'private':
@@ -413,14 +419,15 @@ class MeetingAgent:
                 db.meeting_agent_events.c.connection_id == self.cid, allowed,
                 db.meeting_agent_events.c.id != event['id']).order_by(
                     db.meeting_agent_events.c.created_at.desc()).limit(20)).mappings()
-            history = [{'question': e['request'], 'reply': e['response'] if e['status'] in {'submitted', 'spoken'} else ''}
+            history = [{'question': e['request'][:500], 'reply': e['response'][:1000] if e['status'] in {'submitted', 'spoken'} else ''}
                 for e in reversed(list(history)) if e['id'] not in receipts or receipts[e['id']]['scope'] == current_scope]
         return {'question': event['request'], 'audience': event['audience'],
-            'discussion': [{'id': u['id'], 'speaker': u['speaker'], 'content': u['content'][:2000]} for u in discussion],
-            'recent_questions': history}
+            'discussion': recent_passages(self.store, self.who, self.mid),
+            'recent_questions': history[-4:]}
 
     async def answer(self, event):
         self.phase, self.error = 'thinking', ''
+        self.answer_stamp = None
         self.change(event, status='thinking')
         if event['source_key'].startswith('intervention:'):
             self.speech_scope = None
@@ -439,14 +446,12 @@ class MeetingAgent:
                 else 'This is a local demo reply. Connect a live model to answer meeting questions.')
             citation_ids = [facts[0]['id']] if facts else []
         else:
-            result = await asyncio.wait_for(self.intelligence.json_call(SYSTEM, context, fast=True), 30)
-            reply = result.get('reply')
-            citation_ids = result.get('citations', [])
-            if not isinstance(reply, str) or not reply.strip() or len(reply) > 1200:
-                raise ValueError('Invalid meeting reply')
+            result, context, self.answer_stamp = await meeting_answers.generate(self, event, SYSTEM, context, authorized_scope)
+            reply, citation_ids = result['reply'], result['citations']
         available = {m['id']: {'kind': 'memory', 'id': m['id'], 'version': m['version']} for m in project_context['knowledge']}
         available.update({u['id']: {'kind': 'utterance', 'id': u['id'],
-            'hash': digest({'speaker': u['speaker'], 'content': u['content']})} for u in context['discussion']})
+            'hash': u['source_hash'], 'hash_version': 2} for u in
+            context['discussion'] + context.get('retrieval', {}).get('passages', [])})
         if not isinstance(citation_ids, list) or len(citation_ids) > 20 or any(not isinstance(i, str) or i not in available for i in citation_ids):
             raise ValueError('Invalid meeting source citation')
         if not self.manager.knowledge.valid(self.who, self.mid, authorized_scope):
@@ -490,6 +495,8 @@ class MeetingAgent:
             if time.monotonic() > deadline:
                 raise ValueError('No pause available to speak')
             await asyncio.sleep(.1)
+        if self.answer_stamp is not None and transcript_stamp(self.store, self.who, self.mid) != self.answer_stamp:
+            raise ValueError('Meeting discussion changed before speech')
         if event['source_key'].startswith('intervention:'):
             text = await self.manager.interventions.prepare_speech(self, event)
             self.change(event, response=text)
@@ -553,7 +560,10 @@ class MeetingAgent:
                 await self.playback.stop()
                 if not event.get('response'):
                     stage = 'generation'
-                    self.error = 'Could not generate a reply. Please ask again; check the model connection if this continues.'
+                    check = meeting_answers.checks(self.store, self.who, self.mid).get(event['id'], {})
+                    self.error = ('Could not search earlier discussion. Please ask again.'
+                        if check.get('failure') == 'retrieval' else
+                        'Could not generate a reply. Please ask again; check the model connection if this continues.')
                 elif event['audience'] == 'voice':
                     stage = 'speech'
                     self.error = 'Could not speak. Check server TTS, the audio connection and microphone permissions.'
