@@ -156,3 +156,50 @@ human discussion, and a question after the window expires. Verify that manual
 then refresh during playback and confirm there is no replay. Also test sound blocked,
 network loss and Stop while searching. Real acoustic/autoplay behavior requires this
 device/browser check; automated tests use simulated speech synthesis and STT.
+
+### Answer diagnostics
+
+New direct answers persist an owner-scoped `meeting_answer_traces` record linked by
+`event_id`, shared by browser and meeting modes. Restart the backend to create the
+new table. Existing answers cannot be reconstructed retroactively.
+
+The meeting JSON export includes `answer_traces`; live polling omits these larger
+records. Each trace contains:
+
+- `search.queries`, its model/fallback trigger, and the full bounded retrieval result.
+- `calls[].context`: the final context after budget trimming for each model call.
+- `calls[].request`: the actual model request payload, including system/user messages
+  and model settings, without authorization headers or API credentials.
+- `calls[].response`: raw model content and finish reason before JSON parsing;
+  content over 24,000 characters is explicitly marked truncated.
+- Parsed `result`, validation status and failure stage/type, including cancellation.
+
+For a missing answer, compare the returned passage text with the second call's
+context/request and then its response. A retrieved passage alone does not prove it
+reached the model. An incomplete trace identifies where execution stopped.
+These records contain meeting and authorized knowledge text: they share meeting
+owner access, are included in explicit exports, and cascade-delete with their
+answer event or meeting. They are not printed to server logs.
+
+### Debug page
+
+Open **Debug** beside **Project & knowledge**, or `#meetings/<id>/debug`.
+Select a recording and question to inspect the original answer, validation,
+retrieval scores, model calls and a retrieved-versus-sent evidence comparison.
+Refresh manually; export a single answer as JSON when reporting an issue.
+The index lists the latest 100 answer events; older durable traces remain in the
+meeting export. Owner authentication and meeting scope apply to both endpoints.
+
+Live STT, transcript, turn decisions and delivery/playback diagnostics use a bounded
+in-memory ring (500 events per meeting, 32 recently active meetings per process).
+They reset on restart/eviction and are cleared on meeting or recording deletion.
+They are nearby activity, not a guaranteed causal association with a question.
+Browser STT includes connection number, audio anchors and lag behind the saved-audio
+cursor where timed words exist; this is not a network latency measurement.
+Partial hypotheses are not durable and the page does not record raw audio or secrets.
+Follow-up classification input/output is included when it occurs; this is not a
+trace of every background LLM operation (such as findings or summaries).
+
+Answer inputs omit absent project configuration and knowledge-status UI strings.
+An empty knowledge list has no bearing on meeting evidence. Server-side knowledge
+scope, citation checks and authorization remain authoritative.

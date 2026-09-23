@@ -16,6 +16,7 @@ import httpx
 from sqlalchemy import select
 
 from echooo import database as db
+from echooo.meeting_debug import agent_record
 from echooo import meeting_answers
 from echooo.meeting_retrieval import recent_passages, transcript_stamp
 from echooo.intelligence import Intelligence
@@ -56,8 +57,10 @@ distinguish documented facts from current discussion and general suggestions. Ci
 the IDs of knowledge or discussion passages actually supporting your answer. Never
 claim access to another project or private knowledge. Briefly name the source in
 spoken answers when useful; never read internal IDs aloud.
-If knowledge is missing, use knowledge_status to explain the actual access limitation.
-Only eligible shareable project memories are available; private or unreviewed sources are excluded.
+Meeting evidence is independent of project knowledge. An empty knowledge list does not
+mean that meeting evidence is missing. Discussion and retrieved passages from all
+recordings belong to this same meeting. Use their original statements to answer.
+Only eligible shareable project memories are supplied; other sources are excluded.
 Do not say your own wake name in a spoken reply. Follow the structured action protocol below."""
 
 
@@ -177,6 +180,7 @@ class MeetingAgent:
         with self.store.scope(self.who) as r:
             r.change(db.meeting_agent_events, event['id'], **values)
         event.update(values)
+        agent_record(self, 'delivery', answer_id=event['id'], **values)
         interventions = getattr(self.manager, 'interventions', None)
         if interventions and event['source_key'].startswith('intervention:') and 'status' in values:
             interventions.delivery(self, event, values['status'])
@@ -277,7 +281,9 @@ class MeetingAgent:
             context['speaker_relation'] = ('unknown' if not speaker or not self.conversation_speaker
                 else 'same' if speaker == self.conversation_speaker else 'different')
             context['assistant_state'] = self.phase
+            agent_record(self, 'turn_input', system=TURN_SYSTEM, context=context)
             result = await asyncio.wait_for(self.intelligence.json_call(TURN_SYSTEM, context, fast=True), 8)
+            agent_record(self, 'turn_output', result=result)
             if revision != self.turn_revision or not self.valid() or not self.prefs['voice_enabled']:
                 return
             action = result.get('action')
@@ -295,6 +301,7 @@ class MeetingAgent:
         except asyncio.CancelledError:
             pass
         except Exception as exc:
+            agent_record(self, 'turn_output', error_type=type(exc).__name__)
             self.turn_decision = 'unavailable'
             self.error = 'Could not assess this follow-up. Say Echooo to address it directly.'
             logger.warning('Meeting turn decision failed: error_type=%s', type(exc).__name__)
@@ -333,11 +340,13 @@ class MeetingAgent:
     async def resume_speech(self):
         if self.phase == 'paused':
             await self.playback.resume()
+            agent_record(self, 'playback', action='resume')
             self.phase = 'speaking'
 
     async def tentative_interrupt(self):
         try:
             await self.playback.pause()
+            agent_record(self, 'playback', action='pause', reason='possible_interruption')
             await asyncio.sleep(.55)
             # Only sustained, developing speech cancels on an interim hypothesis.
             sustained = self.barge_updated - self.barge_started >= .3
@@ -361,9 +370,11 @@ class MeetingAgent:
         speaker = self.speaker_for(event, key.rsplit(':', 1)[0])
         # Stop commands take precedence over text-based echo matching.
         if text and event.type in {STTEventType.PARTIAL, STTEventType.FINAL} and stop_request(text):
+            agent_record(self, 'trigger', decision='stop', text=text[:2000], source_key=key)
             await self.stop()
             return
         if self.is_echo(text):
+            agent_record(self, 'trigger', decision='echo', text=text[:2000], source_key=key)
             return
         if not text or event.type not in {STTEventType.PARTIAL, STTEventType.FINAL}:
             return  # Noise/VAD activity alone never cancels playback.
@@ -380,6 +391,8 @@ class MeetingAgent:
             return
         called = addressed(text, voice=True)
         candidate = self.conversation_active()
+        if event.type == STTEventType.FINAL:
+            agent_record(self, 'trigger', decision='direct' if called else 'follow_up' if candidate else 'not_addressed', text=text[:2000], source_key=key)
         if event.type == STTEventType.PARTIAL:
             if self.phase in {'speaking', 'paused'}:
                 now = time.monotonic()
@@ -436,7 +449,11 @@ class MeetingAgent:
             self.change(event, status='spoken')
             return
         project_context, authorized_scope = self.manager.knowledge.context(self.who, self.mid, event['request'])
-        context = {**self.context(event), **project_context}
+        context = {**self.context(event), 'knowledge': project_context['knowledge']}
+        if project_context.get('project'):
+            context['project'] = project_context['project']
+        if project_context.get('goal'):
+            context['goal'] = project_context['goal']
         citation_ids = []
         if stop_request(event['request']):
             reply = '已停止发言。' if re.search('[\u4e00-\u9fff]', event['request']) else 'Stopped speaking.'

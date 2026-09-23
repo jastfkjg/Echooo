@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 from echooo import database as db
+from echooo.meeting_debug import agent_record
 from echooo.intelligence import Intelligence
 from echooo.meeting_agent import MeetingAgent
 from echooo.meeting_live import timed_words
@@ -114,6 +115,9 @@ class BrowserMeetingAnswers:
             return False
 
     async def emit(self, packet):
+        if packet.get('type') in {'direct_playback', 'direct_ack', 'direct_cancel'}:
+            agent_record(self, 'playback', **{k: packet[k] for k in
+                ('type', 'id', 'action', 'status', 'playback') if k in packet})
         with contextlib.suppress(Exception):
             await self.send(packet)
 
@@ -123,6 +127,7 @@ class BrowserMeetingAnswers:
                 return
             r.change(db.meeting_agent_events, event['id'], **values)
         event.update(values)
+        agent_record(self, 'delivery', answer_id=event['id'], **values)
         job = asyncio.create_task(self.emit({'type': 'direct_status', 'id': event['id'],
             'status': event['status'], 'response': event['response'], 'error': event['error']}))
         self.notifications.add(job)
@@ -178,6 +183,7 @@ class BrowserMeetingAnswers:
             if self.receipt and self.receipt['started'] and u['start_ms'] < self.playback_start_ms:
                 continue
             if self.is_echo(u['content']) or self.playback_echo(u['content'], u['start_ms']):
+                agent_record(self, 'trigger', decision='echo', text=u['content'][:2000], source_id=u['id'])
                 continue
             final = STTEvent(STTEventType.FINAL, u['content'], raw={'speaker_label': u['speaker']})
             await MeetingAgent.transcript(self, final, self.recording_id + ':' + u['id'])

@@ -8,6 +8,7 @@ import time
 from collections import defaultdict
 
 from echooo import database as db
+from echooo.meeting_debug import record
 from echooo.models import STTEventType
 
 
@@ -32,6 +33,11 @@ class TranscriptFeed:
     def publish(self, who, mid, event):
         if event['type'] == 'utterance' and self.on_utterance:
             self.on_utterance(who, mid, event['utterance'])
+        if event['type'] in {'partial', 'utterance'}:
+            item = event.get('utterance', event)
+            record(who, mid, 'transcript', recording_id=item.get('recording_id'),
+                kind=event['type'], text=item.get('content', item.get('text', ''))[:6000],
+                source_id=item.get('id'), start_ms=item.get('start_ms'), end_ms=item.get('end_ms'))
         key = (who, mid)
         event = {**event, 'emitted_at': time.time()}
         if event['type'] == 'partial':

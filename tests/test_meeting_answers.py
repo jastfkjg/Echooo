@@ -287,3 +287,99 @@ async def test_meeting_deletion_cascades_answer_audit(agent, client):
     with agent.store.scope(agent.who) as r:
         r.remove(db.meetings, agent.mid)
         assert not r.list(db.meeting_answer_checks)
+
+
+async def test_trace_preserves_search_and_exact_context_without_poll_payload(agent, client):
+    source = add(agent, 'We proposed replacing the reporting workflow.')
+    event, calls = await request(agent, [
+        answer('I need earlier evidence.', support='insufficient'),
+        answer('The reporting workflow should be replaced.', [source['id']])],
+        question='What reporting change was proposed?')
+    exported = client.get(f'/api/meetings/{agent.mid}/export').json()
+    row = exported['answer_traces'][0]
+    trace = row['detail']
+    assert row['event_id'] == event['id']
+    assert trace['search']['queries'] == ['What reporting change was proposed?']
+    assert trace['search']['trigger'] == 'insufficient_fallback'
+    assert source['content'] in str(trace['search']['result']['passages'])
+    assert [c['context'] for c in trace['calls']] == calls
+    assert trace['calls'][0]['result']['support'] == 'insufficient'
+    assert trace['calls'][1]['result']['citations'] == [source['id']]
+    assert trace['calls'][1]['status'] == 'validated'
+    assert 'answer_traces' not in client.get(f'/api/meetings/{agent.mid}').json()
+    with agent.store.scope('another-owner') as r:
+        assert not r.list(db.meeting_answer_traces)
+    with agent.store.scope(agent.who) as r:
+        r.remove(db.meeting_agent_events, event['id'])
+        assert not r.list(db.meeting_answer_traces)
+
+
+async def test_trace_keeps_invalid_model_result(agent):
+    with pytest.raises(ValueError):
+        await request(agent, [{'unexpected': 'invalid answer'}])
+    with agent.store.scope(agent.who) as r:
+        trace = r.list(db.meeting_answer_traces)[0]['detail']
+    assert trace['calls'][0]['result'] == {'unexpected': 'invalid answer'}
+    assert trace['calls'][0]['error_type'] == 'ValueError'
+    assert trace['failure']['stage'] == 'generation'
+    assert meeting_answers.JSON_CALL_TRACE.get() is None
+
+
+async def test_wire_trace_keeps_actual_messages_and_unparseable_content(agent, monkeypatch):
+    import json
+    import httpx
+    from echooo.intelligence import Intelligence, JSON_CALL_TRACE
+    captured = {}
+    sent = {}
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def post(self, url, *, headers, json):
+            sent.update(json)
+            return httpx.Response(200, request=httpx.Request('POST', url), json={
+                'choices': [{'message': {'content': 'not valid JSON'}, 'finish_reason': 'stop'}]})
+    monkeypatch.setattr(httpx, 'AsyncClient', Client)
+    token = JSON_CALL_TRACE.set(lambda **values: captured.update(values))
+    try:
+        with pytest.raises(json.JSONDecodeError):
+            await Intelligence(agent.settings).json_call('System prompt', {'question': 'A question'}, fast=True)
+    finally:
+        JSON_CALL_TRACE.reset(token)
+    assert captured['request'] == sent
+    assert json.loads(sent['messages'][1]['content']) == {'question': 'A question'}
+    assert captured['response']['content'] == 'not valid JSON'
+    assert 'Authorization' not in str(captured)
+
+
+async def test_debug_routes_show_exact_trace_without_configuration_noise(agent, client):
+    source = add(agent, 'The project started in January.')
+    event, calls = await request(agent, [answer('It started in January.', [source['id']])])
+    assert calls[0]['knowledge'] == []
+    assert 'project' not in calls[0] and 'knowledge_status' not in calls[0]
+    base = f'/api/meetings/{agent.mid}/debug'
+    index = client.get(base).json()
+    assert index['events'][0]['id'] == event['id']
+    assert 'trace' not in index
+    result = client.get(base + '/' + event['id']).json()
+    assert result['trace']['calls'][0]['context'] == calls[0]
+    assert result['trace']['calls'][0]['elapsed_ms'] >= 0
+    other = client.post('/api/meetings', json={'title': 'Other'}).json()
+    assert client.get(f"/api/meetings/{other['id']}/debug/{event['id']}").status_code == 404
+    from fastapi.testclient import TestClient
+    with TestClient(client.app) as anonymous:
+        assert anonymous.get(base).status_code in {401, 403}
+
+
+def test_runtime_diagnostics_are_bounded_and_owner_scoped():
+    from echooo import meeting_debug as debug
+    for i in range(debug.LIMIT + 10):
+        debug.record('debug-owner', 'debug-meeting', 'stt', text=str(i))
+    records = debug.snapshot('debug-owner', 'debug-meeting')
+    assert len(records) == debug.LIMIT and records[0]['data']['text'] == '10'
+    assert debug.snapshot('other-owner', 'debug-meeting') == []
+    debug.clear('debug-owner', 'debug-meeting')
+    assert not debug.snapshot('debug-owner', 'debug-meeting')

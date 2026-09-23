@@ -5,6 +5,7 @@ import threading
 import time
 
 from echooo import database as db
+from echooo.intelligence import JSON_CALL_TRACE
 from echooo.meeting_retrieval import search_meeting_evidence, source_hash, transcript_stamp
 
 ANSWER_TIMEOUT = 12
@@ -116,6 +117,12 @@ async def generate(agent, event, system, context, authorized_scope):
     detail = {'support': 'pending', 'search_used': False, 'model_calls': 0}
     with agent.store.scope(agent.who) as r:
         check = r.add(db.meeting_answer_checks, meeting_id=agent.mid, event_id=event['id'], detail=detail)
+        trace = {'version': 1, 'calls': []}
+        trace_row = r.add(db.meeting_answer_traces, meeting_id=agent.mid, event_id=event['id'], detail=trace)
+
+    def save_trace():
+        with agent.store.scope(agent.who) as r:
+            r.change(db.meeting_answer_traces, trace_row['id'], detail=json.loads(json.dumps(trace)))
 
     def save(**values):
         detail.update(values)
@@ -131,7 +138,25 @@ async def generate(agent, event, system, context, authorized_scope):
         async with asyncio.timeout(ANSWER_TIMEOUT):
             for _ in range(2):
                 save(model_calls=detail['model_calls'] + 1)
-                result = validate_result(await agent.intelligence.json_call(system + PROTOCOL, context, fast=True), context)
+                call_started = time.monotonic()
+                call = {'started_at': time.time(), 'system': system + PROTOCOL, 'context': json.loads(json.dumps(context)), 'status': 'pending'}
+                trace['calls'].append(call)
+                save_trace()
+                def capture(**values):
+                    call.update(values)
+                    call['elapsed_ms'] = round((time.monotonic() - call_started) * 1000)
+                    save_trace()
+                token = JSON_CALL_TRACE.set(capture)
+                try:
+                    raw = await agent.intelligence.json_call(system + PROTOCOL, context, fast=True)
+                    capture(result=raw, status='returned')
+                    result = validate_result(raw, context)
+                    capture(status='validated')
+                except BaseException as exc:
+                    capture(status='failed', error_type=type(exc).__name__)
+                    raise
+                finally:
+                    JSON_CALL_TRACE.reset(token)
                 if not agent.valid() or agent.cancel.is_set():
                     raise asyncio.CancelledError()
                 if result['action'] == 'answer' and result['support'] == 'insufficient' and context['search_available']:
@@ -148,10 +173,16 @@ async def generate(agent, event, system, context, authorized_scope):
                 stage = 'retrieval'
                 agent.phase = 'searching'
                 agent.change(event, status='searching')
+                trace['search'] = {'queries': list(result['queries']),
+                    'started_at': time.time(), 'trigger': 'model' if raw['action'] == 'search' else 'insufficient_fallback'}
+                save_trace()
                 save(search_used=True)
                 search_started = time.monotonic()
                 result = await asyncio.wait_for(asyncio.to_thread(search_meeting_evidence,
                     agent.store, agent.who, agent.mid, result['queries'], cancelled), SEARCH_TIMEOUT)
+                trace['search']['result'] = result
+                trace['search']['elapsed_ms'] = round((time.monotonic() - search_started) * 1000)
+                save_trace()
                 save(search_ms=round((time.monotonic() - search_started) * 1000),
                     matched_chunks=result['matched_chunks'], searched_chunks=result['searched_chunks'],
                     truncated=result['truncated'])
@@ -160,9 +191,13 @@ async def generate(agent, event, system, context, authorized_scope):
                 # Keep the searching status through synthesis of the retrieved answer.
             raise ValueError('Meeting search limit exceeded')
     except asyncio.CancelledError:
+        trace['failure'] = {'stage': stage, 'error_type': 'CancelledError'}
+        save_trace()
         save(support='unavailable', failure='cancelled')
         raise
-    except Exception:
+    except Exception as exc:
+        trace['failure'] = {'stage': stage, 'error_type': type(exc).__name__}
+        save_trace()
         save(support='unavailable', failure=stage)
         raise
     finally:

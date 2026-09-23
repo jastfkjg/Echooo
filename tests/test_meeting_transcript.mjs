@@ -151,3 +151,44 @@ test('playback grouping does not change evidence coverage or the underlying reco
   assert.equal(content.overviewCurrent,true);
   assert.equal(meeting.utterances,records);
 });
+
+const splitCapture=()=>[
+  captured({id:'part-1',content:"Hello, I'm Echooo, your independent meeting assistant.",end_ms:12500}),
+  captured({id:'part-2',content:'How can I help you today?',start_ms:12600,end_ms:15200,speaker:'Speaker UNKNOWN · 4764'}),
+];
+test('complete playback split across automatic and unidentified speakers is hidden',()=>{
+  const records=[spoken(),...splitCapture()],before=JSON.stringify(records);
+  const groups=groupTranscript(records);
+  assert.deepEqual(groups.flatMap(g=>g.records.map(u=>u.id)),['reply']);
+  assert.deepEqual(groups[0].echoGroups.flatMap(g=>g.records.map(u=>u.id)),['part-1','part-2']);
+  assert.equal(JSON.stringify(records),before);
+  assert.deepEqual(transcriptMatches(groups.flatMap(g=>g.records),'help'),['reply']);
+});
+test('split playback is matched before adjacent real speech can be merged into it',()=>{
+  const parts=splitCapture();parts[1].speaker=parts[0].speaker;
+  const human=row('human','We should discuss the deployment next.',15500,{speaker:parts[0].speaker});
+  assert.deepEqual(groupTranscript([spoken(),...parts,human]).flatMap(g=>g.records.map(u=>u.id)),['reply','human']);
+});
+test('incomplete, interrupted, edited, named and out-of-window split matches remain visible',()=>{
+  const variants=[
+    splitCapture().slice(0,1),
+    [splitCapture()[0],row('interrupt','Please stop for a moment.',12550),splitCapture()[1]],
+    splitCapture().map((u,i)=>i?{...u,user_edited:true}:u),
+    splitCapture().map((u,i)=>i?{...u,speaker:'Alice'}:u),
+    splitCapture().map((u,i)=>i?{...u,start_ms:18000,end_ms:20000}:u),
+    splitCapture().map((u,i)=>i?{...u,recording_id:'r2'}:u),
+  ];
+  for(const parts of variants){
+    const groups=groupTranscript([spoken(),...parts]);
+    assert.equal(groups.flatMap(g=>g.records).length,parts.length+1);
+    assert.equal(groups[0].echoGroups,undefined);
+  }
+});
+test('matching supports arbitrary multi-part multilingual replies and rejects ambiguous playback',()=>{
+  const parts=['本次讨论确定先完成接口验证，','随后开展客户端联调并整理测试结果。','发布计划需要等到所有验收场景完成以后，再由负责人最终确认。'];
+  const reply=spoken({content:parts.join('')});
+  const captures=parts.map((content,i)=>captured({id:`segment-${i}`,content,start_ms:10100+i*1500,end_ms:11500+i*1500,speaker:i%2?'Speaker PENDING · 4764':'Speaker B · 4764'}));
+  assert.equal(groupTranscript([reply,...captures]).length,1);
+  const ambiguous=groupTranscript([reply,{...reply,id:'other-reply'},...captures]);
+  assert.equal(ambiguous.flatMap(g=>g.records).length,5);
+});

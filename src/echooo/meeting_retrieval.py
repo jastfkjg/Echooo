@@ -119,6 +119,7 @@ def search_meeting_evidence(store, who, mid, queries, cancelled):
                 if size + len(item['content']) <= SEARCH_CHARS:
                     selected.add(neighbor)
                     size += len(item['content'])
-    return {'passages': [chunks[i][0] for i in sorted(selected)],
+    return {'passages': [{**chunks[i][0], 'score': round(scores.get(i, 0), 6),
+            'selection': 'match' if i in hits else 'adjacent'} for i in sorted(selected)],
         'matched_chunks': len(scores), 'searched_chunks': len(chunks),
         'truncated': len(selected & scores.keys()) < len(scores)}

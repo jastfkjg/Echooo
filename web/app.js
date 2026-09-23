@@ -1,5 +1,6 @@
+import {showMeetingDebug} from './meeting-debug.js?v=3';
 import { Voice } from './voice.js';
-import {showMeetings, leaveMeeting} from './meetings.js?v=playback-echo-1';
+import {showMeetings, leaveMeeting} from './meetings.js?v=meeting-layout-2';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js?v=project-simple-3';
 import {enhanceSelects} from './select.js';
@@ -110,7 +111,9 @@ async function renderRoute() {
   try {
     await refreshBase(); if(run!==navigation)return;
     const [page,id,tab]=state.route;
-    if(page==='meetings') {
+    if(page==='meetings' && id && tab==='debug') {
+      await showMeetingDebug({api,shell,isCurrent:()=>run===navigation},id);
+    } else if(page==='meetings') {
       await showMeetings({api,shell,openDialog,field,navigate,toast,isCurrent:()=>run===navigation},id);
     } else if(page==='domain') {
       const d=state.domains.find(d=>d.id===id); if(!d){navigate('');return;}

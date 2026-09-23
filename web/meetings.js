@@ -4,7 +4,7 @@ import {mountInterventions} from './meeting-interventions.js?v=browser-answers-1
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
 import {MeetingAudio} from './meeting-audio.js?v=browser-turns-1';
-import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent, transcriptRecords} from './meeting-transcript.js?v=meeting-transcript-8';
+import {groupTranscript, recordingContent, speakerName, transcriptMatches, searchParts, playingUtterance, minutesContent, transcriptRecords} from './meeting-transcript.js?v=meeting-transcript-9';
 const esc = (v='') => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const meetingTime = ms => `${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 let current;
@@ -37,9 +37,10 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const recordingLabel=rid=>rid==='notes'?'Meeting notes':`Recording ${meeting.recordings.findIndex(r=>r.id===rid)+1}`;
   const scope=rid=>`?recording_id=${encodeURIComponent(rid)}`;
   const textOf=u=>u.content.replace(/\s+/g,' ').trim();
-  shell(`<div class="heading meeting-heading"><div><a class="meeting-back" href="#meetings">← All meetings</a><h1>${esc(meeting.title)}</h1><p id="meeting-context"></p><button class="meeting-text-button" id="meeting-project">Project & knowledge</button><p id="meeting-knowledge-hint" class="muted" role="status" hidden></p></div><div class="actions"><button class="btn" id="meeting-end">End meeting</button></div></div>
-    <div class="meeting-controls" aria-label="Choose how to record"><section class="meeting-bot" aria-labelledby="meeting-online-title"><div class="meeting-method-copy"><h2 id="meeting-online-title">Online meeting</h2></div><div class="meeting-method-actions"><button class="btn" id="bot-join">Invite Echooo</button><button class="btn" id="bot-leave" hidden>Leave meeting</button></div><p id="bot-status" role="status" aria-live="polite" hidden></p><p id="bot-error" class="meeting-warning" role="alert"></p><div id="bot-agent-controls" class="meeting-agent-controls" hidden><label><input type="checkbox" id="bot-chat-enabled"> Chat replies</label><label><input type="checkbox" id="bot-voice-enabled"> Answer when called</label><button class="btn" id="bot-stop">Stop speaking</button></div></section>
-    <section class="meeting-capture" aria-labelledby="meeting-device-title"><div class="meeting-method-copy"><h2 id="meeting-device-title">Record audio</h2></div><div class="meeting-session-bar"><button class="btn primary" id="meeting-record" aria-haspopup="dialog" aria-controls="meeting-recording-dialog">Start recording</button></div><dialog id="meeting-recording-dialog" class="meeting-recording-dialog" aria-labelledby="meeting-recording-title"><div class="dialog-head"><h2 id="meeting-recording-title">Choose audio source</h2><button class="btn" id="close-meeting-recording">Cancel</button></div><div class="meeting-audio-choices"><button class="btn meeting-audio-choice" data-record-source="microphone" autofocus><strong>Microphone only</strong><span>Record your voice or an in-person meeting.</span></button><button class="btn meeting-audio-choice" data-record-source="tab"><strong>Tab + microphone</strong><span>Choose a Chrome tab and enable “Share tab audio”.</span></button></div></dialog><div class="meeting-agent-controls" id="recording-answer-controls"><label><input type="checkbox" id="recording-answer-enabled" checked> Answer when called</label><button class="btn" id="recording-answer-stop" disabled>Stop speaking</button></div><p id="recording-answer-status" role="status" aria-live="polite" hidden></p><p id="recording-answer-text" class="meeting-agent-answer" hidden></p><p id="capture-warning" class="meeting-warning" role="status"></p></section></div>
+  shell(`<div class="heading meeting-heading"><div><a class="meeting-back" href="#meetings">← All meetings</a><h1>${esc(meeting.title)}</h1><p id="meeting-context"></p><button class="meeting-text-button" id="meeting-project">Project & knowledge</button> <a class="meeting-text-button" href="#meetings/${esc(id)}/debug" target="_blank" rel="noopener">Debug</a><p id="meeting-knowledge-hint" class="muted" role="status" hidden></p></div><div class="actions"><button class="btn" id="meeting-end">End meeting</button></div></div>
+    <div class="meeting-controls" aria-label="Choose how to record"><section class="meeting-bot" aria-labelledby="meeting-online-title"><div class="meeting-method-copy"><h2 id="meeting-online-title">Online meeting</h2></div><div class="meeting-method-actions"><button class="btn" id="bot-join">Invite Echooo</button><button class="btn" id="bot-leave" hidden>Leave meeting</button></div><p id="bot-status" role="status" aria-live="polite" hidden></p><p id="bot-error" class="meeting-warning" role="alert"></p></section>
+    <section class="meeting-capture" aria-labelledby="meeting-device-title"><div class="meeting-method-copy"><h2 id="meeting-device-title">Record audio</h2></div><div class="meeting-session-bar"><button class="btn primary" id="meeting-record" aria-haspopup="dialog" aria-controls="meeting-recording-dialog">Start recording</button></div><dialog id="meeting-recording-dialog" class="meeting-recording-dialog" aria-labelledby="meeting-recording-title"><div class="dialog-head"><h2 id="meeting-recording-title">Choose audio source</h2><button class="btn" id="close-meeting-recording">Cancel</button></div><div class="meeting-audio-choices"><button class="btn meeting-audio-choice" data-record-source="microphone" autofocus><strong>Microphone only</strong><span>Record your voice or an in-person meeting.</span></button><button class="btn meeting-audio-choice" data-record-source="tab"><strong>Tab + microphone</strong><span>Choose a Chrome tab and enable “Share tab audio”.</span></button></div></dialog><p id="capture-warning" class="meeting-warning" role="status"></p></section></div>
+    <section class="meeting-assistant" aria-labelledby="meeting-assistant-title"><div class="meeting-section-heading"><h2 id="meeting-assistant-title">Assistant</h2><div id="bot-agent-controls" class="meeting-agent-controls" hidden><label><input type="checkbox" id="bot-chat-enabled"> Chat replies</label><label><input type="checkbox" id="bot-voice-enabled"> Answer when called</label><button class="btn" id="bot-stop">Stop speaking</button></div><div class="meeting-agent-controls" id="recording-answer-controls"><label><input type="checkbox" role="switch" id="recording-answer-enabled" checked> Answer when called</label><button class="btn" id="recording-answer-stop" disabled hidden>Stop speaking</button></div></div><div id="recording-answer-body"><p id="recording-answer-status" role="status" aria-live="polite" hidden></p><div id="recording-answer-content" hidden><p class="meeting-response-label">Latest response</p><p id="recording-answer-text" class="meeting-agent-answer" hidden></p> <button class="meeting-text-button" id="recording-answer-expand" aria-expanded="false" aria-controls="recording-answer-text" hidden>Show more</button></div></div></section>
     <div class="meeting-processing"><div class="meeting-health"><p id="capture-status" role="status" class="sr-only"></p><p id="transcription-status" role="status"></p></div><button class="meeting-text-button" id="meeting-repair">Check saved audio</button></div>
     <div class="meeting-reader-toolbar"><div class="meeting-navigation"><div role="tablist" aria-label="Meeting content"><button id="tab-transcript" role="tab" aria-selected="true" aria-controls="panel-transcript" data-panel="transcript">Transcript</button><button id="tab-review" role="tab" aria-selected="false" aria-controls="panel-review" tabindex="-1" data-panel="review">Review<span id="review-count" class="review-count" hidden></span></button><button id="tab-summary" role="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-panel="summary">Summary</button></div><div class="meeting-recording-tools"><span id="single-recording"></span><label class="meeting-recording-select" for="recording-picker"><span class="sr-only">Selected recording</span><select id="recording-picker"></select></label><button class="meeting-search-toggle" id="meeting-search-toggle" aria-label="Search transcript" title="Search transcript" aria-expanded="false" aria-controls="meeting-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></button><details class="meeting-menu" id="recording-menu"><summary aria-label="More meeting options">…</summary><div class="meeting-menu-items"><button id="meeting-activity" aria-haspopup="dialog" aria-controls="meeting-activity-dialog">Messages & activity</button><button id="meeting-text">Add text note</button><div id="recording-options"></div></div></details></div></div>
       <div class="meeting-search" id="meeting-search" hidden><label class="sr-only" for="transcript-search">Search transcript</label><div class="meeting-search-controls"><input type="search" id="transcript-search" maxlength="200" placeholder="Search this conversation" autocomplete="off" aria-describedby="transcript-search-status"><button class="btn subtle" id="search-prev" aria-label="Previous matching passage" disabled>↑</button><button class="btn subtle" id="search-next" aria-label="Next matching passage" disabled>↓</button><button class="btn subtle" id="search-clear" disabled>Clear</button><button class="btn subtle" id="search-close" aria-label="Close search" title="Close search">×</button></div><p id="transcript-search-status" role="status" aria-live="polite"></p></div>
@@ -64,8 +65,15 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       const labels={thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing playback…',speaking:'Speaking · recording continues',paused:'Listening to interruption…',spoken:'Reply finished',interrupted:'Reply stopped',error:'Reply failed'};
       $('#recording-answer-status').hidden=false;
       $('#recording-answer-status').textContent=packet.error||labels[packet.status]||packet.status;
-      if(packet.response!==undefined){$('#recording-answer-text').textContent=packet.response;$('#recording-answer-text').hidden=!packet.response;}
+      if(packet.response!==undefined){
+        const text=$('#recording-answer-text');
+        if(text.textContent!==packet.response){text.classList.remove('expanded');$('#recording-answer-expand').setAttribute('aria-expanded','false');$('#recording-answer-expand').textContent='Show more';}
+        text.textContent=packet.response;text.hidden=!packet.response;
+        $('#recording-answer-content').hidden=!packet.response;
+        requestAnimationFrame(()=>{$('#recording-answer-expand').hidden=text.scrollHeight<=text.clientHeight&&!text.classList.contains('expanded');});
+      }
       $('#recording-answer-stop').disabled=!['thinking','searching','sending','speaking','paused'].includes(packet.status);
+      $('#recording-answer-stop').hidden=$('#recording-answer-stop').disabled;
       refresh().catch(()=>{});
     },
   });
@@ -103,8 +111,11 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const actionsHTML=u=>u?.assistant?`<span>Spoken reply${u.timing_estimated?' · Time estimated':''}. Original reply text; outbound speech may not be in the recording.</span><button class="meeting-text-button" data-clear>Close</button>`:u?`<span>${meetingTime(u.start_ms)}</span>${u.recording_id?`<button class="meeting-text-button" data-play="${u.id}">Play original</button>`:''}<button class="meeting-text-button" data-edit="${u.id}">Edit text / speaker</button><button class="meeting-text-button" data-clear>Close</button>`:'';
   function groupHTML(g,view){const selected=selectedView===view?g.records.find(u=>u.id===selectedPassage):null;return `<article class="meeting-paragraph" data-group="${g.records[0].id}" data-speaker-color="${colorFor(g.speaker)}"><div class="paragraph-meta"><span class="paragraph-speaker">${esc(g.speaker)}</span><span class="paragraph-time">${g.records[0].assistant?'Spoken reply · ':''}${g.records[0].timing_estimated?'~':''}${g.recordingId?meetingTime(g.records[0].start_ms):'Note'}</span></div><p class="meeting-prose">${g.records.map(u=>phraseHTML(u,view)).join(' ')}</p><div class="meeting-passage-actions" ${selected?'':'hidden'}>${actionsHTML(selected)}</div></article>`;}
   function setHTML(node,html){if(node._html!==html){node.innerHTML=html;node._html=html;}}
+  const hiddenEchoTargets=new Map();
   function renderTranscript(records){
     const root=$('#meeting-transcript'),groups=groupTranscript(records),wanted=new Set(groups.map(g=>g.records[0].id));
+    hiddenEchoTargets.clear();
+    for(const g of groups)for(const echo of g.echoGroups||[])for(const u of echo.records)hiddenEchoTargets.set(u.id,g.records[0].id);
     root.querySelector('.meeting-placeholder')?.remove();
     for(const child of [...root.children])if(!wanted.has(child.dataset.group))child.remove();
     groups.forEach((g,index)=>{
@@ -127,13 +138,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       }
       const selected=selectedView==='full'?g.records.find(u=>u.id===selectedPassage):null,actions=node.querySelector('.meeting-passage-actions');
       setHTML(actions,actionsHTML(selected));actions.hidden=!selected;
-      let echoes=node.querySelector(':scope > .meeting-playback-echo');
-      if(g.echoGroups?.length){
-        if(!echoes){echoes=document.createElement('details');echoes.className='meeting-playback-echo';node.append(echoes);}
-        const wasOpen=echoes.open;
-        setHTML(echoes,`<summary>Possible playback echo</summary><p class="muted">This may be echo or a participant repeating the reply. Original audio and text are preserved.</p>${g.echoGroups.map(e=>groupHTML(e,'full')).join('')}`);
-        echoes.open=wasOpen||g.echoGroups.some(e=>e.records.some(u=>u.id===selectedPassage||u.id===searchIds[searchIndex]));
-      }else echoes?.remove();
+
     });
     if(!groups.length)root.innerHTML=`<p class="meeting-placeholder">${botActive()?'Waiting for speech from the online meeting…':meeting.recordings.length?'No speech has been transcribed in this recording.':'Choose a recording method above to get started.'}</p>`;
   }
@@ -201,6 +206,9 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     $('.meeting-capture').hidden=completed||botActive();
     $('.meeting-bot').hidden=completed&&!botActive();
     $('.meeting-controls').hidden=completed&&!botActive();
+    $('.meeting-assistant').hidden=completed&&!botActive();
+    $('#recording-answer-controls').hidden=botActive();
+    $('#recording-answer-body').hidden=botActive();
     $('#meeting-context').textContent=completed?`Ended${verified?.phase==='complete'?' · Saved audio checked':''}`:meeting.recording?'Recording':'Active';
     const summaryBusy=!!analysisTask&&analysisRecording===selectedRecording||verified?.summary_phase==='building';
     const summaryFailed=analysisError&&analysisRecording===selectedRecording||verified?.summary_phase==='error'||!!verified?.summary_error;
@@ -270,6 +278,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       $('#bot-chat-enabled').checked=agent.chat_enabled;$('#bot-voice-enabled').checked=agent.voice_enabled;
       $('#bot-chat-enabled').disabled=botBusy;$('#bot-voice-enabled').disabled=botBusy||!agent.voice_available;
       $('#bot-stop').disabled=botBusy||!agent.voice_enabled;
+      $('#bot-stop').hidden=!['thinking','searching','speaking','paused'].includes(agent.phase);
     }
     const events=[...(agent?.events||[]),...(meeting.browser_answers||[])].sort((a,b)=>a.created_at-b.created_at).slice(-20);
     $('#bot-agent-history').hidden=!events.length;
@@ -322,12 +331,12 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
 
   function stopFollowing(){$('#meeting-follow').checked=false;$('#follow-playback').checked=false;$('#meeting-latest').hidden=!socket&&!meeting.recording;$('#meeting-read-status').textContent='Auto-follow paused';}
   function updateSearchState(records){
-    const previous=searchIds[searchIndex];searchIds=transcriptMatches(records,searchQuery);searchIndex=previous?searchIds.indexOf(previous):-1;
+    const previous=searchIds[searchIndex];searchIds=transcriptMatches(groupTranscript(records).flatMap(g=>g.records),searchQuery);searchIndex=previous?searchIds.indexOf(previous):-1;
     $('#transcript-search-status').textContent=!searchQuery?'':!searchIds.length?'No matches in this recording.':`${searchIndex<0?'':`${searchIndex+1} of `}${searchIds.length} matching passages · Enter for next`;
     $('#search-prev').disabled=$('#search-next').disabled=!searchIds.length;$('#search-clear').disabled=!searchQuery;
   }
   function openPassage(uid){
-    const phrase=document.getElementById(`full-${uid}`);if(!phrase)return null;
+    const phrase=document.getElementById(`full-${hiddenEchoTargets.get(uid)||uid}`);if(!phrase)return null;
     for(let parent=phrase.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
     setPanel('transcript');return phrase;
   }
@@ -505,7 +514,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
           if(stopping)return;
           browserSpeech.configure($('#recording-answer-enabled').checked,audioInput?.echoCancellation);
           $('#recording-answer-status').hidden=false;$('#recording-answer-status').textContent=$('#recording-answer-enabled').checked?'Say “Echooo” followed by your question.':'Voice answers are off.';
-          $('#recording-answer-text').textContent='';$('#recording-answer-text').hidden=true;
+          $('#recording-answer-text').textContent='';$('#recording-answer-text').hidden=true;$('#recording-answer-content').hidden=true;
           recordingRate=p.recording.sample_rate;captureRecording=p.recording.id;selectedRecording=captureRecording;meeting.recordings.push(p.recording);meeting.recording=true;setPanel('transcript');$('#meeting-follow').checked=true;warning('');draw();loadSelectedAudio();
           try{
             context=new AudioContext();await context.audioWorklet.addModule('/static/capture-worklet.js?v=meeting-minutes-6');if(disposed||stopping||!socket){release();return;}
@@ -526,6 +535,16 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   $('#recording-answer-enabled').onchange=()=>{
     if(socket?.readyState===WebSocket.OPEN)browserSpeech.configure($('#recording-answer-enabled').checked,audioInput?.echoCancellation);
     $('#recording-answer-status').hidden=false;$('#recording-answer-status').textContent=$('#recording-answer-enabled').checked?'Say “Echooo” followed by your question.':'Voice answers are off.';
+  };
+  const answerResizeObserver=new ResizeObserver(()=>{
+    const text=$('#recording-answer-text');
+    $('#recording-answer-expand').hidden=text.hidden||text.scrollHeight<=text.clientHeight&&!text.classList.contains('expanded');
+  });
+  answerResizeObserver.observe($('#recording-answer-text'));
+  $('#recording-answer-expand').onclick=()=>{
+    const expanded=$('#recording-answer-text').classList.toggle('expanded');
+    $('#recording-answer-expand').setAttribute('aria-expanded',String(expanded));
+    $('#recording-answer-expand').textContent=expanded?'Show less':'Show more';
   };
   $('#recording-answer-stop').onclick=()=>browserSpeech.cancelAnswer();
   const stopBrowserSpeech=()=>browserSpeech.close();window.addEventListener('pagehide',stopBrowserSpeech);
@@ -566,7 +585,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const timer=setInterval(()=>{if(socket&&!stopping&&!analysisTask&&captureRecording)updateRecording(captureRecording);},60000);
   const remoteTimer=setInterval(()=>{if(!disposed&&(!socket||meeting.recordings.some(r=>r.transcription?.phase==='verifying')))refresh().catch(()=>{});},3000);
   const unload=e=>{if(socket){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
-  current={dispose(){disposed=true;window.removeEventListener('pagehide',stopBrowserSpeech);interventionsPanel.dispose();findingsPanel.dispose();eventFeed?.close();clearInterval(timer);clearInterval(remoteTimer);clearTimeout(searchTimer);resizeObserver.disconnect();window.removeEventListener('resize',updateDockSpace);window.removeEventListener('wheel',onReadIntent);window.removeEventListener('touchmove',onReadIntent);window.removeEventListener('keydown',onReadIntent);activity.close();recordingDialog.close();workspace.removeEventListener('focusin',onFocus);window.removeEventListener('beforeunload',unload);release();flush();$('#meeting-player')?.pause();$('#meeting-source-dialog')?.close();dock.remove();document.documentElement.classList.remove('meeting-open');document.documentElement.style.removeProperty('--meeting-dock-height');document.documentElement.style.removeProperty('--meeting-nav-height');if(socket?.readyState===WebSocket.OPEN)socket.send('stop');else socket?.close();}};
+  current={dispose(){disposed=true;window.removeEventListener('pagehide',stopBrowserSpeech);interventionsPanel.dispose();findingsPanel.dispose();eventFeed?.close();clearInterval(timer);clearInterval(remoteTimer);clearTimeout(searchTimer);resizeObserver.disconnect();answerResizeObserver.disconnect();window.removeEventListener('resize',updateDockSpace);window.removeEventListener('wheel',onReadIntent);window.removeEventListener('touchmove',onReadIntent);window.removeEventListener('keydown',onReadIntent);activity.close();recordingDialog.close();workspace.removeEventListener('focusin',onFocus);window.removeEventListener('beforeunload',unload);release();flush();$('#meeting-player')?.pause();$('#meeting-source-dialog')?.close();dock.remove();document.documentElement.classList.remove('meeting-open');document.documentElement.style.removeProperty('--meeting-dock-height');document.documentElement.style.removeProperty('--meeting-nav-height');if(socket?.readyState===WebSocket.OPEN)socket.send('stop');else socket?.close();}};
   status(meeting.status==='ended'?'Meeting ended':meeting.recording?'Recording on another page':meeting.recordings.length?'Audio saved':'Ready to record');draw();loadSelectedAudio();
 }
 
