@@ -139,7 +139,10 @@ def governed(agent):
     m = agent.manager.interventions
     m.ai = IssueModel()
     m.enabled = True
-    agent.settings = replace(agent.settings, tts_provider='dashscope', stt_provider='assemblyai')
+    # Speech is mocked, but approval still requires a configured server provider.
+    # Keep this independent of developer credentials and provider overrides.
+    agent.settings = replace(agent.settings, tts_provider='dashscope', stt_provider='assemblyai',
+        assistant_tts_providers='dashscope', dashscope_api_key='test-key', assemblyai_api_key='test-key')
     with agent.store.scope(agent.who) as r:
         for i, text in enumerate(['We need the launch checklist completed before release. No one owns it yet.',
                                   'Let us move on to the support plan.']):
@@ -371,13 +374,21 @@ async def test_invalid_evidence_resolution_and_purge(governed):
     assert m.view(a.who,a.mid)['intervention_reviews'] == []
 
 
-async def test_without_online_voice_approval_is_not_recorded(governed):
+@pytest.mark.parametrize('unavailable', ['disabled', 'missing_credentials', 'mock_stt'])
+async def test_without_online_voice_approval_is_not_recorded(governed, unavailable):
     a, m = governed
     p = await propose(governed)
-    a.prefs['voice_enabled'] = False
+    if unavailable == 'disabled':
+        a.prefs['voice_enabled'] = False
+    elif unavailable == 'missing_credentials':
+        a.settings = replace(a.settings, dashscope_api_key='')
+    else:
+        a.settings = replace(a.settings, stt_provider='mock')
     with pytest.raises(Exception,match='enable server voice'):
         await m.review(a.who,a.mid,p['id'],Review(action='approve',revision=1))
     assert m.view(a.who,a.mid)['intervention_reviews'] == []
+    assert m.view(a.who,a.mid)['interventions'][0]['status'] == 'proposed'
+    assert a.queue.empty()
 
 
 def test_final_transcript_feed_persists_suggestions_and_reloads(client, app):
