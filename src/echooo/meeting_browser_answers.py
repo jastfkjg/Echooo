@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 from echooo import database as db
+from echooo.assistant_voice import factory as assistant_tts, synthesize
 from echooo.meeting_debug import agent_record
 from echooo.intelligence import Intelligence
 from echooo.meeting_agent import MeetingAgent
@@ -68,6 +69,7 @@ class BrowserMeetingAnswers:
         self.cid = 'browser-recording:' + recording_id
         self.send, self.validate = send, validate
         self.intelligence = Intelligence(self.settings)
+        self.tts_factory = lambda: assistant_tts(self.store, self.who, self.settings)
         self.enabled = self.closed = False
         self.cancel = asyncio.Event()
         self.phase, self.error = 'listening', ''
@@ -219,9 +221,17 @@ class BrowserMeetingAnswers:
     async def speak(self, text, event):
         if not self.valid() or self.cancel.is_set() or self.external:
             raise asyncio.CancelledError()
+        self.change(event, status='sending')
+        try:
+            audio = await synthesize(self.tts_factory(), text, self.cancel)
+        except Exception:
+            self.error = 'Speech generation failed. Your text reply is still available. Check Assistant voice in Settings.'
+            raise
+        if not self.valid() or self.cancel.is_set() or self.external:
+            raise asyncio.CancelledError()
         done = asyncio.get_running_loop().create_future()
         receipt = {'id': event['id'], 'token': secrets.token_urlsafe(32), 'started': False,
-            'expires': time.monotonic() + LEASE_SECONDS, 'done': done, 'event': event}
+            'expires': time.monotonic() + LEASE_SECONDS, 'done': done, 'event': event, 'audio': audio}
         self.receipt = receipt
         self.change(event, status='sending')
         await self.emit({'type': 'direct_offer', 'id': event['id'], 'token': receipt['token']})
@@ -339,7 +349,7 @@ class BrowserMeetingAnswers:
                     await self.stop()
             await self.emit({'type': 'direct_ack', 'request_id': request_id, 'ok': True,
                 'playback': self.phase,
-                **({'question': receipt['event']['response']} if action == 'start' else {})})
+                **({'question': receipt['event']['response'], 'audio': receipt.pop('audio')} if action == 'start' else {})})
         except (ValueError, KeyError):
             await self.emit({'type': 'direct_ack', 'request_id': request_id, 'ok': False,
                 'error': 'Playback is no longer current. Please ask again.'})

@@ -14,6 +14,7 @@ from fastapi import Request
 from pydantic import Field
 
 from echooo import database as db
+from echooo.assistant_voice import providers as speech_providers
 from echooo.contracts import Input
 from echooo.meeting_findings import clean_decisions, digest, evidence_current, source_hash
 from echooo.service import Problem, need
@@ -355,7 +356,7 @@ class MeetingInterventions:
     def agent(self, who, mid):
         row = self.bots.row(who, mid)
         agent = self.bots.agents.get(row['id']) if row else None
-        if not agent or not agent.valid() or not agent.prefs['voice_enabled'] or agent.settings.tts_provider == 'browser' or agent.settings.stt_provider == 'mock':
+        if not agent or not agent.valid() or not agent.prefs['voice_enabled'] or not speech_providers(agent.settings) or agent.settings.stt_provider == 'mock':
             raise Problem('Join an online meeting and enable server voice replies before approving speech.', 409)
         return agent
 
@@ -514,6 +515,13 @@ class MeetingInterventions:
                                 state={**state, 'delivery_error': 'Nothing was played: the latest speech check did not authorize this question. Review it and try again.'})
                         self.emit(who, mid)
                         raise Problem('This question is no longer relevant.', 409)
+                    from echooo.assistant_voice import factory, synthesize
+                    try:
+                        audio = await synthesize(factory(self.store, who, self.bots.settings), state['approved_question'])
+                    except Exception as exc:
+                        raise Problem('Speech generation failed. Check Assistant voice in Settings and try again.', 503) from exc
+                    if self.snapshot(who, mid)[3] != fingerprint:
+                        raise Problem('The discussion changed before playback. Review again.', 409)
                     self.local_recording(who, mid, state['recording_id'])
                     with self.store.scope(who) as r:
                         current = need(r.get(db.meeting_interventions, pid), 'Suggestion')
@@ -540,7 +548,8 @@ class MeetingInterventions:
                 mark_speech(SimpleNamespace(store=self.store, who=who, mid=mid, recording_id=state['recording_id']),
                             {'id': state['event_id']}, complete=data.action == 'spoken')
         self.emit(who, mid)
-        return {'status': status, 'question': state['approved_question'] if data.action == 'start' else None}
+        return {'status': status, 'question': state['approved_question'] if data.action == 'start' else None,
+            **({'audio': audio} if data.action == 'start' else {})}
 
     def proposal_for_event(self, agent, event):
         parts = event['source_key'].split(':')

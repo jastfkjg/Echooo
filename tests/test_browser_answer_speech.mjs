@@ -6,13 +6,17 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function setup({ack=true}={}){
   const packets=[],utterances=[],errors=[];
   let cancelled=0;
-  const speech=new BrowserAnswerSpeech({
-    synthesis:{getVoices:()=>[],speak:u=>{utterances.push(u);u.onstart();},cancel:()=>cancelled++},
-    Utterance:class{constructor(text){this.text=text;}},error:message=>errors.push(message),
-  });
+  class Audio {
+    constructor(src){this.src=src;utterances.push(this);}
+    async play(){this.onplaying?.();}
+    pause(){cancelled++;}
+    removeAttribute(){this.src='';}
+    load(){}
+  }
+  const speech=new BrowserAnswerSpeech({Audio,error:message=>errors.push(message)});
   const socket={readyState:1,send:text=>{
     const p=JSON.parse(text);packets.push(p);
-    if(ack&&p.request_id)queueMicrotask(()=>speech.receive({type:'direct_ack',request_id:p.request_id,ok:true,question:'Use Telegram.'}));
+    if(ack&&p.request_id)queueMicrotask(()=>speech.receive({type:'direct_ack',request_id:p.request_id,ok:true,question:'Use Telegram.',audio:'UklGRg=='}));
   }};
   speech.attach(socket);
   return {speech,socket,packets,utterances,errors,get cancelled(){return cancelled;}};
@@ -25,15 +29,15 @@ test('only a live offer starts exact reply audio; snapshots and status never rep
   s.speech.receive({type:'direct_status',id:'old',status:'spoken',response:'old'});
   assert.equal(s.utterances.length,0);
   s.speech.receive(offer);await tick();
-  assert.equal(s.utterances[0].text,'Use Telegram.');
-  s.utterances[0].onend();await tick();
+  assert.match(s.utterances[0].src,/^blob:/);
+  s.utterances[0].onended();await tick();
   assert.deepEqual(s.packets.filter(p=>p.action).map(p=>p.action),['start','spoken']);
   s.speech.close();
 });
 
 test('server interruption cancels synthesis and late completion cannot mark spoken',async()=>{
   const s=setup();s.speech.receive(offer);await tick();
-  const late=s.utterances[0].onend;
+  const late=s.utterances[0].onended;
   s.speech.receive({type:'direct_cancel',id:offer.id});late();await tick();
   assert.equal(s.cancelled,1);
   assert.equal(s.packets.filter(p=>p.action==='spoken').length,0);
@@ -61,7 +65,7 @@ test('browser playback errors report failure and preserve the response text',asy
   s.speech.receive({type:'direct_status',id:offer.id,status:'sending',response:'Use Telegram.'});
   s.speech.receive(offer);await tick();
   s.utterances[0].onerror({error:'not-allowed'});await tick();
-  assert.match(s.errors[0],/blocked by the browser/);
+  assert.match(s.errors[0],/Audio playback failed/);
   assert.equal(displayed,'Use Telegram.');
   assert.equal(s.packets.at(-1).action,'failed');s.speech.close();
 });
@@ -78,9 +82,9 @@ test('host-approved speech waits for shared guard acknowledgement',async()=>{
 
 test('pause/resume controls only affect the current receipt and never restart speech',async()=>{
   const s=setup();let pauses=0,resumes=0;
-  s.speech.synthesis.pause=()=>pauses++;
-  s.speech.synthesis.resume=()=>resumes++;
   s.speech.receive(offer);await tick();
+  s.utterances[0].pause=()=>pauses++;
+  s.utterances[0].play=async()=>resumes++;
   const command={...offer,type:'direct_playback',action:'pause'};
   s.speech.receive({...command,token:'wrong'});assert.equal(pauses,0);
   s.speech.receive(command);s.speech.receive(command);assert.equal(pauses,1);
@@ -93,6 +97,7 @@ test('pause/resume controls only affect the current receipt and never restart sp
 
 test('unsupported pause fails closed without replay',async()=>{
   const s=setup();s.speech.receive(offer);await tick();
+  s.utterances[0].pause=()=>{throw new Error('Device failure');};
   s.speech.receive({...offer,type:'direct_playback',action:'pause'});
   assert.equal(s.speech.active,null);
   assert.match(s.errors[0],/Playback control failed/);

@@ -147,6 +147,9 @@ def create_app(settings: Settings | None = None, store: db.Store | None = None) 
         return {**settings.public_dict(), "demo": settings.llm_provider == "mock",
             "database": "postgresql" if store.postgres else "sqlite", "version": "0.2.0"}
 
+    from echooo.assistant_voice import routes as assistant_voice_routes
+    assistant_voice_routes(app, store, settings, owner)
+
     def merge_voice_catalogue(custom: list[dict]) -> list[dict]:
         options = settings.dashscope_voice_options()
         known = {str(option["id"]) for option in options}

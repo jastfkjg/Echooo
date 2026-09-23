@@ -1,4 +1,4 @@
-import {LocalQuestionSpeech} from './local-question-speech.js?v=3';
+import {LocalQuestionSpeech} from './local-question-speech.js?v=server-tts-1';
 const esc = (v='') => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels={proposed:'Needs approval',deferred:'Deferred',approved:'Waiting to speak',speaking:'Speaking',spoken:'Spoken',stale:'No longer current',rejected:'Dismissed',cancelled:'Cancelled',failed:'Failed'};
 const active = p => ['proposed','deferred','approved','speaking','failed'].includes(p.status);
@@ -36,9 +36,9 @@ export function interventionHTML(p, reviews=[], ended=false, {local=false, editi
 }
 
 export function mountInterventions(root,{api,base,refresh,showSource,getLocalRecording=()=>null,onLocalSpeech=async()=>{}}){
-  let snapshot, busy=false,disposed=false,localError='',editing=null;
+  let snapshot, busy=false,disposed=false,localError='',editing=null,expanded=false,seenQuestions=new Set();
   const isLocal=value=>!value.connector?.bot||['ended','fatal_error','data_deleted','not_created'].includes(value.connector.bot.state);
-  root.innerHTML='<div class="meeting-section-heading"><h2>Suggested questions</h2><button class="btn" data-check-suggestions>Check again</button></div><p data-intervention-status role="status" aria-live="polite"></p><p data-intervention-error role="alert"></p><div data-intervention-list></div>';
+  root.innerHTML='<div class="meeting-section-heading"><h2><button class="meeting-suggestions-toggle" data-toggle-suggestions aria-expanded="false" aria-controls="meeting-suggestions-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>Suggested questions <span data-suggestion-count>0</span></button></h2><button class="meeting-icon-button" data-check-suggestions aria-label="Check for suggested questions" title="Check for suggested questions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5"/></svg></button></div><p data-intervention-status role="status" aria-live="polite" hidden></p><p data-intervention-error role="alert"></p><div id="meeting-suggestions-content" data-intervention-list hidden></div>';
   const status=root.querySelector('[data-intervention-status]'),error=root.querySelector('[data-intervention-error]'),list=root.querySelector('[data-intervention-list]');
   const localSpeech=new LocalQuestionSpeech({api,base,
     changed:()=>{if(!disposed)refresh().catch(()=>{});},error:message=>{localError=message;if(!disposed)error.textContent=message;}});
@@ -47,7 +47,11 @@ export function mountInterventions(root,{api,base,refresh,showSource,getLocalRec
     const active=action==='start'||action==='heartbeat';
     try{
       if(active)await onLocalSpeech(true);
-      const result=await speechRequest(receipt,action);
+      let renew;
+      if(action==='start')renew=setInterval(()=>{if(localSpeech.active?.id===receipt.id)onLocalSpeech(true).catch(()=>localSpeech.stop());else clearInterval(renew);},2000);
+      let result;
+      try{result=await speechRequest(receipt,action);}finally{clearInterval(renew);}
+      if(active&&localSpeech.active?.id===receipt.id)await onLocalSpeech(true);
       if(!active)await onLocalSpeech(false).catch(()=>{});
       return result;
     }catch(error){await onLocalSpeech(false).catch(()=>{});throw error;}
@@ -60,11 +64,18 @@ export function mountInterventions(root,{api,base,refresh,showSource,getLocalRec
     localSpeech.sync(value);
     const progress=value.intervention_progress||{},items=value.interventions||[],ended=value.status==='ended';
     root.hidden=!progress.available&&!items.length;
-    status.textContent=localSpeech.active?.utterance?'Playing locally · recording continues':localSpeech.active?'Checking local playback…':busy?'Checking…':progress.phase==='checking'?'Checking recent discussion…':progress.phase==='waiting'?'Waiting for a complete, stable sentence…':progress.phase==='followup'?'Rechecking a possible issue…':items.some(active)?'':progress.last_check?.outcome==='no_issue'?'Checked · no new questions.':progress.last_check?.outcome==='expired'?'Check took too long. Try again.':'No questions awaiting approval.';
+    status.textContent=localSpeech.active?.audio?'Playing locally · recording continues':localSpeech.active?'Checking local playback…':busy?'Checking…':progress.phase==='checking'?'Checking recent discussion…':progress.phase==='waiting'?'Waiting for a complete, stable sentence…':progress.phase==='followup'?'Rechecking a possible issue…':items.some(active)?'':progress.last_check?.outcome==='no_issue'?'Checked · no new questions.':progress.last_check?.outcome==='expired'?'Check took too long. Try again.':'No questions awaiting approval.';
     if(!busy)error.textContent=localError||progress.error||'';
     root.querySelector('[data-check-suggestions]').disabled=busy||ended||progress.phase==='checking'||!progress.available;
     if(editing&&!items.some(p=>p.id===editing.id&&p.revision===editing.revision&&['proposed','deferred','failed','cancelled'].includes(p.status))){editing=null;error.textContent='This suggestion changed. Review the latest question.';}
     const rows=items.filter(p=>active(p)&&p.status!=='deferred'),saved=items.filter(p=>p.status==='deferred'),history=items.filter(p=>!active(p));
+    const currentQuestions=new Set(rows.map(p=>`${p.id}:${p.revision}:${p.status}`));
+    if([...currentQuestions].some(key=>!seenQuestions.has(key)))expanded=true;
+    seenQuestions=currentQuestions;
+    root.querySelector('[data-toggle-suggestions]').setAttribute('aria-expanded',String(expanded));
+    root.querySelector('[data-suggestion-count]').textContent=String(rows.length+saved.length);
+    list.hidden=!expanded;
+    status.hidden=!expanded&&!busy&&!localSpeech.active&&!['checking','waiting','followup'].includes(progress.phase)&&progress.last_check?.outcome!=='expired';
     const row=p=>interventionHTML(p,(value.intervention_reviews||[]).filter(r=>r.intervention_id===p.id),ended,{local:isLocal(value),editing,records:value.utterances||[]});
     const html=rows.map(row).join('')+(saved.length?`<details data-suggestion-details="saved"><summary>Saved for later · ${saved.length}</summary>${saved.map(row).join('')}</details>`:'')+(history.length?`<details data-suggestion-details="history"><summary>Previous suggestions · ${history.length}</summary>${history.map(row).join('')}</details>`:'');
     if(list._html!==html){
@@ -82,6 +93,7 @@ export function mountInterventions(root,{api,base,refresh,showSource,getLocalRec
   root.oninput=event=>{if(event.target.matches('[data-question-draft]')&&editing)editing.text=event.target.value;};
   root.onclick=async event=>{
     const button=event.target.closest('button');if(!button||!snapshot)return;
+    if(button.hasAttribute('data-toggle-suggestions')){expanded=!expanded;render(snapshot);return;}
     const p=snapshot.interventions?.find(p=>p.id===button.closest('[data-intervention]')?.dataset.intervention);
     if(busy){
       if(button.dataset.proposalAction==='cancel'&&p){

@@ -21,3 +21,13 @@
 .review-prompt{display:flex;align-items:center;gap:.75rem;min-height:44px;padding:.5rem 0 1rem;color:var(--accent)}
 .review-prompt svg{width:16px;height:16px}
 .settings-details .settings-section{padding:1rem 0}
+
+#assistant-voice-settings>div{width:100%;max-width:560px}#assistant-voice-settings select{width:100%;min-width:0}
+#assistant-voice-settings .assistant-voice-description{margin:8px 0 24px}
+.assistant-voice-choice{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:10px;align-items:start}
+.assistant-voice-preview{width:44px;height:44px;min-width:44px;padding:0;justify-content:center;border-color:var(--control-line);background:var(--sidebar);color:var(--accent)}
+.assistant-voice-preview svg{width:20px;height:20px}
+.assistant-voice-preview:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.assistant-voice-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:24px}
+#assistant-voice-settings .assistant-voice-footer p{margin:0;font-size:13px;line-height:1.5}
+.assistant-voice-footer .btn{flex-shrink:0;margin-left:auto}

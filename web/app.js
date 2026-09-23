@@ -1,6 +1,8 @@
+import {mountAssistantVoice} from './assistant-voice-settings.js?v=1';
+let disposeAssistantVoice=()=>{};
 import {showMeetingDebug} from './meeting-debug.js?v=3';
 import { Voice } from './voice.js';
-import {showMeetings, leaveMeeting} from './meetings.js?v=meeting-layout-2';
+import {showMeetings, leaveMeeting} from './meetings.js?v=assistant-voice-1';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js?v=project-simple-3';
 import {enhanceSelects} from './select.js';
@@ -105,6 +107,7 @@ const demoBanner=()=>state.config.demo?`<div class="banner">${icon('info')}<span
 
 async function renderRoute() {
   const run=++navigation;
+  disposeAssistantVoice();
   leaveMeeting();
   disconnect();
   state.route=location.hash.slice(1).split('/').filter(Boolean); state.filter=''; state.session=null;
@@ -183,7 +186,8 @@ function renderReview() {
   shell(`<div class="heading"><div><h1>Review <span class="muted">${pending.length}</span></h1><p>Confirm what to remember.</p></div></div>${pending.length?pending.map(p=>`<article class="review-row"><div class="review-header"><div><span class="tag">${esc(domainName(p.domain_id))}</span><h3>${esc(p.title)}</h3></div><div class="actions"><button class="btn subtle" data-action="reject-proposal" data-id="${p.id}">Dismiss</button><button class="btn primary" data-action="review-proposal" data-id="${p.id}">Review ${icon('arrow')}</button></div></div><p>${esc(p.content)}</p><details><summary>View evidence · ${countLabel(p.evidence.length,'item')}</summary>${p.evidence.map(e=>`<div class="evidence"><strong>${esc(e.speaker||'Imported source')}</strong>: ${esc(e.content)}</div>`).join('')}</details><small>${p.session_id?'From a conversation':'Extracted from a source'} · ${dt(p.created_at)} · Not yet used in replies</small></article>`).join(''):empty('No updates to review','Proposed memories will appear here.','', 'check')}<p class="muted"><small>${countLabel(state.proposals.length-pending.length,'update')} processed</small></p>`,'Review');
 }
 function renderSettings() {
-  shell(`<div class="heading"><div><h1>Settings</h1></div></div>${demoBanner()}<section class="settings-section appearance-setting"><h3>Appearance</h3>${themePicker()}</section><section class="settings-section"><div><h3>Export data</h3><p>Download your workspace as JSON.</p></div><a class="btn" href="/api/export" download>${icon('download')}Export</a></section><details class="settings-details"><summary>Connections & storage</summary><section class="settings-section"><div><h3>Model connections</h3><p>STT: ${esc(state.config.providers?.stt)} · LLM: ${esc(state.config.providers?.llm)} · TTS: ${esc(state.config.providers?.tts)}</p><p>Configured on the server.</p></div><span class="tag">${state.config.demo?'Demo':'Configured'}</span></section><section class="settings-section"><div><h3>Storage</h3><p>${state.config.database==='sqlite'?'Local SQLite':'PostgreSQL'}</p></div></section></details><section class="settings-section"><h3>${esc(state.user.name)}</h3><button class="btn" data-action="logout">${icon('logout')}Sign out</button></section>`,'Settings');
+  shell(`<div class="heading"><div><h1>Settings</h1></div></div>${demoBanner()}<section class="settings-section" id="assistant-voice-settings"></section><section class="settings-section appearance-setting"><h3>Appearance</h3>${themePicker()}</section><section class="settings-section"><div><h3>Export data</h3><p>Download your workspace as JSON.</p></div><a class="btn" href="/api/export" download>${icon('download')}Export</a></section><details class="settings-details"><summary>Connections & storage</summary><section class="settings-section"><div><h3>Model connections</h3><p>STT: ${esc(state.config.providers?.stt)} · LLM: ${esc(state.config.providers?.llm)} · TTS: ${esc(state.config.providers?.tts)}</p><p>Configured on the server.</p></div><span class="tag">${state.config.demo?'Demo':'Configured'}</span></section><section class="settings-section"><div><h3>Storage</h3><p>${state.config.database==='sqlite'?'Local SQLite':'PostgreSQL'}</p></div></section></details><section class="settings-section"><h3>${esc(state.user.name)}</h3><button class="btn" data-action="logout">${icon('logout')}Sign out</button></section>`,'Settings');
+  disposeAssistantVoice=mountAssistantVoice($('#assistant-voice-settings'),api);
 }
 function messageHTML(m) {
   const saveable=!state.guest && state.session?.mode==='private' && state.session.status!=='revoked' && m.role==='owner';

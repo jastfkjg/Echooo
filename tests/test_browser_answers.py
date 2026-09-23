@@ -12,6 +12,15 @@ from echooo.models import STTEvent, STTEventType
 from test_product import app, client
 
 
+@pytest.fixture(autouse=True)
+def capture_speech_provider(monkeypatch):
+    from echooo.models import AudioChunk
+    class TTS:
+        async def stream_audio(self, text, *, cancel):
+            yield AudioChunk(b'\x01\x00' * 2400, 24000)
+    monkeypatch.setattr('echooo.meeting_browser_answers.assistant_tts', lambda *args: TTS())
+
+
 @pytest.fixture
 async def browser(client, app):
     m = client.post('/api/meetings', json={'title': 'Browser questions'}).json()
@@ -25,6 +34,11 @@ async def browser(client, app):
         with manager.store.scope(m['owner_id']) as r:
             assert r.get(db.meetings, m['id'])['status'] == 'active'
     b = BrowserMeetingAnswers(manager, m['owner_id'], m['id'], rec['id'], send, validate)
+    from echooo.models import AudioChunk
+    class TTS:
+        async def stream_audio(self, text, *, cancel):
+            yield AudioChunk(b'\x01\x00' * 2400, 24000)
+    b.tts_factory = TTS
     b.packets = packets
     b.writer = TranscriptWriter(b.store, b.who, b.mid, b.recording_id, manager.transcriptions.feed)
     await b.control({'type': 'direct_config', 'enabled': True})
@@ -439,3 +453,50 @@ async def test_owner_correction_is_marked_for_transcript_display_after_reload(br
     restored = next(u for u in client.get(base).json()['utterances'] if u['id'] == original['id'])
     assert restored['user_edited'] and restored['speaker'] == 'Alice'
     assert restored['content'] == original['content']
+
+
+async def test_server_tts_audio_is_private_to_start_receipt(browser):
+    import base64
+    b = browser
+    await final(b)
+    packet = await offer(b)
+    assert 'audio' not in packet
+    started = await receipt(b, 'start')
+    assert base64.b64decode(started['audio']).startswith(b'RIFF')
+    assert 'audio' not in str(events(b))
+    heartbeat = await receipt(b, 'heartbeat')
+    assert 'audio' not in heartbeat
+    await receipt(b, 'spoken')
+    await b.task
+
+
+async def test_server_tts_failure_keeps_answer_text_and_never_offers_playback(browser):
+    b = browser
+    class Broken:
+        async def stream_audio(self, text, *, cancel):
+            raise RuntimeError('PRIVATE_PROVIDER_ERROR')
+            yield
+    b.tts_factory = Broken
+    await final(b)
+    await b.task
+    event = events(b)[0]
+    assert event['response'] and event['status'] == 'error'
+    assert 'Speech generation failed' in event['error']
+    assert 'PRIVATE_PROVIDER_ERROR' not in str(b.packets)
+    assert not any(p['type'] == 'direct_offer' for p in b.packets)
+
+
+async def test_stop_during_server_synthesis_never_offers_audio(browser):
+    b = browser
+    entered = asyncio.Event()
+    class Slow:
+        async def stream_audio(self, text, *, cancel):
+            entered.set()
+            await asyncio.sleep(10)
+            yield
+    b.tts_factory = Slow
+    await final(b)
+    await asyncio.wait_for(entered.wait(), 1)
+    await b.stop()
+    assert not any(p['type'] == 'direct_offer' for p in b.packets)
+    assert events(b)[0]['status'] == 'interrupted'

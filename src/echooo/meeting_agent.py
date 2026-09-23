@@ -22,7 +22,7 @@ from echooo.meeting_retrieval import recent_passages, transcript_stamp
 from echooo.intelligence import Intelligence
 from echooo.models import STTEventType
 from echooo.meeting_playback import MeetingPlayback
-from echooo.providers.factory import create_tts
+from echooo.assistant_voice import factory as assistant_tts, providers as speech_providers
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class MeetingAgent:
                 db.meeting_agent_events.c.status != 'observed').order_by(
                     db.meeting_agent_events.c.created_at.desc()).limit(20)).mappings()
             return {'chat_enabled': prefs[0]['chat_enabled'], 'voice_enabled': prefs[0]['voice_enabled'],
-                'voice_available': manager.settings.tts_provider != 'browser' and manager.settings.stt_provider != 'mock',
+                'voice_available': bool(speech_providers(manager.settings)) and manager.settings.stt_provider != 'mock',
                 'phase': 'stopped' if row['desired_state'] == 'left' else 'waiting', 'error': '',
                 'events': [{**{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at')},
                     'citations': manager.knowledge.citations(row['owner_id'], row['meeting_id'], e['id']),
@@ -96,7 +96,7 @@ class MeetingAgent:
         self.store, self.settings = manager.store, manager.settings
         self.who, self.mid, self.cid = row['owner_id'], row['meeting_id'], row['id']
         self.intelligence = Intelligence(self.settings)
-        self.tts_factory = lambda: create_tts(self.settings)
+        self.tts_factory = lambda: assistant_tts(self.store, self.who, self.settings)
         self.queue = asyncio.Queue(maxsize=8)
         self.jobs = []
         self.current = None
@@ -158,7 +158,7 @@ class MeetingAgent:
 
     def view(self):
         return {'chat_enabled': self.prefs['chat_enabled'], 'voice_enabled': self.prefs['voice_enabled'],
-            'voice_available': self.settings.tts_provider != 'browser' and self.settings.stt_provider != 'mock',
+            'voice_available': bool(speech_providers(self.settings)) and self.settings.stt_provider != 'mock',
             'phase': self.phase if self.valid() else 'waiting', 'error': self.error or self.poll_error,
             'follow_up_seconds': max(0, round(self.conversation_until - time.monotonic())),
             'conversation_active': self.conversation_active(),
@@ -492,8 +492,6 @@ class MeetingAgent:
 
     async def speak(self, text, event):
         from echooo.meeting_speech import mark_speech
-        if self.settings.tts_provider == 'browser':
-            raise ValueError('Server speech synthesis is not configured')
         # Let the addressed speaker finish, and discard a stale answer if discussion continues.
         deadline = time.monotonic() + 8
         while time.monotonic() - self.last_speech < .8:

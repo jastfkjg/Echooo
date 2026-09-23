@@ -45,6 +45,11 @@ def owned_table(name: str, *columns: Column, constraints=()) -> Table:
         *columns, Column("created_at", Float, nullable=False), *constraints)
 
 
+assistant_voice_settings = owned_table("assistant_voice_settings",
+    Column("provider", String, nullable=False), Column("voice", String, nullable=False),
+    constraints=(UniqueConstraint("owner_id"),))
+
+
 domains = owned_table("domains", Column("name", String, nullable=False),
     Column("description", Text, nullable=False), Column("color", String, nullable=False),
     constraints=(UniqueConstraint("owner_id", "name"),))

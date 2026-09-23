@@ -44,6 +44,8 @@ Use [.env.example](.env.example) as a reference to update `.env`, then restart w
 | Self-hosted CosyVoice | `TTS_PROVIDER=cosyvoice`, `COSYVOICE_BASE_URL`, compatible `COSYVOICE_SPEAKER_ID` |
 | DashScope speech | `TTS_PROVIDER=dashscope`, `DASHSCOPE_API_KEY`; model and voice configured with `DASHSCOPE_TTS_*` |
 
+Meeting assistants use server TTS for both local recording and online meetings. Choose the shared service and voice in **Settings → Assistant voice**, with a Preview before saving. Browser speech remains available for ordinary conversations only.
+
 The LLM endpoint must support streaming `/chat/completions` and reliable JSON instruction following. API keys stay on the server; audio and authorized text are sent to the configured providers as needed.
 
 See [Operations](docs/OPERATIONS.md#configuration) for all settings and [DashScope setup](docs/OPERATIONS.md#alibaba-cloud-cosyvoice-setup) for cloud speech and custom voices. Model prompts live in [config/prompts.toml](config/prompts.toml).

@@ -1,4 +1,4 @@
-import {LocalQuestionSpeech} from './local-question-speech.js?v=3';
+import {LocalQuestionSpeech} from './local-question-speech.js?v=server-tts-1';
 
 // Receipts exist only in this capture socket. History/snapshots cannot start speech.
 export class BrowserAnswerSpeech extends LocalQuestionSpeech {
@@ -31,10 +31,10 @@ export class BrowserAnswerSpeech extends LocalQuestionSpeech {
     const run=this.active;
     if(!run||run.id!==packet.id||run.token!==packet.token||!run.started)return;
     if(packet.action==='pause'&&!run.paused){
-      this.synthesis.pause();run.paused=true;
+      run.audio.pause();run.paused=true;
       this.status({id:run.id,status:'paused'});
     }else if(packet.action==='resume'&&run.paused){
-      this.synthesis.resume();run.paused=false;
+      run.audio.play().catch(()=>{if(this.active===run){this.error('Playback could not resume.');this.stop();}});run.paused=false;
       this.status({id:run.id,status:'speaking'});
     }
   }

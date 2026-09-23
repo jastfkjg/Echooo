@@ -8,6 +8,15 @@ from echooo.meeting_speech import speech_transcript
 from test_meeting_interventions import governed, propose, agent, app, client
 
 
+@pytest.fixture(autouse=True)
+def speech_provider(monkeypatch):
+    from echooo.models import AudioChunk
+    class TTS:
+        async def stream_audio(self, text, *, cancel):
+            yield AudioChunk(b'\x01\x00' * 2400, 24000)
+    monkeypatch.setattr('echooo.assistant_voice.factory', lambda *args: TTS())
+
+
 async def local(governed):
     a, m = governed
     a.manager.update(a.row, desired_state='left', state='ended')

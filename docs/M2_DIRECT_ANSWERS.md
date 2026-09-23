@@ -108,7 +108,7 @@ search paths. These exclude STT/TTS and are not deployed latency guarantees.
 
 For online meetings, use a live LLM, AssemblyAI, server TTS, and Attendee with
 **Answer when called** enabled. For local Recording, use a live LLM and AssemblyAI;
-the recording browser supplies speech synthesis and needs no Attendee credentials.
+server TTS generates the audio and the recording browser plays it, without Attendee credentials.
 
 1. State a team communication decision, then ask Echooo which platform was selected.
    Expect a brief spoken answer and a source link without host approval.
@@ -162,8 +162,9 @@ synthetic model evaluation does not certify them.
   disabling replies and disconnect cancel pending follow-up decisions and end the
   conversation. Approved local suggestions retain their separate host-review flow
   and command guard; they do not acquire the direct-answer follow-up window.
-- No new service, schema migration or credentials: existing STT/LLM usage applies;
-  browser speech adds no application TTS API call. Eligible follow-ups add one fast
+- Both transports use the owner’s server TTS selection. Local replies and approved
+  local suggestions now make TTS API calls; browser speech synthesis is not a fallback.
+  Eligible follow-ups add one fast
   turn-classification model call before answering. Demo STT does not transcribe.
 
 Run `.venv/bin/pytest -q tests/test_browser_answers.py` and
@@ -182,7 +183,7 @@ human discussion, and a question after the window expires. Verify that manual
 **Stop speaking** cancels playback and follow-up decisions. Repeat using speakers, headphones and Tab + microphone,
 then refresh during playback and confirm there is no replay. Also test sound blocked,
 network loss and Stop while searching. Real acoustic/autoplay behavior requires this
-device/browser check; automated tests use simulated speech synthesis and STT.
+device/browser check; automated tests use simulated server TTS, browser audio playback, and STT.
 
 ### Answer diagnostics
 
@@ -248,3 +249,37 @@ scope, citation checks and authorization remain authoritative.
 - The live evaluation checks action, support, and required citations; replies were also
   inspected manually. These finite checks do not guarantee semantic recall or eliminate
   future model errors. No running deployment or historical transcript data was changed.
+
+
+## Shared assistant voice
+
+Settings → Assistant voice selects a server speech service and voice for both local
+recording and online meeting assistants. Preview uses the current unsaved selection;
+Save persists an owner-scoped preference in `assistant_voice_settings` (added on startup,
+with the same PostgreSQL RLS rules as other owned tables). Each reply snapshots the
+selection when speech generation starts. An active audio reply does not change voice.
+The meeting page opens Voice settings in a separate tab so recording can continue.
+
+By default the configured server `TTS_PROVIDER` is offered. To expose multiple configured
+services, set `ASSISTANT_TTS_PROVIDERS=dashscope,cosyvoice` on the server. DashScope requires
+its API key and exposes preset voices plus ready custom voices when voice management is
+available. Self-hosted CosyVoice exposes `COSYVOICE_SPEAKER_ID` as its configured preset.
+Endpoints and credentials remain server-managed, never user-supplied URLs or keys.
+`TTS_PROVIDER=browser` alone does not enable meeting speech; configure a server service.
+Ordinary conversation-specific voice controls are unchanged.
+
+Local TTS is generated before the one-shot playback offer, bounded to 30 seconds of
+generation and 120 seconds of mono PCM audio. It is wrapped as WAV and delivered only
+on the authorized start receipt, then played using a revocable Blob URL. This adds TTS
+generation time before local playback. Tokens/audio are not saved in answer history.
+Stop cancels pending generation; receipt checks, heartbeats, pause/resume, disconnect,
+and stale-evidence checks still govern playback. Failed TTS preserves the text reply
+and shows an error, with no automatic switch to another service or browser voice.
+
+Normal live transcription is represented in the header as `Recording · Transcribing`.
+The separate transcription area is reserved for connecting, verification, and error states.
+
+Verification: 404 Python tests passed (1 skipped), 128 JavaScript tests passed; a live
+DashScope smoke test produced a valid WAV. Browser checks used an isolated test database
+and synthetic audio for service selection, saving/reloading, preview, and narrow layouts.
+Real meeting acoustics and online Attendee playback still require device integration checks.
