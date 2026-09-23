@@ -235,6 +235,7 @@ def test_tiny_audio_frames_are_coalesced_without_inventing_samples(client, app):
     manager = app.state.meeting_bots
     sink = BotRecording(manager, manager.rows()[0])
     class Live:
+        def repair_bounds(self): return None
         def __init__(self):
             self.frames = []
         def feed(self, pcm, samples):

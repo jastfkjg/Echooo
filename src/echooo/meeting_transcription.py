@@ -1,4 +1,4 @@
-"""Durable verification of saved meeting audio and reconnecting live transport."""
+"""On-demand saved-audio repair and reconnecting live transport."""
 from __future__ import annotations
 
 import asyncio
@@ -156,10 +156,10 @@ class BatchTranscriber:
         return httpx.AsyncClient(base_url=self.settings.assemblyai_api_url.rstrip('/'),
             headers={'Authorization': self.settings.assemblyai_api_key}, timeout=httpx.Timeout(60, write=300))
 
-    async def submit(self, audio):
+    async def submit(self, audio, *, upload_url=None, checkpoint=lambda **changes: None):
         # Lossless compression makes long recordings practical on slower uplinks.
         # WAV remains supported on installations without ffmpeg.
-        if len(audio) > 1024 * 1024 and shutil.which('ffmpeg'):
+        if not upload_url and len(audio) > 1024 * 1024 and shutil.which('ffmpeg'):
             process = await asyncio.create_subprocess_exec('ffmpeg', '-hide_banner', '-loglevel', 'error',
                 '-i', 'pipe:0', '-f', 'flac', 'pipe:1', stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -178,14 +178,25 @@ class BatchTranscriber:
                 yield audio[offset:offset + 65536]
 
         async with self.client() as client:
-            response = await client.post('/v2/upload', content=chunks(), headers={
-                'Content-Type': 'application/octet-stream', 'Content-Length': str(len(audio))})
-            response.raise_for_status()
-            response = await client.post('/v2/transcript', json={
-                'audio_url': response.json()['upload_url'],
-                'speech_models': ['universal-3-pro', 'universal-2'],
-                'speaker_labels': True, 'language_detection': True})
-            response.raise_for_status()
+            if not upload_url:
+                checkpoint(stage='uploading')
+                response = await client.post('/v2/upload', content=chunks(), headers={
+                    'Content-Type': 'application/octet-stream', 'Content-Length': str(len(audio))})
+                response.raise_for_status()
+                upload_url = response.json()['upload_url']
+                checkpoint(upload_url=upload_url)
+            # A lost POST response is ambiguous: never silently create a second paid job.
+            checkpoint(stage='submitting', submission_uncertain=True)
+            try:
+                response = await client.post('/v2/transcript', json={
+                    'audio_url': upload_url,
+                    'speech_models': ['universal-3-pro', 'universal-2'],
+                    'speaker_labels': True, 'language_detection': True})
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if 400 <= exc.response.status_code < 500:
+                    checkpoint(submission_uncertain=False)
+                raise
             return response.json()['id']
 
     async def result(self, job_id):
@@ -227,19 +238,50 @@ class RecordingTranscriptions:
                     r.add(db.recording_transcriptions, meeting_id=mid, recording_id=rid, state=value)
             return value
 
-    def start(self, who, mid, rid, *, retry=False):
-        if not self.available:
-            raise Problem('Configure AssemblyAI to verify saved audio.', 503)
+    async def finish_recording(self, who, mid, rid, live):
+        """Only observed transport/finalization failures request saved-audio repair."""
+        bounds = live.repair_bounds() if live else None
+        self.state(who, mid, rid, phase='live_ready' if live else 'unverified',
+            message='', summary_phase='building')
+        if bounds and self.available:
+            self.state(who, mid, rid, phase='unverified', summary_phase='pending', mode='repair', repair_start_ms=bounds[0], repair_end_ms=bounds[1])
+            self.start(who, mid, rid)
+        else:
+            if bounds:
+                self.state(who, mid, rid, phase='interrupted', message='Live transcription was interrupted. Existing transcript is available.')
+            self.schedule_summary(who, mid, rid)
+
+    def schedule_summary(self, who, mid, rid):
+        if rid in self.tasks:
+            return
+        self.state(who, mid, rid, summary_phase='building', summary_error='')
+        task = asyncio.create_task(self.update_summary(who, mid, rid))
+        self.tasks[rid] = task
+        task.add_done_callback(lambda _: self.tasks.pop(rid, None))
+
+    def start(self, who, mid, rid, *, retry=False, full=False):
         if rid in self.tasks:
             return
         state = self.state(who, mid, rid)
-        if state['phase'] == 'complete' and state.get('summary_phase') != 'building' and not (retry and state.get('summary_phase') == 'error'):
+        if not full and state['phase'] in {'complete', 'live_ready', 'unverified', 'interrupted'} and state.get('summary_phase') in {'building', 'error'}:
+            self.schedule_summary(who, mid, rid)
             return
-        changes = {'phase': 'complete' if state['phase'] == 'complete' else 'verifying', 'message': '', 'summary_error': ''}
-        if state['phase'] == 'complete':
+        if not self.available:
+            raise Problem('Configure AssemblyAI to repair saved audio.', 503)
+        if full:
+            state = self.state(who, mid, rid, phase='unverified', mode='full', job_id=None,
+                upload_url=None, submission_uncertain=False, provider_failed=False,
+                repair_start_ms=None, repair_end_ms=None, summary_phase='pending')
+        if state.get('submission_uncertain') and not state.get('job_id'):
+            self.state(who, mid, rid, phase='error', message='Transcription submission is unconfirmed. Use full reprocessing only if you accept a possible duplicate charge.')
+            return
+        if state['phase'] in {'complete', 'live_ready'} and state.get('summary_phase') != 'building' and not (retry and state.get('summary_phase') == 'error'):
+            return
+        changes = {'phase': state['phase'] if state['phase'] in {'complete', 'live_ready'} else 'verifying', 'message': '', 'summary_error': ''}
+        if state['phase'] in {'complete', 'live_ready'}:
             changes['summary_phase'] = 'building'
         if retry and state.get('provider_failed'):
-            changes.update(job_id=None, provider_failed=False)
+            changes.update(job_id=None, provider_failed=False, submission_uncertain=False)
         self.state(who, mid, rid, **changes)
         task = asyncio.create_task(self.run(who, mid, rid))
         self.tasks[rid] = task
@@ -248,7 +290,7 @@ class RecordingTranscriptions:
     async def run(self, who, mid, rid):
         try:
             state = self.state(who, mid, rid)
-            if state['phase'] == 'complete':
+            if state['phase'] in {'complete', 'live_ready'}:
                 await self.update_summary(who, mid, rid)
                 return
             job_id = state.get('job_id')
@@ -260,7 +302,10 @@ class RecordingTranscriptions:
             if not rec['samples']:
                 self.state(who, mid, rid, phase='complete', verified_samples=0)
                 return
+            start_ms = state.get('repair_start_ms') or 0
+            end_ms = state.get('repair_end_ms') or round(rec['samples'] * 1000 / rec['sample_rate'])
             if not job_id:
+                self.state(who, mid, rid, stage='preparing')
                 if [p['sequence'] for p in parts] != list(range(len(parts))) or sum(len(p['pcm']) for p in parts) != rec['samples'] * 2:
                     raise ValueError('Saved audio has missing parts')
                 buffer = io.BytesIO()
@@ -268,10 +313,13 @@ class RecordingTranscriptions:
                     wav.setnchannels(1)
                     wav.setsampwidth(2)
                     wav.setframerate(rec['sample_rate'])
-                    for p in parts:
-                        wav.writeframesraw(p['pcm'])
-                job_id = await asyncio.wait_for(self.provider.submit(buffer.getvalue()), 900)
-                self.state(who, mid, rid, job_id=job_id)
+                    pcm = b''.join(p['pcm'] for p in parts)
+                    wav.writeframesraw(pcm[round(start_ms * rec['sample_rate'] / 1000)*2:round(end_ms * rec['sample_rate'] / 1000)*2])
+                job_id = await asyncio.wait_for(self.provider.submit(buffer.getvalue(),
+                    upload_url=state.get('upload_url'),
+                    checkpoint=lambda **changes: self.state(who, mid, rid, **changes)), 900)
+                self.state(who, mid, rid, job_id=job_id, submission_uncertain=False)
+            self.state(who, mid, rid, stage='polling')
             deadline = time.monotonic() + 1800
             failures = 0
             while True:
@@ -286,7 +334,7 @@ class RecordingTranscriptions:
                     continue
                 if result.get('status') == 'completed':
                     duration = result.get('audio_duration')
-                    if isinstance(duration, (int, float)) and duration + 2 < rec['samples'] / rec['sample_rate']:
+                    if isinstance(duration, (int, float)) and duration + 2 < (end_ms - start_ms) / 1000:
                         self.state(who, mid, rid, provider_failed=True)
                         raise ValueError('Provider processed only part of the saved audio')
                     break
@@ -296,6 +344,17 @@ class RecordingTranscriptions:
                 if time.monotonic() > deadline:
                     raise TimeoutError('Audio verification timed out')
                 await asyncio.sleep(POLL_SECONDS)
+            # Range jobs return relative timestamps. Offset before merging; never
+            # overwrite a live utterance with only its clipped boundary words.
+            if start_ms:
+                for passage in result.get('utterances') or []:
+                    for w in passage.get('words') or []:
+                        w['start'] += start_ms
+                        w['end'] += start_ms
+                for w in result.get('words') or []:
+                    w['start'] += start_ms
+                    w['end'] += start_ms
+            self.state(who, mid, rid, stage='applying')
             # Applying additions and invalidating summaries is one owner-scoped transaction.
             async with self.locks[mid]:
                 with self.store.scope(who) as r:
@@ -303,7 +362,7 @@ class RecordingTranscriptions:
                     if not rec:
                         return
                     existing = r.list(db.utterances, db.utterances.c.recording_id == rid)
-                    changed = reconcile_passages(r, result, existing, rid)
+                    changed = [] if state.get('mode') == 'repair' else reconcile_passages(r, result, existing, rid)
                     additions = missing_passages(result, existing, round(rec['samples'] / rec['sample_rate'] * 1000), rid)
                     for values in additions:
                         values['speaker'] = values['speaker'].replace('Recovered speaker ', 'Speaker ', 1)
@@ -315,7 +374,8 @@ class RecordingTranscriptions:
                         invalidate(r, mid)
                     row = r.list(db.recording_transcriptions, db.recording_transcriptions.c.recording_id == rid)[0]
                     r.change(db.recording_transcriptions, row['id'], state={**row['state'],
-                        'phase': 'complete', 'verified_samples': rec['samples'], 'recovered_passages': len(additions),
+                        'phase': 'complete', 'stage': 'complete', 'upload_url': None,
+                        'verified_samples': rec['samples'] if state.get('mode') != 'repair' else 0, 'recovered_passages': len(additions),
                         'corrected_passages': len(changed) - len(additions),
                         'message': '', 'summary_phase': 'building', 'updated_at': time.time()})
                     r.log('meeting.transcript_verified', meeting_id=mid, recording_id=rid, recovered_passages=len(additions))
@@ -328,14 +388,17 @@ class RecordingTranscriptions:
         except asyncio.CancelledError:
             raise  # Persist the job ID so a subsequent visit resumes polling.
         except Exception as exc:
-            logger.warning('Meeting audio verification failed: recording=%s type=%s', rid, type(exc).__name__)
+            stage = self.state(who, mid, rid).get('stage', 'preparing')
+            logger.warning('Meeting transcript repair failed: recording=%s stage=%s type=%s status=%s', rid, stage, type(exc).__name__, exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None)
             code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
             message = ('Transcription access was denied. Check the AssemblyAI key.' if code in {401, 403} else
                 'Transcription quota or rate limit reached. Retry later.' if code == 429 else
                 'Audio upload or verification timed out. Retry to continue.' if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else
-                'Audio is saved. Verification failed; retry to continue.')
+                f'Audio and existing transcript are available. Repair failed during {stage}.')
+            if self.state(who, mid, rid).get('submission_uncertain'):
+                message = 'Transcription submission is unconfirmed. Existing transcript is available. Full reprocessing may cause a duplicate charge.'
             with contextlib.suppress(Problem):
-                self.state(who, mid, rid, phase='error', message=message)
+                self.state(who, mid, rid, phase='error', message=message, error_stage=stage, error_type=type(exc).__name__, error_status=code)
 
     async def update_summary(self, who, mid, rid):
         try:
@@ -349,14 +412,17 @@ class RecordingTranscriptions:
 
     def resume(self):
         """Startup recovery: enumerate durable jobs, then operate in each owner scope."""
-        if not self.available:
-            return
         with self.store.engine.connect() as connection:
             rows = list(connection.execute(select(db.recording_transcriptions)).mappings())
         for row in rows:
             state = row['state']
-            if state['phase'] in {'verifying', 'connecting', 'live', 'reconnecting'} or state.get('summary_phase') == 'building':
+            if state['phase'] in {'connecting', 'live', 'reconnecting'}:
+                self.state(row['owner_id'], row['meeting_id'], row['recording_id'], phase='interrupted',
+                    message='Recording was interrupted. Saved audio and the existing transcript are available.')
+            elif state['phase'] == 'verifying' and self.available:
                 self.start(row['owner_id'], row['meeting_id'], row['recording_id'])
+            elif state.get('summary_phase') == 'building' and state['phase'] in {'complete', 'live_ready', 'unverified', 'interrupted'}:
+                self.schedule_summary(row['owner_id'], row['meeting_id'], row['recording_id'])
 
     async def cancel(self, rid):
         task = self.tasks.get(rid)
@@ -382,6 +448,21 @@ class LiveTranscription:
         self.provider = None
         self.agent_context = agent_context
         self.session = 0
+        self.last_final_sample = 0
+        self.gap_start = None
+        self.gap_end = 0
+        self.terminated = False
+        self.pending_partial = False
+
+    def mark_gap(self):
+        self.gap_start = min(self.gap_start, self.last_final_sample) if self.gap_start is not None else self.last_final_sample
+        self.gap_end = self.samples
+
+    def repair_bounds(self):
+        if self.gap_start is None or not self.samples:
+            return None
+        return (max(0, round(self.gap_start * 1000 / self.rate) - 5000),
+            min(round(self.samples * 1000 / self.rate), round(self.gap_end * 1000 / self.rate) + 5000))
 
     def feed(self, pcm, samples):
         start = samples - len(pcm) // 2
@@ -389,6 +470,7 @@ class LiveTranscription:
         # Providers accept 50–1000 ms. Always send <=100 ms, including buffered stop frames.
         frame_bytes = self.rate // 10 * 2
         if self.queue.qsize() + (len(pcm) + frame_bytes - 1) // frame_bytes > self.queue.maxsize:
+            self.mark_gap()
             while not self.queue.empty():
                 self.queue.get_nowait()
             self.queue.put_nowait(None)  # Reconnect using the next frame's absolute offset.
@@ -408,13 +490,15 @@ class LiveTranscription:
                 if first is None:
                     continue
                 base_sample, pcm = first
+                if self.gap_start is not None:
+                    self.gap_end = max(self.gap_end, base_sample)
                 self.session += 1
                 session = self.session
                 self.provider = self.factory()
                 if hasattr(self.provider, 'speaker_labels'):
                     self.provider.speaker_labels = True
                 await asyncio.wait_for(self.provider.connect(**({'agent_context': self.agent_context} if self.agent_context else {})), 10)
-                await self.on_state('live', 'Live transcription reconnected. Saved audio will be checked when recording stops.' if session > 1 else '')
+                await self.on_state('live', 'Live transcription reconnected. Missing audio will be repaired when recording stops.' if session > 1 else '')
                 offset_ms = round(base_sample * 1000 / self.rate)
                 connected_at = time.monotonic()
                 first_partial = True
@@ -424,6 +508,7 @@ class LiveTranscription:
                     async for event in self.provider.events():
                         if event.type in {STTEventType.ERROR, STTEventType.TERMINATED}:
                             if self.stopping and event.type == STTEventType.TERMINATED:
+                                self.terminated = True
                                 return
                             raise ConnectionError('Transcription stream ended')
                         if event.type == STTEventType.FINAL or event.type == STTEventType.PARTIAL and first_partial:
@@ -433,7 +518,15 @@ class LiveTranscription:
                                 session, event.type.value, round((time.monotonic() - connected_at) * 1000), lag, self.queue.qsize())
                             if event.type == STTEventType.PARTIAL:
                                 first_partial = False
+                        if event.type == STTEventType.PARTIAL:
+                            self.pending_partial = bool(event.transcript)
+                        elif event.type == STTEventType.FINAL:
+                            self.pending_partial = False
                         await self.on_event(event, offset_ms, session)
+                        if event.type == STTEventType.FINAL:
+                            words = timed_words(event.raw.get('words'))
+                            if words:
+                                self.last_final_sample = max(self.last_final_sample, base_sample + round(words[-1]['end'] * self.rate / 1000))
                     if not self.stopping:
                         raise ConnectionError('Transcription stream closed')
 
@@ -470,6 +563,7 @@ class LiveTranscription:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self.mark_gap()
                 if self.stopping:
                     return
                 attempts += 1
@@ -491,6 +585,8 @@ class LiveTranscription:
                 self.provider = None
 
     async def finish(self):
+        if self.stopping:
+            return
         self.stopping = True
         if self.task:
             try:
@@ -500,3 +596,6 @@ class LiveTranscription:
                 self.task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self.task
+
+        if self.samples and (not self.terminated or self.pending_partial):
+            self.mark_gap()

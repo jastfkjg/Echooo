@@ -77,6 +77,7 @@ async def test_live_reconnect_offset_and_repeated_turn_order_are_session_local(m
     assert events[1][1:] == (1319900, 2)
     assert events[-1][0].transcript == 'Last phrase'
     assert states == ['live', 'reconnecting', 'live']
+    assert live.repair_bounds() is not None
 
 
 @pytest.mark.asyncio
@@ -122,7 +123,7 @@ def test_repair_scope_idempotency_preserves_audio_corrections_and_silence(client
     manager.settings.stt_provider = 'assemblyai';manager.settings.assemblyai_api_key = 'test-key'
     calls = []
     class Provider:
-        async def submit(self, audio):
+        async def submit(self, audio, **kwargs):
             assert audio[:4] == b'RIFF'
             calls.append('submit');return 'job-1'
         async def result(self, job):
@@ -134,7 +135,7 @@ def test_repair_scope_idempotency_preserves_audio_corrections_and_silence(client
     other = client.post('/api/meetings', json={'title': 'Other'}).json()
     assert client.post('/api/meetings/'+other['id']+'/recordings/'+rec['id']+'/transcribe').status_code == 404
     assert TestClient(app).post(url).status_code == 401
-    assert client.post(url).status_code == 202
+    assert client.post(url,json={'mode':'full'}).status_code == 202
     result = wait_ready(client, path)
     assert result['recordings'][0]['transcription']['verified_samples'] == 18*60*16000
     assert [u['content'] for u in result['utterances']] == ['A corrected opening.', 'recovered']
@@ -156,7 +157,7 @@ def test_failed_poll_resumes_saved_provider_job_without_reupload(client, app):
     manager.settings.stt_provider='assemblyai';manager.settings.assemblyai_api_key='test-key'
     calls=[]
     class Provider:
-        async def submit(self,audio): calls.append('submit');return 'saved-job'
+        async def submit(self, audio, **kwargs): calls.append('submit');return 'saved-job'
         async def result(self,job):
             calls.append(job)
             if calls.count('saved-job')==1: raise RuntimeError('Temporary failure')
@@ -164,7 +165,7 @@ def test_failed_poll_resumes_saved_provider_job_without_reupload(client, app):
         async def delete(self,job): pass
     manager.provider=Provider()
     path='/api/meetings/'+m['id'];url=path+'/recordings/'+rec['id']+'/transcribe'
-    assert client.post(url).status_code==202
+    assert client.post(url,json={'mode':'full'}).status_code==202
     assert wait_ready(client,path)['recordings'][0]['transcription']['phase']=='error'
     assert client.post(url).status_code==202
     assert wait_ready(client,path)['recordings'][0]['transcription']['phase']=='complete'
@@ -196,6 +197,7 @@ async def test_22_minute_audio_stream_and_final_tail_are_not_truncated():
     assert received==frames+1
     assert live.samples==22*60*16000+32
     assert live.session==1
+    assert live.repair_bounds() is None
 
 
 @pytest.mark.asyncio
@@ -231,7 +233,7 @@ async def test_shutdown_and_startup_resume_the_submitted_job(client, app):
     manager.settings.stt_provider='assemblyai';manager.settings.assemblyai_api_key='test-key'
     submitted=[];polling=asyncio.Event()
     class Provider:
-        async def submit(self,audio): submitted.append(1);return 'durable-job'
+        async def submit(self, audio, **kwargs): submitted.append(1);return 'durable-job'
         async def result(self,job):
             assert job=='durable-job'
             await polling.wait()
@@ -253,11 +255,11 @@ def test_provider_completion_with_short_audio_coverage_is_not_marked_verified(cl
     manager=app.state.meeting_transcriptions
     manager.settings.stt_provider='assemblyai';manager.settings.assemblyai_api_key='test-key'
     class Provider:
-        async def submit(self,audio): return 'short-job'
+        async def submit(self, audio, **kwargs): return 'short-job'
         async def result(self,job): return {'status':'completed','audio_duration':5,'text':'','utterances':[]}
     manager.provider=Provider()
     path='/api/meetings/'+m['id']
-    client.post(path+'/recordings/'+rec['id']+'/transcribe')
+    client.post(path+'/recordings/'+rec['id']+'/transcribe',json={'mode':'full'})
     result=wait_ready(client,path)
     assert result['recordings'][0]['transcription']['phase']=='error'
     assert result['recordings'][0]['transcription']['verified_samples']==0
@@ -278,3 +280,104 @@ async def test_summary_retry_does_not_retranscribe_completed_audio(client, app):
     state=manager.state(m['owner_id'],m['id'],rec['id'])
     assert calls==[rec['id']]
     assert state['phase']==state['summary_phase']=='complete'
+
+
+@pytest.mark.asyncio
+async def test_healthy_finish_and_interrupted_restart_do_not_submit_audio(client, app):
+    m, rec, _ = seed_recording(client, app, seconds=2)
+    manager = app.state.meeting_transcriptions
+    manager.settings.stt_provider = 'assemblyai'
+    manager.settings.assemblyai_api_key = 'test'
+    class Provider:
+        async def submit(self, *args, **kwargs):
+            pytest.fail('Healthy or interrupted recordings must not auto-submit')
+    manager.provider = Provider()
+    live = LiveTranscription(None, 16000, None, None)
+    live.samples = 32000
+    live.terminated = True
+    await manager.finish_recording(m['owner_id'], m['id'], rec['id'], live)
+    assert manager.state(m['owner_id'], m['id'], rec['id'])['phase'] == 'live_ready'
+    await manager.tasks[rec['id']]
+    manager.state(m['owner_id'], m['id'], rec['id'], phase='live')
+    manager.resume()
+    assert manager.state(m['owner_id'], m['id'], rec['id'])['phase'] == 'interrupted'
+    assert not manager.tasks
+    path = '/api/meetings/' + m['id']
+    assert client.get(path).status_code == 200
+    assert client.post(path + '/recordings/' + rec['id'] + '/transcribe').status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_gap_repair_sends_window_and_restores_absolute_timestamps(client, app):
+    import io, wave
+    m, rec, original = seed_recording(client, app, seconds=60)
+    manager = app.state.meeting_transcriptions
+    manager.settings.stt_provider = 'assemblyai'
+    manager.settings.assemblyai_api_key = 'test'
+    class Provider:
+        async def submit(self, audio, **kwargs):
+            with wave.open(io.BytesIO(audio)) as wav:
+                assert wav.getnframes() == 20 * 16000  # 20–30 s gap plus 5 s context each side.
+            return 'window-job'
+        async def result(self, job):
+            return {'status': 'completed', 'audio_duration': 20, 'utterances': [
+                {'speaker': 'A', 'words': [word('Recovered.', 6000, 7000)]}]}
+        async def delete(self, job): pass
+    manager.provider = Provider()
+    live = LiveTranscription(None, 16000, None, None)
+    live.samples, live.gap_start, live.gap_end = 60*16000, 20*16000, 30*16000
+    await manager.finish_recording(m['owner_id'], m['id'], rec['id'], live)
+    await manager.tasks[rec['id']]
+    state = manager.state(m['owner_id'], m['id'], rec['id'])
+    assert state['phase'] == 'complete' and state['mode'] == 'repair'
+    assert state['verified_samples'] == 0  # Never claim full-recording verification.
+    with app.state.store.scope(m['owner_id']) as r:
+        utterances = r.list(db.utterances, db.utterances.c.recording_id == rec['id'])
+    assert [(u['content'], u['start_ms']) for u in utterances] == [('A corrected opening.', 0), ('Recovered.', 21000)]
+
+
+@pytest.mark.asyncio
+async def test_uncertain_submission_is_not_repeated_on_retry_or_restart(client, app):
+    import httpx
+    from echooo.meeting_transcription import BatchTranscriber
+    m, rec, _ = seed_recording(client, app, seconds=2)
+    manager = app.state.meeting_transcriptions
+    manager.settings.stt_provider = 'assemblyai'
+    manager.settings.assemblyai_api_key = 'test'
+    calls = []
+    async def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == '/v2/upload':
+            return httpx.Response(200, json={'upload_url': 'https://private.test/audio'})
+        raise httpx.ReadTimeout('lost response', request=request)
+    provider = BatchTranscriber(manager.settings)
+    provider.client = lambda: httpx.AsyncClient(base_url='https://example.test', transport=httpx.MockTransport(handler))
+    manager.provider = provider
+    manager.start(m['owner_id'], m['id'], rec['id'], full=True)
+    await manager.tasks[rec['id']]
+    state = manager.state(m['owner_id'], m['id'], rec['id'])
+    assert state['submission_uncertain'] and state['error_stage'] == 'submitting'
+    manager.start(m['owner_id'], m['id'], rec['id'], retry=True)
+    manager.resume()
+    assert calls == ['/v2/upload', '/v2/transcript']
+    assert not manager.tasks
+    public = client.get('/api/meetings/' + m['id']).json()['recordings'][0]['transcription']
+    assert 'upload_url' not in public
+    await app.state.meeting_findings.before_record(m['owner_id'], m['id'])
+
+
+@pytest.mark.asyncio
+async def test_upload_checkpoint_skips_duplicate_upload():
+    import httpx, json
+    from echooo.config import Settings
+    from echooo.meeting_transcription import BatchTranscriber
+    calls, checkpoints = [], []
+    async def handler(request):
+        calls.append(request.url.path)
+        assert json.loads(request.content)['audio_url'] == 'https://private.test/saved'
+        return httpx.Response(200, json={'id': 'existing-upload-job'})
+    provider = BatchTranscriber(Settings(assemblyai_api_key='test'))
+    provider.client = lambda: httpx.AsyncClient(base_url='https://example.test', transport=httpx.MockTransport(handler))
+    await provider.submit(b'audio', upload_url='https://private.test/saved', checkpoint=lambda **state: checkpoints.append(state))
+    assert calls == ['/v2/transcript']
+    assert checkpoints == [{'stage': 'submitting', 'submission_uncertain': True}]

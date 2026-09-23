@@ -219,10 +219,7 @@ class BotRecording:
                 self.pending.clear()
             await self.live.finish()
         self.writer.clear()
-        if self.samples and self.manager.transcriptions.available:
-            self.manager.transcriptions.start(self.who, self.mid, self.rec['id'])
-        else:
-            await self.state('unverified', '')
+        await self.manager.transcriptions.finish_recording(self.who, self.mid, self.rec['id'], self.live)
 
 
 class MeetingBots:

@@ -169,20 +169,32 @@ Automated tests use simulated provider events or HTTP transports to verify proto
 ## Meeting transcription recovery
 
 Live audio saving does not wait for the STT socket. Reconnects use absolute audio
-sample offsets and connection-scoped turn IDs. When a recording stops, a durable
-verification job checks the saved audio, refines machine-generated text and speaker
-labels, and fills uncovered word intervals. Human-edited fields remain intact;
-legacy records without provenance retain their text. Passage IDs and audio anchors
-survive correction, and affected notes become stale. Summary refresh happens after verification.
-The `meeting_recording_transcriptions` table is created on startup without a
-recordings-table rewrite. In-flight jobs resume at startup or when the meeting is
-opened. Run only one application worker, including recovery workers.
+sample offsets and connection-scoped turn IDs. Normal recordings retain the live
+transcript without submitting the full audio again. Transport loss, queue overflow,
+or incomplete finalization trigger an additive repair of the suspected interval,
+with five seconds of context on each side. Multiple interruptions currently use
+one window spanning the affected intervals. This can include substantial audio
+when streaming was unavailable for a long period; it is not a completeness guarantee.
+Repair fills uncovered words and preserves existing transcript text and edits.
+
+“Reprocess full recording” explicitly requests a new full AssemblyAI job after a
+cost confirmation. It refines machine text/speakers while preserving manual edits.
+Repair failure does not block reading, Q&A, or final-record generation. Active
+repairs are awaited before finalization to avoid capturing a changing transcript.
+
+Durable checkpoints retain the upload URL and provider job ID. Ordinary retry
+reuses them; an ambiguous job-creation response is never automatically resubmitted.
+Explicit full reprocessing can duplicate an unconfirmed job and warns accordingly.
+The frontend never receives the private upload URL. Logs and state identify the
+failed stage, exception type, and HTTP status without provider bodies or credentials.
+Startup resumes requested jobs and summary work only. Interrupted live recordings
+are marked for review, not silently submitted. Run one application worker.
 
 The additive `meeting_utterance_sources` table stores session/turn references,
 word timestamps, and field-level edit provenance. Streaming `SpeakerRevision`
 events are applied before termination; word-level speaker changes split passages.
 Speaker labels remain connection-scoped during live reconnects; full-recording
-verification reconciles them afterward. No participant identity is guessed from
+reprocessing can reconcile them afterward. No participant identity is guessed from
 an unknown/short utterance, and independent recordings are not voiceprint-matched.
 
 Both recording paths publish temporary text and durable corrections over the

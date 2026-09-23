@@ -126,8 +126,6 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 with store.scope(who) as r:
                     need(r.get(db.meetings, mid), 'Meeting')
                     states = r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid)
-                if any(row['state'].get('phase') == 'error' for row in states):
-                    raise Problem('Retry the saved-audio transcript check before finalizing.', 409)
                 if not any(row['state'].get('phase') == 'verifying' for row in states):
                     return  # Old generated notes may still run; they do not gate the approved record.
                 if asyncio.get_running_loop().time() >= deadline:
@@ -156,8 +154,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             recordings = r.list(db.recordings, db.recordings.c.meeting_id == mid)
             for rec in recordings:
                 rec['transcription'] = states.get(rec['id'], {'phase': 'unverified', 'verified_samples': 0})
+                rec['transcription'].pop('upload_url', None)
                 if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
-                    rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
+                    rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording was interrupted. Saved audio and the existing transcript are available.'}
             return {**m, 'knowledge': knowledge.view(who, mid), "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
                 "utterances": [{**u, "user_edited": u["id"] in edited} for u in r.list(db.utterances, db.utterances.c.meeting_id == mid)],
                 "assistant_utterances": speech_transcript(r, mid, recordings),
@@ -333,7 +332,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         result = view(who, mid)
         if mid not in captures and transcriptions.available:
             for rec in result['recordings']:
-                if rec['transcription']['phase'] in {'verifying', 'interrupted'}:
+                if rec['transcription']['phase'] == 'verifying':
                     transcriptions.start(who, mid, rec['id'])
         return result
 
@@ -386,7 +385,17 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 raise Problem('Select an audio recording.')
         if mid in captures:
             raise Problem('Stop recording before checking saved audio.', 409)
-        transcriptions.start(who, mid, rid, retry=True)
+        try:
+            body = await request.json() if await request.body() else {}
+        except ValueError:
+            raise Problem('Invalid transcription request.')
+        mode = body.get('mode', 'retry') if isinstance(body, dict) else None
+        if mode not in {'full', 'retry'}:
+            raise Problem('Choose retry or full reprocessing.')
+        state = transcriptions.state(who, mid, rid)
+        if mode == 'retry' and not (state.get('job_id') or state.get('mode') or state.get('summary_phase') == 'error'):
+            raise Problem('No repair task to retry. Choose full reprocessing explicitly.', 409)
+        transcriptions.start(who, mid, rid, retry=True, full=mode == 'full')
         return view(who, mid)
 
     @app.delete("/api/meetings/{mid}")
@@ -787,7 +796,6 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                     await answers.close()
                     if live:
                         await live.finish()
-                        live = None
                     await send({'type': 'stopped'})
                     break
                 elif packet.get('text'):
@@ -812,9 +820,6 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             captures.discard(mid)
             if rec:
                 with contextlib.suppress(Exception):
-                    if samples and transcriptions.available:
-                        transcriptions.start(who, mid, rec['id'])
-                    else:
-                        transcriptions.state(who, mid, rec['id'], phase='unverified')
+                    await transcriptions.finish_recording(who, mid, rec['id'], live)
             with contextlib.suppress(Exception):
                 await ws.close()

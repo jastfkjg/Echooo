@@ -284,6 +284,7 @@ def test_capture_control_does_not_drop_pcm(client):
 def test_capture_routes_live_finals_to_answers_and_keeps_interruption_audio(client, app, monkeypatch):
     import echooo.meetings as routes
     class Live:
+        def repair_bounds(self): return None
         def __init__(self, factory, rate, consume, state):
             self.consume, self.count, self.tasks = consume, 0, []
         def start(self):
