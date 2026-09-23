@@ -27,3 +27,18 @@ test('trace separates actual model input and output and escapes source text',asy
   assert.ok(html.indexOf('LLM 1')<html.indexOf('Search / retrieval'));
   assert.ok(html.indexOf('Search / retrieval')<html.indexOf('LLM 2'));
 });
+
+test('grouped evidence renders readable turns and matches original sources',async()=>{
+  const {renderAnswerTrace}=await import('../web/meeting-debug.js');
+  const a={id:'a',recording_id:'r',offset:0,content:'The project'};
+  const b={id:'b',recording_id:'r',offset:0,content:'started <January>.'};
+  const missing={id:'b',recording_id:'r',offset:1500,content:'Another excerpt.'};
+  const context={retrieval:{passages:[{recording_id:'r',turns:[{
+    speaker:'Human',source_ids:['a','b'],content:'The project started <January>.'}]}]}};
+  const trace={search:{result:{passages:[a,b,missing]}},calls:[{status:'validated',context}]};
+  assert.deepEqual(evidenceDiff(trace).map(p=>p.sent),[true,true,false]);
+  const html=renderAnswerTrace({trace,event:{}});
+  assert.ok(html.includes('The project started &lt;January&gt;.'));
+  assert.ok(html.includes('Evidence block 1'));
+  assert.ok(!html.includes('started <January>'));
+});

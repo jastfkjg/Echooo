@@ -21,10 +21,14 @@ conversation; valid citations alone do not prove semantic correctness.
   bigrams with BM25 ranking. No embedding credentials or vector service are required.
 - Search covers the saved meeting history, including text outside the recent window
   and beyond the beginning of long passages. Candidates include strong matches,
-  later matches, and neighboring context, ordered by recording/audio time.
-- Recent passages: at most 60 and 12,000 text characters. Search results: at most
-  18,000 text characters. The serialized model context, including metadata, is capped
-  at 40,000 characters; lower-priority history/knowledge is dropped first. This is a
+  later matches, and neighboring context. Adjacent same-speaker ASR fragments are
+  joined before ranking, bounded by a 2-second gap, 30-second span and 1,500 characters.
+  Each hit includes neighboring turns within 10 seconds in the same recording.
+  Windows are ranked by relevance, with two candidate slots reserved for later matches;
+  turns within each window retain recording/audio order. Long turns use overlapping excerpts.
+- Recent discussion: at most 6 turns and 3,000 text characters, assembled from the
+  latest 60 ASR rows. Search results: up to 8 evidence windows and 18,000 text characters. The serialized model context, including metadata, is capped
+  at 40,000 characters; lower-priority history/knowledge is dropped first; evidence windows are removed whole. This is a
   character budget, not a provider-specific token guarantee.
 - At most two model calls; generation plus search has a 12-second deadline, with a
   2-second search deadline. TTS and waiting for the floor are separate. Stop cancels
@@ -36,6 +40,29 @@ conversation; valid citations alone do not prove semantic correctness.
 Lexical retrieval can miss paraphrases even with query variants. “Insufficient” means
 no supporting answer was found in the available evidence, not proof that the meeting
 never discussed the subject. Independent semantic evaluation remains necessary.
+
+## Model input boundaries
+
+Initial and final synthesis calls use separate prompts. The final prompt contains no
+search action schema or query rules. `action=answer` returns a final response;
+`supported`, `insufficient`, `conflicting`, and `not_applicable` describe its support.
+The model must inspect discussion, knowledge, and retrieved evidence, answer at the
+precision actually stated, and distinguish missing evidence from an ambiguous question.
+Explicit corrections may resolve a conflict; a later timestamp alone cannot.
+
+The model receives an allowlisted payload. Transcript blocks carry a recording ID
+once, with turns containing readable text, speaker/timing, and original `source_ids`.
+Knowledge carries only ID, title, and content. Hashes, raw offsets, ranking scores,
+counts, memory versions, project settings, and the search-enabled flag remain on the
+server. Empty knowledge and conversation-history arrays are omitted. Truncation flags
+are emitted only when true. Budgeting measures the actual serialized model payload.
+
+`recent_questions` provides conversational background, never factual evidence. Assistant
+speech/events are stored separately from human utterances and excluded from retrieval.
+Previously captured assistant audio already saved as human ASR is not retrospectively
+reclassified by this change. Source hashes and authorization checks still protect
+original citations before delivery. Saved traces record the exact compact input, while
+search diagnostics retain original rows for inspection.
 
 ## Feedback and persistence
 
@@ -203,3 +230,21 @@ trace of every background LLM operation (such as findings or summaries).
 Answer inputs omit absent project configuration and knowledge-status UI strings.
 An empty knowledge list has no bearing on meeting evidence. Server-side knowledge
 scope, citation checks and authorization remain authoritative.
+
+### Input simplification verification (2026-09-23)
+
+- Python suite: 398 passed, 1 skipped. JavaScript suite: 128 passed.
+- Configured live model (`deepseek-v4-pro`): 13/13 synthetic checks passed after
+  clarifying the general distinction between missing evidence and ambiguous intent,
+  and between explicit replacement and unresolved conflict. Cases include month-only
+  and seasonal dates, Mandarin evidence, missing facts, proposals, corrections,
+  conflicts, general advice, and injected source instructions.
+- Replayed the supplied incident's final stage using its original retrieved evidence,
+  six recent turns, the compact payload, and the final-stage prompt. The model returned
+  `answer / supported`, “The project started in January.”, citing original source
+  `69719218e358ff34b71791529440e0a2`. Serialized user input decreased from 26,495 to
+  4,806 characters (about 82%). This replay checks synthesis over the supplied evidence;
+  the full original meeting database was not available for replaying historical search.
+- The live evaluation checks action, support, and required citations; replies were also
+  inspected manually. These finite checks do not guarantee semantic recall or eliminate
+  future model errors. No running deployment or historical transcript data was changed.

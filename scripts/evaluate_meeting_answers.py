@@ -17,6 +17,17 @@ from echooo.meeting_answers import generate
 from echooo.meeting_retrieval import recent_passages
 
 CASES = [
+    ('month without year', ['The project started in January and lasted about 4 months.'], 75,
+     'When did the project start?', 'answer', 'supported', 0),
+    ('different date precision', ['The migration began in late autumn.'], 75,
+     'When did the migration begin?', 'answer', 'supported', 0),
+    ('Mandarin partial date', ['试点从五月开始，持续了六周。'], 75,
+     '试点什么时候开始的？', 'answer', 'supported', 0),
+    ('unresolved conflict', ['Alice says the rollout began in March.',
+     'Bob says the same rollout began in April. Neither account has been verified.'], 0,
+     'When did the rollout begin?', 'answer', 'conflicting', 0),
+    ('general guidance', [], 0, 'How can I prepare an effective meeting agenda?',
+     'answer', 'not_applicable', None),
     ('recent decision', ['We have decided to use Telegram for team communication.'], 0,
      'What communication platform did we choose?', 'answer', 'supported', 0),
     ('earlier decision', ['We have decided to use Telegram for team communication.'], 75,

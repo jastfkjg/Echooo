@@ -282,7 +282,7 @@ async def test_repo_question_reaches_model_with_shared_memory_and_returns_citati
     agent = connect_agent(client, app, m['id'])
     agent.settings = replace(agent.settings, llm_provider='openai_compatible')
     async def answer(system, context, **kwargs):
-        assert context['project'] == 'Assembly.AI'
+        assert 'project' not in context
         assert context['knowledge'][0]['content'] == repo['content']
         return {'action':'answer','support':'supported','reply': repo['content'], 'citations': [repo['id']]}
     agent.intelligence.json_call = answer

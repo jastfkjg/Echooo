@@ -37,6 +37,10 @@ async def request(agent, responses, question='Which communication platform was s
     return event, calls
 
 
+def wire_ids(blocks):
+    return {sid for block in blocks for turn in block['turns'] for sid in turn['source_ids']}
+
+
 def detail(agent):
     return list(meeting_answers.checks(agent.store, agent.who, agent.mid).values())[-1]
 
@@ -47,7 +51,7 @@ async def test_recent_answer_needs_one_model_call_and_no_search(agent, monkeypat
         pytest.fail('Recent supported answer must not search')
     monkeypatch.setattr(meeting_answers, 'search_meeting_evidence', forbidden)
     event, calls = await request(agent, [answer('Telegram was selected.', [source['id']])])
-    assert len(calls) == 1 and calls[0]['search_available']
+    assert len(calls) == 1 and 'retrieval' not in calls[0]
     assert event['status'] == 'submitted'
     assert detail(agent)['support'] == 'supported' and not detail(agent)['search_used']
     assert agent.events()[-1]['citations'][0]['content'] == source['content']
@@ -63,10 +67,10 @@ async def test_search_finds_old_evidence_and_adjacent_answer_without_foreign_dat
     add(agent, 'PRIVATE_OTHER_MEETING communication platform.', mid=other['id'])
     await agent.accept('private', 'PRIVATE_CHAT communication platform', 'private', 'other', reply=False)
     def final(context):
-        assert not context['search_available']
-        assert topic['id'] not in {p['id'] for p in context['discussion']}
+        assert 'search_available' not in context
+        assert topic['id'] not in wire_ids(context['discussion'])
         retrieved = context['retrieval']['passages']
-        assert {topic['id'], decision['id']} <= {p['id'] for p in retrieved}
+        assert {topic['id'], decision['id']} <= wire_ids(retrieved)
         assert 'PRIVATE_' not in str(context)
         return answer('Telegram.', [decision['id']])
     event, calls = await request(agent, [{'action': 'search', 'queries': ['communication platform']}, final])
@@ -253,7 +257,7 @@ def test_search_never_reads_another_owner_even_with_forged_meeting_id(agent):
 async def test_initial_insufficiency_falls_back_to_one_search_before_answering(agent):
     _, calls = await request(agent, [answer('I cannot tell from recent context.', support='insufficient'),
         answer('I did not find an approved budget in the available records.', support='insufficient')])
-    assert len(calls) == 2 and not calls[-1]['search_available']
+    assert len(calls) == 2 and 'retrieval' in calls[-1]
     assert detail(agent)['search_used'] and detail(agent)['support'] == 'insufficient'
 
 
@@ -276,7 +280,7 @@ def test_total_context_budget_includes_metadata_and_keeps_retrieval():
         'knowledge': [{'id': 'knowledge', 'content': 'b' * 30000}], 'recent_questions': [],
         'retrieval': {'passages': [{'id': 'old', 'content': 'Earlier evidence.'}], 'truncated': False}}
     result = meeting_answers.bounded_context(context)
-    assert len(json.dumps(result, ensure_ascii=False)) <= meeting_answers.CONTEXT_CHARS
+    assert len(json.dumps(meeting_answers.model_context(result), ensure_ascii=False)) <= meeting_answers.CONTEXT_CHARS
     assert result['retrieval']['passages'][0]['id'] == 'old'
     assert len(context['discussion']) == 60
 
@@ -358,7 +362,7 @@ async def test_wire_trace_keeps_actual_messages_and_unparseable_content(agent, m
 async def test_debug_routes_show_exact_trace_without_configuration_noise(agent, client):
     source = add(agent, 'The project started in January.')
     event, calls = await request(agent, [answer('It started in January.', [source['id']])])
-    assert calls[0]['knowledge'] == []
+    assert 'knowledge' not in calls[0]
     assert 'project' not in calls[0] and 'knowledge_status' not in calls[0]
     base = f'/api/meetings/{agent.mid}/debug'
     index = client.get(base).json()
@@ -383,3 +387,88 @@ def test_runtime_diagnostics_are_bounded_and_owner_scoped():
     assert debug.snapshot('other-owner', 'debug-meeting') == []
     debug.clear('debug-owner', 'debug-meeting')
     assert not debug.snapshot('debug-owner', 'debug-meeting')
+
+
+def test_model_payload_allowlist_keeps_evidence_and_conversation_separate():
+    source = {'id': 'original', 'content': 'An observed fact.', 'source_hash': 'internal',
+        'offset': 12, 'score': 4.5, 'selection': 'match', 'truncated': False,
+        'recording_id': 'recording', 'speaker': 'Alice', 'start_ms': 10, 'end_ms': 20}
+    internal = {'question': 'What happened?', 'audience': 'voice', 'discussion': [source],
+        'project': 'Setting', 'goal': 'Setting', 'knowledge_status': 'No project selected.',
+        'search_available': False, 'knowledge': [],
+        'recent_questions': [{'question': 'Earlier question', 'reply': 'Unsupported assistant claim'}],
+        'retrieval': {'passages': [source], 'searched_chunks': 300, 'matched_chunks': 9, 'truncated': True}}
+    payload = meeting_answers.model_context(internal)
+    assert set(payload) == {'question', 'audience', 'discussion', 'recent_questions', 'retrieval'}
+    assert set(payload['retrieval']) == {'passages', 'truncated'}
+    turn = payload['retrieval']['passages'][0]['turns'][0]
+    assert set(turn) == {'source_ids', 'content', 'speaker', 'start_ms', 'end_ms'}
+    assert turn['source_ids'] == ['original']
+    assert 'Unsupported assistant claim' not in str(payload['discussion'])
+    assert internal['discussion'][0]['source_hash'] == 'internal'
+
+
+async def test_final_stage_has_no_search_contract_and_retains_original_citation(agent):
+    source = add(agent, 'The project started in January and lasted about 4 months.')
+    for i in range(70):
+        add(agent, f'Unrelated scheduling discussion {i}.')
+    _, calls = await request(agent, [{'action': 'search', 'queries': ['project start']},
+        answer('The project started in January.', [source['id']])], question='When did the project start?')
+    with agent.store.scope(agent.who) as r:
+        trace = r.list(db.meeting_answer_traces)[0]['detail']
+    first, final = [c['system'] for c in trace['calls']]
+    assert '"action":"search"' in first
+    assert '"action":"search"' not in final and 'queries' not in final
+    assert 'FINAL ANSWER STAGE' in final
+    assert source['id'] in wire_ids(calls[-1]['retrieval']['passages'])
+    assert agent.events()[-1]['citations'][0]['content'] == source['content']
+
+
+def test_fragmented_answer_is_ranked_and_returned_as_complete_turn(agent):
+    with agent.store.scope(agent.who) as r:
+        rec = r.add(db.recordings, meeting_id=agent.mid, sample_rate=16000, samples=0)
+        texts = [('A', 'When did the project start?'), ('B', 'The'), ('B', 'project'),
+            ('B', 'started in'), ('B', 'January'), ('B', 'and lasted about 4 months.')]
+        rows = [r.add(db.utterances, meeting_id=agent.mid, recording_id=rec['id'],
+            speaker=speaker, content=text, start_ms=i * 1000, end_ms=i * 1000 + 900)
+            for i, (speaker, text) in enumerate(texts)]
+    result = search_meeting_evidence(agent.store, agent.who, agent.mid, ['project start'], threading.Event())
+    blocks = meeting_answers.transcript_blocks(result['passages'])
+    assert len(blocks) == 1 and len(blocks[0]['turns']) == 2
+    turn = blocks[0]['turns'][1]
+    assert turn['content'] == 'The project started in January and lasted about 4 months.'
+    assert turn['source_ids'] == [p['id'] for p in rows[1:]]
+    assert result['searched_chunks'] == 2  # Complete turns, not six tiny ASR fragments.
+    meeting_answers.validate_sources(agent, result['passages'])
+    with agent.store.scope(agent.who) as r:
+        r.change(db.utterances, rows[4]['id'], content='February')
+    with pytest.raises(ValueError, match='changed'):
+        meeting_answers.validate_sources(agent, result['passages'])
+
+
+def test_retrieval_windows_are_bounded_and_do_not_cross_recordings_or_long_gaps(agent):
+    with agent.store.scope(agent.who) as r:
+        for n in range(12):
+            rec = r.add(db.recordings, meeting_id=agent.mid, sample_rate=16000, samples=0)
+            for i, text in enumerate(['Delivery schedule?', 'Delivery is on Tuesday.', 'Distant unrelated claim.']):
+                r.add(db.utterances, meeting_id=agent.mid, recording_id=rec['id'], speaker=str(i),
+                    content=text, start_ms=i * 1000 if i < 2 else 100000, end_ms=i * 1000 + 900 if i < 2 else 101000)
+    result = search_meeting_evidence(agent.store, agent.who, agent.mid, ['delivery schedule'], threading.Event())
+    blocks = meeting_answers.transcript_blocks(result['passages'])
+    assert 1 <= len(blocks) <= 8
+    assert all('Tuesday' in str(b) and 'Distant' not in str(b) for b in blocks)
+    assert all(len({p['recording_id'] for p in result['passages'] if p['block'] == n}) == 1
+        for n in {p['block'] for p in result['passages']})
+    assert result['truncated']
+
+
+def test_assistant_history_never_becomes_retrieval_evidence(agent):
+    with agent.store.scope(agent.who) as r:
+        r.add(db.meeting_agent_events, meeting_id=agent.mid, connection_id=agent.cid,
+            source_key='historical', audience='voice', sender='', request='When did it start?',
+            response='ASSISTANT_ONLY The project started in December.', status='spoken', error='')
+    context = agent.context({'id': 'current', 'request': 'When?', 'audience': 'voice'})
+    assert 'ASSISTANT_ONLY' in str(context['recent_questions'])
+    assert not context['discussion']
+    result = search_meeting_evidence(agent.store, agent.who, agent.mid, ['project started'], threading.Event())
+    assert result['passages'] == []

@@ -96,10 +96,10 @@ async def test_shared_recent_then_history_search_and_support_audit(browser):
     calls = []
     async def model(system, context, **kwargs):
         calls.append(context)
-        if context['search_available']:
-            assert source['id'] not in {u['id'] for u in context['discussion']}
+        if 'retrieval' not in context:
+            assert source['id'] not in {sid for b in context['discussion'] for t in b['turns'] for sid in t['source_ids']}
             return {'action': 'search', 'queries': ['Telegram decision']}
-        assert source['id'] in {u['id'] for u in context['retrieval']['passages']}
+        assert source['id'] in {sid for b in context['retrieval']['passages'] for t in b['turns'] for sid in t['source_ids']}
         return {'action': 'answer', 'support': 'supported', 'reply': 'Telegram.', 'citations': [source['id']]}
     b.intelligence.json_call = model
     await final(b, 'Echooo, which communication platform was selected?')

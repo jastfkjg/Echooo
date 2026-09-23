@@ -13,9 +13,12 @@ from sqlalchemy import func, select
 from echooo import database as db
 from echooo.meeting_knowledge import digest
 
-RECENT_CHARS = 12000
+RECENT_CHARS = 3000
 SEARCH_CHARS = 18000
 CHUNK_CHARS = 1500
+MAX_BLOCKS = 8
+TURN_GAP_MS = 2000
+WINDOW_GAP_MS = 10000
 
 
 def terms(text):
@@ -59,17 +62,47 @@ def passage(row, content=None, offset=0):
         'truncated': content is not None and len(content) != len(row['content'])}
 
 
+def utterance_units(passages):
+    """Join temporally adjacent same-speaker ASR fragments before ranking.
+
+    Unrecorded text has no reliable audio timeline and remains a separate turn.
+    Original rows remain intact for citations and post-generation integrity checks.
+    """
+    units = []
+    for p in passages:
+        last = units[-1][-1] if units else None
+        merge = (last and p['recording_id'] is not None and
+            p['recording_id'] == last['recording_id'] and p['speaker'] == last['speaker'] and
+            -500 <= p['start_ms'] - last['end_ms'] <= TURN_GAP_MS and
+            p['end_ms'] - units[-1][0]['start_ms'] <= 30000 and
+            sum(len(x['content']) for x in units[-1]) + len(p['content']) <= CHUNK_CHARS and
+            not p['truncated'] and not last['truncated'])
+        if merge:
+            units[-1].append(p)
+        else:
+            units.append([p])
+    return units
+
+
 def recent_passages(store, who, mid):
     query, order = ordered_query(who, mid)
-    result, size = [], 0
     with store.scope(who) as r:
-        for row in r.c.execute(query.order_by(*(c.desc() for c in order)).limit(60)).mappings():
-            text = row['content'][:2000]
-            if size + len(text) > RECENT_CHARS:
-                break
-            result.append(passage(row, text))
-            size += len(text)
-    return list(reversed(result))
+        rows = list(r.c.execute(query.order_by(*(c.desc() for c in order)).limit(60)).mappings())
+    units = utterance_units([passage(row, row['content'][:2000]) for row in reversed(rows)])
+    selected, size = [], 0
+    for unit in reversed(units):
+        length = sum(len(p['content']) for p in unit)
+        if len(selected) >= 6 or size + length > RECENT_CHARS:
+            break
+        selected.append(unit)
+        size += length
+    return [p for unit in reversed(selected) for p in unit]
+
+
+def adjacent(left, right):
+    a, b = left[-1], right[0]
+    return (a['recording_id'] == b['recording_id'] and
+        (a['recording_id'] is None or -500 <= b['start_ms'] - a['end_ms'] <= WINDOW_GAP_MS))
 
 
 def search_meeting_evidence(store, who, mid, queries, cancelled):
@@ -80,18 +113,26 @@ def search_meeting_evidence(store, who, mid, queries, cancelled):
     if not query_terms:
         raise ValueError('Empty meeting search terms')
     query, order = ordered_query(who, mid)
-    chunks, postings = [], defaultdict(list)
+    passages, postings = [], defaultdict(list)
     with store.scope(who) as r:
         for row in r.c.execute(query.order_by(*order).execution_options(yield_per=100)).mappings():
-            for start in range(0, len(row['content']), CHUNK_CHARS - 200):
-                if cancelled.is_set():
-                    raise TimeoutError('Meeting search cancelled')
-                text = row['content'][start:start + CHUNK_CHARS]
-                counts = Counter(terms(text))
-                index = len(chunks)
-                chunks.append((passage(row, text, start), sum(counts.values())))
-                for token in query_terms & counts.keys():
-                    postings[token].append((index, counts[token]))
+            if cancelled.is_set():
+                raise TimeoutError('Meeting search cancelled')
+            if len(row['content']) <= CHUNK_CHARS:
+                passages.append(passage(row))
+            else:
+                # Long turns need bounded overlapping excerpts; tiny ASR rows do not.
+                for start in range(0, len(row['content']), CHUNK_CHARS - 200):
+                    passages.append(passage(row, row['content'][start:start + CHUNK_CHARS], start))
+    units = utterance_units(passages)
+    chunks = []
+    for index, unit in enumerate(units):
+        if cancelled.is_set():
+            raise TimeoutError('Meeting search cancelled')
+        counts = Counter(terms(' '.join(p['content'] for p in unit)))
+        chunks.append((unit, sum(counts.values())))
+        for token in query_terms & counts.keys():
+            postings[token].append((index, counts[token]))
     if not chunks:
         return {'passages': [], 'matched_chunks': 0, 'searched_chunks': 0, 'truncated': False}
     average = max(1, sum(length for _, length in chunks) / len(chunks))
@@ -103,23 +144,28 @@ def search_meeting_evidence(store, who, mid, queries, cancelled):
                 raise TimeoutError('Meeting search cancelled')
             scores[index] += weight * frequency * 2.2 / (frequency + 1.2 * (.25 + .75 * chunks[index][1] / average))
     ranked = sorted(scores, key=lambda i: (scores[i], i), reverse=True)
-    # Reserve candidates for later matching discussion, including decision revisions.
-    hits = list(dict.fromkeys(ranked[:6] + sorted(scores, reverse=True)[:4]))
-    selected, size = set(), 0
+    # Six relevance-ranked windows plus two recent matching windows retain revisions.
+    hits = list(dict.fromkeys(ranked[:6] + sorted(scores, reverse=True)[:2]))
+    selected, size, blocks = {}, 0, 0
     for index in hits:
-        item = chunks[index][0]
-        if size + len(item['content']) <= SEARCH_CHARS:
-            selected.add(index)
-            size += len(item['content'])
-    for index in hits:
-        for neighbor in (index - 1, index + 1):
-            if (0 <= neighbor < len(chunks) and neighbor not in selected and
-                    chunks[neighbor][0]['recording_id'] == chunks[index][0]['recording_id']):
-                item = chunks[neighbor][0]
-                if size + len(item['content']) <= SEARCH_CHARS:
-                    selected.add(neighbor)
-                    size += len(item['content'])
-    return {'passages': [{**chunks[i][0], 'score': round(scores.get(i, 0), 6),
-            'selection': 'match' if i in hits else 'adjacent'} for i in sorted(selected)],
+        if index in selected or blocks >= MAX_BLOCKS:
+            continue
+        window = [index]
+        if index > 0 and adjacent(units[index - 1], units[index]):
+            window.insert(0, index - 1)
+        if index + 1 < len(units) and adjacent(units[index], units[index + 1]):
+            window.append(index + 1)
+        window = [i for i in window if i not in selected]
+        length = sum(len(p['content']) for i in window for p in units[i])
+        # Keep each selected Q&A window whole rather than clipping its answer.
+        if size + length > SEARCH_CHARS:
+            continue
+        for i in window:
+            selected[i] = blocks
+        blocks += 1
+        size += length
+    return {'passages': [{**p, 'block': selected[i], 'score': round(scores.get(i, 0), 6),
+            'selection': 'match' if i in hits else 'adjacent'}
+            for i in sorted(selected, key=lambda i: (selected[i], i)) for p in units[i]],
         'matched_chunks': len(scores), 'searched_chunks': len(chunks),
-        'truncated': len(selected & scores.keys()) < len(scores)}
+        'truncated': len(selected.keys() & scores.keys()) < len(scores)}

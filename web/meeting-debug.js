@@ -17,7 +17,10 @@ function contextView(context){
     fold('Context metadata',json(other));
 }
 function passagesView(passages){
-  return passages?.length?passages.map((p,i)=>`<article class="debug-passage"><h4>Passage ${i+1}${p.speaker?' · '+esc(p.speaker):''}</h4>${text(p.content)}${fold('Source details',json(Object.fromEntries(Object.entries(p).filter(([k])=>k!=='content'))))}</article>`).join(''):'<p class="muted">No passages.</p>';
+  return passages?.length?passages.map((p,i)=>{
+    if(Array.isArray(p.turns))return `<section class="debug-passage"><h4>Evidence block ${i+1}</h4>${passagesView(p.turns)}${fold('Recording',text(p.recording_id||'Meeting notes'))}</section>`;
+    return `<article class="debug-passage"><h4>Passage ${i+1}${p.speaker?' · '+esc(p.speaker):''}</h4>${text(p.content)}${fold('Source details',json(Object.fromEntries(Object.entries(p).filter(([k])=>k!=='content'))))}</article>`;
+  }).join(''):'<p class="muted">No passages.</p>';
 }
 function llmView(call,i){
   const messages=call.request?.messages;
@@ -55,7 +58,9 @@ export function evidenceDiff(trace){
   const retrieved=trace?.search?.result?.passages||[];
   const sent=trace?.calls?.at(-1)?.context?.retrieval?.passages||[];
   return retrieved.map(p=>({id:p.id,offset:p.offset,recording_id:p.recording_id,score:p.score,selection:p.selection,
-    sent:sent.some(s=>s.id===p.id&&s.offset===p.offset&&s.content===p.content),content:p.content}));
+    sent:sent.some(s=>Array.isArray(s.turns)
+      ?s.recording_id===p.recording_id&&s.turns.some(t=>t.source_ids?.includes(p.id)&&t.content.includes(p.content))
+      :s.id===p.id&&s.offset===p.offset&&s.content===p.content),content:p.content}));
 }
 export async function showMeetingDebug({api,shell,isCurrent},id){
   const base=`/meetings/${encodeURIComponent(id)}`;
