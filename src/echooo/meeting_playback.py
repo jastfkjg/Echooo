@@ -14,6 +14,8 @@ class MeetingPlayback:
         self.lock = asyncio.Lock()
         self.gate = asyncio.Event(); self.gate.set()
         self.metrics = {}
+        self.on_first_audio = None
+        self.first_audio_reported = False
 
     def receive(self, data):
         if data.get('stream_id') != self.stream_id:
@@ -34,12 +36,19 @@ class MeetingPlayback:
                 result = await asyncio.wait_for(future, 8)
                 if result.get('error'):
                     raise ValueError('Remote audio playback failed')
-                self.metrics = {k: result[k] for k in ('buffered_ms', 'played_samples', 'received_samples', 'underruns') if k in result}
+                self.metrics = {k: result[k] for k in ('buffered_ms', 'played_samples', 'received_samples', 'underruns', 'first_audio_ms') if k in result}
+                if not self.first_audio_reported and self.metrics.get('played_samples', 0) > 0:
+                    self.first_audio_reported = True
+                    if self.on_first_audio:
+                        self.on_first_audio({'measurement': 'remote_output_frame',
+                            'start_to_first_audio_ms': self.metrics.get('first_audio_ms')})
                 return result
             finally:
                 self.pending.pop(request, None)
 
     async def start(self, rate):
+        self.metrics = {}
+        self.first_audio_reported = False
         self.stream_id = secrets.token_hex(12)
         self.gate.set()
         await self.command('start', sample_rate=rate)

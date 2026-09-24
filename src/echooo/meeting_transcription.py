@@ -8,7 +8,7 @@ import logging
 import shutil
 import time
 import wave
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import httpx
 from sqlalchemy import select
@@ -443,6 +443,7 @@ class LiveTranscription:
         self.on_event, self.on_state = on_event, on_state
         self.queue = asyncio.Queue(maxsize=150)  # 15 seconds at the normal 100 ms frame size.
         self.samples = 0
+        self.audio_arrivals = deque(maxlen=600)
         self.stopping = False
         self.task = None
         self.provider = None
@@ -453,6 +454,19 @@ class LiveTranscription:
         self.gap_end = 0
         self.terminated = False
         self.pending_partial = False
+
+    def annotate_final_timing(self, event, offset_ms):
+        received = event.raw['_received_monotonic'] = time.monotonic()
+        if event.type != STTEventType.FINAL:
+            return
+        words = timed_words(event.raw.get('words'), offset_ms)
+        if not words:
+            return
+        end_sample = round(words[-1]['end'] * self.rate / 1000)
+        frame = next((item for item in self.audio_arrivals if item[0] < end_sample <= item[1]), None)
+        if frame:
+            event.raw['_stt_finalization_ms'] = max(0, round((received - frame[2]) * 1000))
+            event.raw['_stt_frame_ms'] = round((frame[1] - frame[0]) * 1000 / self.rate)
 
     def mark_gap(self):
         self.gap_start = min(self.gap_start, self.last_final_sample) if self.gap_start is not None else self.last_final_sample
@@ -466,6 +480,7 @@ class LiveTranscription:
 
     def feed(self, pcm, samples):
         start = samples - len(pcm) // 2
+        self.audio_arrivals.append((start, samples, time.monotonic()))
         self.samples = samples
         # Providers accept 50–1000 ms. Always send <=100 ms, including buffered stop frames.
         frame_bytes = self.rate // 10 * 2
@@ -506,6 +521,7 @@ class LiveTranscription:
                 async def receive():
                     nonlocal first_partial
                     async for event in self.provider.events():
+                        self.annotate_final_timing(event, offset_ms)
                         if event.type in {STTEventType.ERROR, STTEventType.TERMINATED}:
                             if self.stopping and event.type == STTEventType.TERMINATED:
                                 self.terminated = True

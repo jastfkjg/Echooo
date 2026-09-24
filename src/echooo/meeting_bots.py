@@ -191,6 +191,9 @@ class BotRecording:
             self.writer.clear()
 
     async def consume(self, event, offset_ms, session):
+        from echooo.answer_timing import stt_anchor
+        if event.type == STTEventType.FINAL:
+            event.raw['_answer_timing'] = stt_anchor(event, self.rec['id'], offset_ms, round(self.samples * 1000 / RATE))
         rows = self.writer.consume(event, offset_ms, session, round(self.samples * 1000 / RATE))
         agent = self.manager.agents.get(self.row['id'])
         if agent and (event.type == STTEventType.PARTIAL or event.type == STTEventType.FINAL and rows):

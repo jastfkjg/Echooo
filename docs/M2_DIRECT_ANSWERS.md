@@ -139,11 +139,12 @@ synthetic model evaluation does not certify them.
   Partial transcripts never initiate answers. Turn deduplication and speaker revisions cannot replay earlier questions.
 - **Answer when called** defaults on; **Stop speaking** cancels generation or speech.
   The page shows progress and reply text, including when browser sound is blocked.
-  Completed replies appear as separate Echooo transcript entries. Activity/export
-  retain failed/interrupted replies, citations and support checks as well.
+  Completed replies appear as separate Echooo transcript entries. Open a reply to see
+  its sources, speaker, timestamps and original passage. Activity/export retain
+  failed/interrupted replies, citations and support checks as well.
 - A one-use token is delivered only to the recording socket. Playback requires a
   fresh start acknowledgement, checks evidence/knowledge again, and reports completion
-  only after the browser's start/end callbacks. Heartbeats renew an 8-second server
+  only after the browser's first-output and drained-stream reports. Heartbeats renew an 8-second server
   lease; start waits at most 5 seconds in the browser and total speech at most 120
   seconds on the server. Disconnect, stop or navigation cancels; history never plays.
 - Capture and human transcripts continue during speech. Microphone AEC is requested,
@@ -268,13 +269,70 @@ Endpoints and credentials remain server-managed, never user-supplied URLs or key
 `TTS_PROVIDER=browser` alone does not enable meeting speech; configure a server service.
 Ordinary conversation-specific voice controls are unchanged.
 
-Local TTS is generated before the one-shot playback offer, bounded to 30 seconds of
-generation and 120 seconds of mono PCM audio. It is wrapped as WAV and delivered only
-on the authorized start receipt, then played using a revocable Blob URL. This adds TTS
-generation time before local playback. Tokens/audio are not saved in answer history.
-Stop cancels pending generation; receipt checks, heartbeats, pause/resume, disconnect,
-and stale-evidence checks still govern playback. Failed TTS preserves the text reply
-and shows an error, with no automatic switch to another service or browser voice.
+Browser direct answers stream server-generated PCM after a one-shot playback authorization.
+The complete answer and citations are validated before synthesis; playback no longer
+waits for the complete WAV. A 200 ms AudioWorklet prebuffer absorbs ordinary jitter,
+with roughly one second of unplayed audio allowed in flight and a four-second hard
+worklet buffer limit. Short replies drain on the end marker. PCM continues across
+packet boundaries; pause retains queued samples and Stop discards the stream.
+Approved local suggestions retain their existing bounded WAV transport.
+
+Each offer/PCM/end packet belongs to the active capture socket and receipt. The
+server rechecks evidence before authorization and knowledge during delivery. Audio,
+receipts and tokens never enter history. First output is reported separately from
+start authorization; completion requires the synthesis end marker, first-output
+report and all sent samples consumed. Heartbeats report sample progress and renew
+the eight-second lease. Synthesis has a 30-second idle timeout and the whole stream
+is bounded to 120 seconds. Failure/Stop/disconnect cancels the producer and playback,
+retains the text, and never retries or switches voices automatically.
+
+### Answer timing and evidence (2026-09-24)
+
+Open a completed Echooo transcript entry or **View answer & sources** in the latest
+reply / Messages & activity. The owner-only `GET /api/meetings/{mid}/answers/{eid}`
+loads any saved answer by ID, independently of the latest-20 activity window.
+The first cited passage is visible immediately; additional citations expand under
+**More sources**. Sources show speaker, recording-relative start/end timestamps,
+**View transcript**, **Play original** (after capture ends), and **Copy source link**.
+Source links use `#meetings/<mid>/answers/<eid>/sources/<sid>`; transcript links use
+`#meetings/<mid>/passages/<sid>`. Refresh restores the selected evidence/recording.
+Changed sources show **Source changed** with an explicitly labeled current-transcript
+link; deleted sources remain **Source unavailable** placeholders. Original text is
+not reconstructed when no original snapshot exists. Insufficient/uncited replies do
+not acquire invented sources. The meeting export's `answers` includes all saved
+answer events and resolved citations, not only the recent activity list.
+
+New answer traces include a `timing` object, visible in **Debug → Answer timing**
+and in answer/meeting/workspace JSON exports. No database table migration is needed.
+Server milestones cover STT final receipt, queue, context preparation, each LLM call,
+retrieval, validation, floor waiting (Attendee), TTS request/first chunk/end,
+playback authorization, first output report and completion/failure. Follow-up
+classification is included in final-receipt-to-queue time. Server durations use
+one process's monotonic clock; only relative milliseconds are persisted.
+
+Question end is an STT word-end offset in the recording. A bounded in-memory audio
+arrival ring records server receipt of the frame containing the last word; its
+monotonic duration to STT final receipt includes STT queueing/provider/transport,
+excludes capture uplink, and has the recorded frame duration as its resolution.
+This survives silence without mistaking a stationary sample cursor for low latency.
+STT audio backlog is
+explicitly an **estimate**, not isolated provider/network latency. Browser capture
+worklet anchors and playback worklet timestamps share the same AudioContext clock,
+allowing question-end-to-first-output-frame measurement without subtracting host
+clocks. Browser output-device latency is reported separately when available.
+Attendee reports its own start-to-first-output-frame duration; server receipt of
+that report includes transport/polling delay and is not participant audibility.
+TTS stream duration includes playback backpressure, so overlapping stages must not
+be added. Missing timestamps remain missing, including older records and untimed
+STT events. Physical speaker/acoustic and meeting-platform delivery latency still
+require a real recording-based acceptance run.
+
+Validation covers partial delivery before synthesis finishes, bounded backpressure,
+separate authorization/first-output events, stop/failure cancellation, stale evidence,
+one-use tokens, interruption, historical source access, changed/deleted citations,
+owner/meeting isolation, export, readable source rendering, and browser audio-clock
+reports. Provider-backed 3–6 second acceptance must be measured in the deployment;
+these tests do not assert a service latency guarantee.
 
 Normal live transcription is represented in the header as `Recording · Transcribing`.
 The separate transcription area is reserved for connecting, verification, and error states.

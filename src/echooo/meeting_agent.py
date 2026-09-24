@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from echooo import database as db
 from echooo.meeting_debug import agent_record
+from echooo import answer_timing
 from echooo import meeting_answers
 from echooo.meeting_retrieval import recent_passages, transcript_stamp
 from echooo.intelligence import Intelligence
@@ -172,6 +173,8 @@ class MeetingAgent:
         with self.store.scope(self.who) as r:
             r.change(db.meeting_agent_events, event['id'], **values)
         event.update(values)
+        if values.get('status') in {'spoken', 'interrupted', 'error', 'skipped', 'uncertain'}:
+            answer_timing.mark(self, event, 'delivery_finished', outcome=values['status'])
         agent_record(self, 'delivery', answer_id=event['id'], **values)
         interventions = getattr(self.manager, 'interventions', None)
         if interventions and event['source_key'].startswith('intervention:') and 'status' in values:
@@ -184,7 +187,7 @@ class MeetingAgent:
         # Cancel work already generated under the previous policy, including queued turns.
         await self.stop(all_replies=True)
 
-    async def accept(self, key, text, audience, sender, *, reply=True):
+    async def accept(self, key, text, audience, sender, *, reply=True, timing=None):
         if not self.valid() or not isinstance(text, str) or not text.strip() or len(text) > 6000:
             return
         with self.store.scope(self.who) as r:
@@ -196,6 +199,7 @@ class MeetingAgent:
                 status='queued' if reply else 'observed', error='')
         if not reply:
             return
+        answer_timing.begin(self, event, timing)
         if self.queue.full():
             self.change(event, status='skipped', error='Too many pending questions. Please ask again shortly.')
         else:
@@ -267,14 +271,17 @@ class MeetingAgent:
         if self.decision_task and self.decision_task is not asyncio.current_task():
             self.decision_task.cancel()
 
-    async def decide_turn(self, text, key, speaker, revision):
+    async def decide_turn(self, text, key, speaker, revision, timing=None):
         try:
             context = meeting_answers.model_context(self.context({'id': '', 'request': text, 'audience': 'voice'}))
             context['speaker_relation'] = ('unknown' if not speaker or not self.conversation_speaker
                 else 'same' if speaker == self.conversation_speaker else 'different')
             context['assistant_state'] = self.phase
             agent_record(self, 'turn_input', system=TURN_SYSTEM, context=context)
+            classification_started = time.monotonic()
             result = await asyncio.wait_for(self.intelligence.json_call(TURN_SYSTEM, context, fast=True), 8)
+            if timing is not None:
+                timing = {**timing, 'turn_classification_ms': round((time.monotonic() - classification_started) * 1000)}
             agent_record(self, 'turn_output', result=result)
             if revision != self.turn_revision or not self.valid() or not self.prefs['voice_enabled']:
                 return
@@ -289,7 +296,7 @@ class MeetingAgent:
                     await self.stop(end_conversation=False)
                 self.conversation_speaker = speaker
                 self.conversation_until = time.monotonic() + 15
-                await self.accept('voice:' + key, text, 'voice', speaker or '')
+                await self.accept('voice:' + key, text, 'voice', speaker or '', timing=timing)
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -405,10 +412,10 @@ class MeetingAgent:
                 await self.stop(end_conversation=False)  # Supersede stale thinking with the follow-up.
             self.conversation_speaker = speaker
             self.conversation_until = time.monotonic() + 15
-            await self.accept('voice:' + key, text, 'voice', speaker or '')
+            await self.accept('voice:' + key, text, 'voice', speaker or '', timing=event.raw.get('_answer_timing'))
         elif candidate:
             # Run separately so model latency never blocks transcription or Stop.
-            self.decision_task = asyncio.create_task(self.decide_turn(text, key, speaker, self.turn_revision))
+            self.decision_task = asyncio.create_task(self.decide_turn(text, key, speaker, self.turn_revision, event.raw.get('_answer_timing')))
 
     def context(self, event):
         current_scope = self.manager.knowledge.snapshot(self.who, self.mid)[4]
@@ -431,6 +438,7 @@ class MeetingAgent:
             'recent_questions': history[-4:]}
 
     async def answer(self, event):
+        answer_timing.mark(self, event, 'answer_started')
         self.phase, self.error = 'thinking', ''
         self.answer_stamp = None
         self.change(event, status='thinking')
@@ -463,6 +471,7 @@ class MeetingAgent:
             raise ValueError('Meeting knowledge changed during reply')
         self.manager.knowledge.receipt(self.who, self.mid, event['id'], authorized_scope,
             [available[i] for i in dict.fromkeys(citation_ids)])
+        answer_timing.mark(self, event, 'answer_validated')
         self.speech_scope = authorized_scope
         self.change(event, response=reply)
         if not self.valid() or self.cancel.is_set():
@@ -493,6 +502,7 @@ class MeetingAgent:
     async def speak(self, text, event):
         from echooo.meeting_speech import mark_speech
         # Let the addressed speaker finish, and discard a stale answer if discussion continues.
+        answer_timing.mark(self, event, 'floor_wait_started')
         deadline = time.monotonic() + 8
         while time.monotonic() - self.last_speech < .8:
             if time.monotonic() > deadline:
@@ -503,10 +513,13 @@ class MeetingAgent:
         if event['source_key'].startswith('intervention:'):
             text = await self.manager.interventions.prepare_speech(self, event)
             self.change(event, response=text)
+        answer_timing.mark(self, event, 'floor_wait_finished')
         self.last_spoken = text
         self.echo_until = time.monotonic() + 90
         tts, pending, rate = self.tts_factory(), bytearray(), None
         streamed = False
+        answer_timing.mark(self, event, 'tts_requested')
+        self.playback.on_first_audio = lambda metrics: answer_timing.mark(self, event, 'first_audio_report_received', remote=metrics)
         async for chunk in tts.stream_audio(text, cancel=self.cancel):
             if self.cancel.is_set() or not self.prefs['voice_enabled']:
                 raise asyncio.CancelledError()
@@ -515,8 +528,10 @@ class MeetingAgent:
             if rate is not None and rate != chunk.sample_rate:
                 raise ValueError('Speech sample rate changed')
             if rate is None:
+                answer_timing.mark(self, event, 'tts_first_chunk')
                 rate = chunk.sample_rate
                 await self.playback.start(rate)
+                answer_timing.mark(self, event, 'playback_authorized')
             pending.extend(chunk.data)
             size = rate // 5 * 2
             while len(pending) >= size:
@@ -529,6 +544,7 @@ class MeetingAgent:
                     mark_speech(self, event)
                 streamed = True
                 del pending[:size]
+        answer_timing.mark(self, event, 'tts_finished')
         if pending and rate and len(pending) % 2 == 0:
             if self.phase != 'paused':
                 self.phase = 'speaking'
@@ -539,6 +555,7 @@ class MeetingAgent:
         if not streamed or (pending and len(pending) % 2):
             raise ValueError('Speech provider returned incomplete audio')
         await self.playback.finish()
+        answer_timing.mark(self, event, 'playback_finished')
         mark_speech(self, event, complete=True)
         self.echo_until = time.monotonic() + 2
         if self.conversation_until:

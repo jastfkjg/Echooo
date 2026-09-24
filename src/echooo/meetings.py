@@ -290,6 +290,19 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             r.change(db.meetings, mid, title=data.title)
         return view(owner(request), mid)
 
+    @app.get('/api/meetings/{mid}/answers/{eid}')
+    async def answer_detail(request: Request, mid: str, eid: str):
+        who = owner(request)
+        with store.scope(who) as r:
+            get(r, mid)
+            event = need(r.get(db.meeting_agent_events, eid), 'Answer')
+            if event['meeting_id'] != mid:
+                raise Problem('Answer not found.', 404)
+            checks = r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.event_id == eid)
+        return {'event': {k: event[k] for k in ('id', 'request', 'response', 'status', 'error', 'created_at')},
+            'check': checks[0]['detail'] if checks else None,
+            'citations': bots.knowledge.citations(who, mid, eid)}
+
     @app.get('/api/meetings/{mid}/debug')
     async def debug_index(request: Request, mid: str):
         who = owner(request)
@@ -322,6 +335,9 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews', 'answer_checks', 'browser_answers')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
         with store.scope(owner(request)) as r:
+            export['answers'] = [{**{k: e[k] for k in ('id', 'request', 'response', 'status', 'error', 'created_at')},
+                'citations': bots.knowledge.citations(owner(request), mid, e['id'])}
+                for e in r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid)]
             export['answer_traces'] = r.list(db.meeting_answer_traces, db.meeting_answer_traces.c.meeting_id == mid)
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})

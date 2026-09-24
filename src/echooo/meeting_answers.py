@@ -198,16 +198,21 @@ def validate_sources(agent, passages):
 
 
 async def generate(agent, event, system, context, authorized_scope):
+    from echooo.answer_timing import mark
+    mark(agent, event, 'generation_started')
     started = time.monotonic()
     detail = {'support': 'pending', 'search_used': False, 'model_calls': 0}
     with agent.store.scope(agent.who) as r:
         check = r.add(db.meeting_answer_checks, meeting_id=agent.mid, event_id=event['id'], detail=detail)
         trace = {'version': 1, 'calls': []}
-        trace_row = r.add(db.meeting_answer_traces, meeting_id=agent.mid, event_id=event['id'], detail=trace)
+        existing = r.list(db.meeting_answer_traces, db.meeting_answer_traces.c.event_id == event['id'])
+        trace_row = existing[0] if existing else r.add(db.meeting_answer_traces, meeting_id=agent.mid, event_id=event['id'], detail=trace)
 
     def save_trace():
         with agent.store.scope(agent.who) as r:
-            r.change(db.meeting_answer_traces, trace_row['id'], detail=json.loads(json.dumps(trace)))
+            current = r.get(db.meeting_answer_traces, trace_row['id'])
+            if current:
+                r.change(db.meeting_answer_traces, trace_row['id'], detail={**current['detail'], **json.loads(json.dumps(trace))})
 
     def save(**values):
         detail.update(values)
@@ -223,6 +228,8 @@ async def generate(agent, event, system, context, authorized_scope):
         async with asyncio.timeout(ANSWER_TIMEOUT):
             for _ in range(2):
                 save(model_calls=detail['model_calls'] + 1)
+                call_number = detail['model_calls']
+                mark(agent, event, f'llm_{call_number}_started')
                 call_started = time.monotonic()
                 prompt = system + (SEARCH_PROTOCOL if context['search_available'] else FINAL_PROTOCOL)
                 payload = model_context(context)
@@ -244,6 +251,7 @@ async def generate(agent, event, system, context, authorized_scope):
                     raise
                 finally:
                     JSON_CALL_TRACE.reset(token)
+                    mark(agent, event, f'llm_{call_number}_finished')
                 if not agent.valid() or agent.cancel.is_set():
                     raise asyncio.CancelledError()
                 if result['action'] == 'answer' and result['support'] == 'insufficient' and context['search_available']:
@@ -256,6 +264,7 @@ async def generate(agent, event, system, context, authorized_scope):
                         raise ValueError('Meeting discussion changed during reply')
                     validate_sources(agent, context['discussion'] + context.get('retrieval', {}).get('passages', []))
                     save(support=result['support'], action=result['action'])
+                    mark(agent, event, 'generation_finished')
                     return result, context, stamp
                 stage = 'retrieval'
                 agent.phase = 'searching'
@@ -264,9 +273,11 @@ async def generate(agent, event, system, context, authorized_scope):
                     'started_at': time.time(), 'trigger': 'model' if raw['action'] == 'search' else 'insufficient_fallback'}
                 save_trace()
                 save(search_used=True)
+                mark(agent, event, 'retrieval_started')
                 search_started = time.monotonic()
                 result = await asyncio.wait_for(asyncio.to_thread(search_meeting_evidence,
                     agent.store, agent.who, agent.mid, result['queries'], cancelled), SEARCH_TIMEOUT)
+                mark(agent, event, 'retrieval_finished')
                 trace['search']['result'] = result
                 trace['search']['elapsed_ms'] = round((time.monotonic() - search_started) * 1000)
                 save_trace()

@@ -45,7 +45,7 @@ function llmView(call,i){
 }
 export function renderAnswerTrace(result){
   const trace=result.trace;
-  return (trace?(trace.calls||[]).map((call,i)=>llmView(call,i)+
+  return renderAnswerTiming(trace?.timing)+(trace?(trace.calls||[]).map((call,i)=>llmView(call,i)+
     (i===0&&trace.search?step(`Search / retrieval${duration(trace.search.elapsed_ms??result.check?.search_ms)}`,
       pair(`<h4>Queries</h4>${text(trace.search.queries?.join('\n'))}`+fold('Search metadata',json({trigger:trace.search.trigger,started_at:trace.search.started_at})),
         `<p>${trace.search.result?.passages?.length??0} passages returned</p>`+
@@ -53,6 +53,33 @@ export function renderAnswerTrace(result){
         (trace.calls[1]?.context?.retrieval?fold('Evidence sent to LLM 2',json(evidenceDiff(trace))):'')),trace.search):'')
     ).join('')+(trace.failure?section('Failure',trace.failure):''):'')+
     step('Final answer and validation',pair(text(result.event?.request),text(result.event?.response||'No answer')+fold('Validation',json(result.check))),{event:result.event,check:result.check});
+}
+export function renderAnswerTiming(timing){
+  if(!timing)return '<p class="muted">Detailed timing was not recorded for this answer.</p>';
+  const s=timing.stages||{},delta=(a,b)=>Number.isFinite(s[a])&&Number.isFinite(s[b])?s[b]-s[a]:null;
+  const rows=[
+    ['Question-end audio frame received → STT final',timing.input?.stt_finalization_ms],
+    ['STT input frame duration',timing.input?.stt_frame_ms],
+    ['STT audio backlog estimate',timing.input?.stt_audio_lag_ms],
+    ['Follow-up classification LLM',timing.input?.turn_classification_ms],
+    ['Final transcript → queued (includes follow-up classification)',delta('stt_final_received','queued')],
+    ['Queue',delta('queued','answer_started')],
+    ['Context preparation',delta('answer_started','generation_started')],
+    ['LLM 1',delta('llm_1_started','llm_1_finished')],
+    ['Retrieval',delta('retrieval_started','retrieval_finished')],
+    ['LLM 2',delta('llm_2_started','llm_2_finished')],
+    ['Answer validation',delta('generation_finished','answer_validated')],
+    ['Waiting for the floor',delta('floor_wait_started','floor_wait_finished')],
+    ['TTS first chunk',delta('tts_requested','tts_first_chunk')],
+    ['TTS stream duration (includes backpressure)',delta('tts_requested','tts_finished')],
+    ['First chunk → playback authorization',delta('tts_first_chunk','playback_authorized')],
+    ['Playback authorization → first output report received',delta('playback_authorized','first_audio_report_received')],
+    ['Browser offer → first output frame',timing.client?.offer_to_first_audio_ms],
+    ['Question end → browser first output frame',timing.client?.question_to_first_audio_ms],
+    ['Browser output latency estimate',timing.client?.output_latency_ms],
+    ['Remote start → first output frame',timing.remote?.start_to_first_audio_ms],
+  ];
+  return `<section class="debug-step"><h2>Answer timing</h2><p>Server durations use one monotonic clock. Browser durations use the capture and playback audio clock. Output frames exclude physical speaker and meeting-network delay. STT finalization starts when the server receives the frame containing the last word; it excludes capture uplink and has frame-level precision. STT backlog is an estimate, not isolated service latency. Missing stages were not recorded or did not run; overlapping stages must not be added.</p><table><thead><tr><th scope="col">Stage</th><th scope="col">Time</th></tr></thead><tbody>${rows.map(([label,value])=>`<tr><th scope="row">${esc(label)}</th><td>${Number.isFinite(value)?`${value.toFixed(0)} ms`:'—'}</td></tr>`).join('')}</tbody></table>${fold('Timing data',json(timing))}</section>`;
 }
 export function evidenceDiff(trace){
   const retrieved=trace?.search?.result?.passages||[];

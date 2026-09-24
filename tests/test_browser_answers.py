@@ -68,10 +68,18 @@ async def offer(b):
 
 
 async def receipt(b, action, **overrides):
+    if action == 'spoken' and b.receipt and b.receipt['started']:
+        await wait_for(lambda: b.receipt and b.receipt['finished'])
+        overrides.setdefault('played_samples', b.receipt['sent_samples'])
     packet = {**await offer(b), 'type': 'direct_speech', 'action': action,
         'request_id': str(time.monotonic_ns()), **overrides}
     await b.control(packet)
-    return next(p for p in reversed(b.packets) if p.get('request_id') == packet['request_id'])
+    ack = next(p for p in reversed(b.packets) if p.get('request_id') == packet['request_id'])
+    if action == 'start' and ack['ok']:
+        await wait_for(lambda: b.receipt and b.receipt['sent_samples'] > 0)
+        await b.control({**packet, 'request_id': 'playing', 'action': 'playing', 'played_samples': 1,
+            'timing': {'question_to_first_audio_ms': 900}})
+    return ack
 
 
 def events(b):
@@ -456,17 +464,19 @@ async def test_owner_correction_is_marked_for_transcript_display_after_reload(br
     assert restored['content'] == original['content']
 
 
-async def test_server_tts_audio_is_private_to_start_receipt(browser):
+async def test_server_tts_audio_is_private_to_authorized_capture_socket(browser):
     import base64
     b = browser
     await final(b)
     packet = await offer(b)
     assert 'audio' not in packet
+    assert not any(p['type'] == 'direct_audio' for p in b.packets)
     started = await receipt(b, 'start')
-    assert base64.b64decode(started['audio']).startswith(b'RIFF')
+    assert 'audio' not in started
+    chunk = next(p for p in b.packets if p['type'] == 'direct_audio')
+    assert base64.b64decode(chunk['audio']) == b'\x01\x00' * 2400
     assert 'audio' not in str(events(b))
-    heartbeat = await receipt(b, 'heartbeat')
-    assert 'audio' not in heartbeat
+    assert 'audio' not in await receipt(b, 'heartbeat')
     await receipt(b, 'spoken')
     await b.task
 
@@ -501,3 +511,120 @@ async def test_stop_during_server_synthesis_never_offers_audio(browser):
     await b.stop()
     assert not any(p['type'] == 'direct_offer' for p in b.packets)
     assert events(b)[0]['status'] == 'interrupted'
+
+
+async def test_first_audio_can_play_before_synthesis_finishes_and_stop_cancels_producer(browser, client):
+    from echooo.models import AudioChunk
+    b = browser
+    release, closed = asyncio.Event(), asyncio.Event()
+    class SlowTail:
+        async def stream_audio(self, text, *, cancel):
+            try:
+                yield AudioChunk(b'\x01\x00' * 4800, 24000)
+                await release.wait()
+                yield AudioChunk(b'\x02\x00' * 4800, 24000)
+            finally:
+                closed.set()
+    b.tts_factory = SlowTail
+    await final(b)
+    await receipt(b, 'start')
+    assert not release.is_set() and not b.receipt['finished']
+    assert events(b)[0]['status'] == 'speaking'
+    event = events(b)[0]
+    trace = client.get(f'/api/meetings/{b.mid}/debug/{event["id"]}').json()['trace']
+    stages = trace['timing']['stages']
+    assert stages['tts_first_chunk'] <= stages['playback_authorized'] <= stages['first_audio_report_received']
+    assert 'tts_finished' not in stages
+    assert trace['timing']['client']['question_to_first_audio_ms'] == 900
+    await b.stop()
+    assert closed.is_set() and events(b)[0]['status'] == 'interrupted'
+    assert not any(p['type'] == 'direct_audio_end' for p in b.packets)
+
+
+async def test_playback_authorization_is_not_first_audio_and_premature_completion_is_rejected(browser):
+    b = browser
+    await final(b)
+    p = {**await offer(b), 'type': 'direct_speech', 'action': 'start', 'request_id': 'authorize'}
+    await b.control(p)
+    await wait_for(lambda: b.receipt['finished'])
+    with b.store.scope(b.who) as r:
+        assert not r.list(db.meeting_speech)
+    await b.control({**p, 'action': 'spoken', 'request_id': 'early', 'played_samples': b.receipt['sent_samples']})
+    assert next(p for p in b.packets if p.get('request_id') == 'early')['ok'] is False
+    assert events(b)[0]['status'] == 'sending'
+
+
+async def test_stream_backpressure_bounds_audio_and_failure_cancels_slow_synthesis(browser):
+    from echooo.models import AudioChunk
+    b = browser
+    closed = asyncio.Event()
+    class Fast:
+        async def stream_audio(self, text, *, cancel):
+            try:
+                for _ in range(30):
+                    yield AudioChunk(b'\x01\x00' * 4800, 24000)
+            finally:
+                closed.set()
+    b.tts_factory = Fast
+    await final(b)
+    await receipt(b, 'start')
+    await asyncio.sleep(.08)
+    assert b.receipt['sent_samples'] <= 24000 + 1  # At most ~1 second ahead of actual playback.
+    assert not b.receipt['finished']
+    await receipt(b, 'failed')
+    await b.task
+    assert closed.is_set() and events(b)[0]['status'] == 'error'
+
+
+async def test_answer_sources_are_durable_beyond_recent_history_and_scope_checked(browser, client):
+    from echooo.meeting_retrieval import source_hash
+    b = browser
+    source = await final(b, 'We chose Telegram.', start=200, end=900)
+    with b.store.scope(b.who) as r:
+        event = r.add(db.meeting_agent_events, meeting_id=b.mid, connection_id=b.cid,
+            source_key='old-answer', audience='voice', sender='', request='Which platform?',
+            response='Telegram.', status='spoken', error='')
+    b.manager.knowledge.receipt(b.who, b.mid, event['id'], {},
+        [{'kind':'utterance', 'id':source['id'], 'hash':source_hash(source), 'hash_version':2}])
+    with b.store.scope(b.who) as r:
+        for i in range(25):
+            r.add(db.meeting_agent_events, meeting_id=b.mid, connection_id=b.cid,
+                source_key=str(i), audience='voice', sender='', request='Later', response='Later', status='spoken', error='')
+    assert event['id'] not in [e['id'] for e in events(b)]
+    url = f'/api/meetings/{b.mid}/answers/{event["id"]}'
+    data = client.get(url).json()
+    assert data['citations'][0]['content'] == source['content']
+    assert data['citations'][0]['start_ms'] == 200 and data['citations'][0]['end_ms'] == 900
+    other = client.post('/api/meetings', json={'title':'Other meeting'}).json()
+    assert client.get(f'/api/meetings/{other["id"]}/answers/{event["id"]}').status_code == 404
+    with b.store.scope(b.who) as r:
+        r.change(db.utterances, source['id'], content='An edited decision.')
+    changed = client.get(url).json()['citations'][0]
+    assert changed['changed'] and changed['content'] == ''
+    with b.store.scope(b.who) as r:
+        r.remove(db.utterances, source['id'])
+    missing = client.get(url).json()['citations'][0]
+    assert missing['unavailable'] and missing['id'] == source['id'] and not missing['content']
+    exported = client.get(f'/api/meetings/{b.mid}/export').json()
+    assert next(e for e in exported['answers'] if e['id'] == event['id'])['citations'][0]['unavailable']
+    client.post('/api/auth/logout')
+    assert client.get(url).status_code == 401
+
+
+def test_stt_finalization_uses_frame_arrival_clock_even_when_audio_cursor_stops(monkeypatch):
+    from echooo.meeting_transcription import LiveTranscription
+    from echooo.answer_timing import stt_anchor
+    clock = [100.0]
+    monkeypatch.setattr('echooo.meeting_transcription.time.monotonic', lambda: clock[0])
+    live = LiveTranscription(None, 16000, None, None)
+    live.feed(b'\0\0' * 1600, 1600)
+    clock[0] = 102.5
+    final = STTEvent(STTEventType.FINAL, 'Question?', raw={'words':[{'text':'Question?', 'start':0, 'end':90}]})
+    live.annotate_final_timing(final, 0)
+    anchor = stt_anchor(final, 'recording', 0, 100)
+    assert anchor['stt_finalization_ms'] == 2500
+    assert anchor['stt_audio_lag_ms'] == 10
+    assert anchor['stt_frame_ms'] == 100
+    untimed = STTEvent(STTEventType.FINAL, 'Unknown time')
+    live.annotate_final_timing(untimed, 0)
+    assert stt_anchor(untimed, 'recording', 0, 100)['stt_finalization_ms'] is None

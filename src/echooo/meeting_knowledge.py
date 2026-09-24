@@ -171,7 +171,8 @@ class MeetingKnowledge:
             for cite in receipt['citations']:
                 table = db.memories if cite['kind'] == 'memory' else db.utterances
                 source = r.get(table, cite['id'])
-                if not source:
+                if not source or cite['kind'] == 'utterance' and source['meeting_id'] != mid:
+                    result.append({**cite, 'title': 'Source unavailable', 'content': '', 'unavailable': True})
                     continue
                 if cite['kind'] == 'memory':
                     result.append({**cite, 'title': source['title'], 'content': source['content'] if source['version'] == cite['version'] else '',
@@ -182,7 +183,7 @@ class MeetingKnowledge:
                         digest({'speaker': source['speaker'], 'content': source['content'][:2000]}))
                     changed = bool(cite.get('hash') and cite['hash'] != current_hash)
                     result.append({**cite, 'title': source['speaker'], 'content': '' if changed else source['content'], 'changed': changed,
-                        'recording_id': source['recording_id'], 'start_ms': source['start_ms']})
+                        'recording_id': source['recording_id'], 'start_ms': source['start_ms'], 'end_ms': source['end_ms']})
             return result
 
     async def propose(self, who, mid):

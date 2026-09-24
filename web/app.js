@@ -1,8 +1,8 @@
 import {mountAssistantVoice} from './assistant-voice-settings.js?v=1';
 let disposeAssistantVoice=()=>{};
-import {showMeetingDebug} from './meeting-debug.js?v=3';
+import {showMeetingDebug} from './meeting-debug.js?v=4';
 import { Voice } from './voice.js';
-import {showMeetings, leaveMeeting} from './meetings.js?v=transcript-repair-1';
+import {showMeetings, leaveMeeting} from './meetings.js?v=answer-evidence-2';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js?v=project-simple-3';
 import {enhanceSelects} from './select.js';

@@ -1,13 +1,14 @@
 """Capture-socket-owned answers. Stored events are history, never playback commands."""
 import asyncio
+import base64
 import contextlib
 import logging
 import secrets
 import time
 from types import SimpleNamespace
 
-from echooo import database as db
-from echooo.assistant_voice import factory as assistant_tts, synthesize
+from echooo import database as db, answer_timing
+from echooo.assistant_voice import factory as assistant_tts
 from echooo.meeting_debug import agent_record
 from echooo.intelligence import Intelligence
 from echooo.meeting_agent import MeetingAgent
@@ -129,6 +130,8 @@ class BrowserMeetingAnswers:
                 return
             r.change(db.meeting_agent_events, event['id'], **values)
         event.update(values)
+        if values.get('status') in {'spoken', 'interrupted', 'error', 'skipped', 'uncertain'}:
+            answer_timing.mark(self, event, 'delivery_finished', outcome=values['status'])
         agent_record(self, 'delivery', answer_id=event['id'], **values)
         job = asyncio.create_task(self.emit({'type': 'direct_status', 'id': event['id'],
             'status': event['status'], 'response': event['response'], 'error': event['error']}))
@@ -179,6 +182,7 @@ class BrowserMeetingAnswers:
                 return
             await MeetingAgent.transcript(self, event, self.recording_id + ':partial')
             return
+        anchor = answer_timing.stt_anchor(event, self.recording_id, offset_ms, self.audio_clock())
         for u in rows:
             if u['start_ms'] <= self.blocked_until_ms:
                 continue
@@ -187,10 +191,10 @@ class BrowserMeetingAnswers:
             if self.is_echo(u['content']) or self.playback_echo(u['content'], u['start_ms']):
                 agent_record(self, 'trigger', decision='echo', text=u['content'][:2000], source_id=u['id'])
                 continue
-            final = STTEvent(STTEventType.FINAL, u['content'], raw={'speaker_label': u['speaker']})
+            final = STTEvent(STTEventType.FINAL, u['content'], raw={'speaker_label': u['speaker'], '_answer_timing': anchor})
             await MeetingAgent.transcript(self, final, self.recording_id + ':' + u['id'])
 
-    async def accept(self, key, text, audience, sender):
+    async def accept(self, key, text, audience, sender, *, timing=None):
         if not self.valid():
             return
         with self.store.scope(self.who) as r:
@@ -200,6 +204,8 @@ class BrowserMeetingAnswers:
             e = r.add(db.meeting_agent_events, meeting_id=self.mid, connection_id=self.cid,
                 source_key=key, audience=audience, sender=sender, request=text,
                 response='', status='queued', error='')
+        answer_timing.begin(self, e, timing)
+        e['_input_anchor'] = timing or {}
         self.current_event = e
         self.cancel = asyncio.Event()
         self.task = asyncio.create_task(self.answer(e))
@@ -208,7 +214,8 @@ class BrowserMeetingAnswers:
         try:
             await MeetingAgent.answer(self, event)
         except asyncio.CancelledError:
-            self.change(event, status='interrupted', error=self.error or 'Reply stopped; not replayed automatically.')
+            failed = event.get('_playback_failed', False)
+            self.change(event, status='error' if failed else 'interrupted', error=self.error or 'Reply stopped; not replayed automatically.')
         except Exception as exc:
             logger.warning('Browser answer failed meeting=%s type=%s', self.mid, type(exc).__name__)
             await self.emit({'type': 'direct_cancel', 'id': event['id']})
@@ -222,26 +229,76 @@ class BrowserMeetingAnswers:
         if not self.valid() or self.cancel.is_set() or self.external:
             raise asyncio.CancelledError()
         self.change(event, status='sending')
-        try:
-            audio = await synthesize(self.tts_factory(), text, self.cancel)
-        except Exception:
-            self.error = 'Speech generation failed. Your text reply is still available. Check Assistant voice in Settings.'
-            raise
-        if not self.valid() or self.cancel.is_set() or self.external:
-            raise asyncio.CancelledError()
-        done = asyncio.get_running_loop().create_future()
+        loop = asyncio.get_running_loop()
         receipt = {'id': event['id'], 'token': secrets.token_urlsafe(32), 'started': False,
-            'expires': time.monotonic() + LEASE_SECONDS, 'done': done, 'event': event, 'audio': audio}
-        self.receipt = receipt
-        self.change(event, status='sending')
-        await self.emit({'type': 'direct_offer', 'id': event['id'], 'token': receipt['token']})
+            'playing': False, 'finished': False, 'sent_samples': 0, 'played_samples': 0,
+            'expires': time.monotonic() + LEASE_SECONDS, 'done': loop.create_future(),
+            'authorized': asyncio.Event(), 'event': event}
+        rate, total, pending = None, 0, bytearray()
+        answer_timing.mark(self, event, 'tts_requested')
+        stream = self.tts_factory().stream_audio(text, cancel=self.cancel)
+        async def send_pcm(pcm):
+            while receipt['sent_samples'] - receipt['played_samples'] > rate * .8:
+                if receipt['done'].done():
+                    receipt['done'].result()
+                    raise ValueError('Playback ended before synthesis')
+                await asyncio.sleep(.05)
+            if not self.valid() or self.cancel.is_set() or self.external:
+                raise asyncio.CancelledError()
+            if not self.manager.knowledge.valid(self.who, self.mid, self.speech_scope):
+                raise ValueError('Knowledge changed during playback')
+            receipt['sent_samples'] += len(pcm) // 2
+            await self.send({'type': 'direct_audio', 'id': event['id'], 'token': receipt['token'],
+                'samples': receipt['sent_samples'], 'audio': base64.b64encode(pcm).decode('ascii')})
         try:
-            await asyncio.wait_for(done, 120)
+            async with asyncio.timeout(120):
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(anext(stream), 30)
+                    except StopAsyncIteration:
+                        break
+                    if (chunk.encoding != 'pcm_s16le' or chunk.channels != 1 or
+                            chunk.sample_rate not in {8000, 16000, 24000} or
+                            rate is not None and rate != chunk.sample_rate):
+                        raise ValueError('Unsupported speech audio format')
+                    if not chunk.data:
+                        continue
+                    if rate is None:
+                        rate = receipt['sample_rate'] = chunk.sample_rate
+                        answer_timing.mark(self, event, 'tts_first_chunk')
+                        self.receipt = receipt
+                        receipt['expires'] = time.monotonic() + LEASE_SECONDS
+                        await self.send({'type': 'direct_offer', 'id': event['id'], 'token': receipt['token'],
+                            'sample_rate': rate, 'question_end_ms': event.get('_input_anchor', {}).get('question_end_ms')})
+                        await asyncio.wait_for(receipt['authorized'].wait(), LEASE_SECONDS)
+                    total += len(chunk.data)
+                    if total > rate * 2 * 120:
+                        raise ValueError('Speech exceeds playback limit')
+                    pending.extend(chunk.data)
+                    size = rate // 5 * 2
+                    while len(pending) >= size:
+                        await send_pcm(bytes(pending[:size]))
+                        del pending[:size]
+                answer_timing.mark(self, event, 'tts_finished')
+                if not total or len(pending) % 2:
+                    raise ValueError('Speech provider returned incomplete audio')
+                if pending:
+                    await send_pcm(bytes(pending))
+                receipt['finished'] = True
+                await self.send({'type': 'direct_audio_end', 'id': event['id'], 'token': receipt['token']})
+                await receipt['done']
             mark_speech(self, event, complete=True)
+            answer_timing.mark(self, event, 'playback_finished')
             self.echo_until = time.monotonic() + 2
             if self.conversation_until:
                 self.conversation_until = time.monotonic() + 15
+        except Exception:
+            self.error = self.error or 'Speech generation failed. Your text reply is still available. Check Assistant voice in Settings.'
+            raise
         finally:
+            await stream.aclose()
+            if receipt['done'].done() and not receipt['done'].cancelled():
+                receipt['done'].exception()  # Consume failures even if synthesis failed first.
             if self.receipt is receipt:
                 self.finish_window()
                 self.receipt = None
@@ -324,14 +381,25 @@ class BrowserMeetingAnswers:
                 self.last_spoken = receipt['event']['response']
                 self.speech_windows.append({'start': self.playback_start_ms, 'end': None, 'text': self.last_spoken})
                 self.echo_until = time.monotonic() + 125
+                answer_timing.mark(self, receipt['event'], 'playback_authorized')
+            elif action not in {'playing', 'heartbeat', 'spoken', 'cancelled', 'failed'}:
+                raise ValueError('Invalid playback action.')
+            elif not receipt['started'] and action in {'playing', 'heartbeat', 'spoken'}:
+                raise ValueError('Playback has not started.')
+            played = packet.get('played_samples')
+            if played is not None:
+                if not isinstance(played, int) or isinstance(played, bool) or not receipt['played_samples'] <= played <= receipt['sent_samples']:
+                    raise ValueError('Invalid playback progress')
+                receipt['played_samples'] = played
+            if action == 'playing':
+                if receipt['playing'] or not receipt['sent_samples'] or receipt['played_samples'] <= 0:
+                    raise ValueError('Invalid first audio report')
+                receipt['playing'] = True
                 self.phase = 'speaking'
                 mark_speech(self, receipt['event'])
+                answer_timing.client_report(self, receipt['event'], packet.get('timing', {}) if isinstance(packet.get('timing'), dict) else {})
                 self.change(receipt['event'], status='speaking')
-            elif action not in {'heartbeat', 'spoken', 'cancelled', 'failed'}:
-                raise ValueError('Invalid playback action.')
-            elif not receipt['started'] and action in {'heartbeat', 'spoken'}:
-                raise ValueError('Playback has not started.')
-            if action in {'start', 'heartbeat'}:
+            if action in {'start', 'playing', 'heartbeat'}:
                 if not self.manager.knowledge.valid(self.who, self.mid, self.speech_scope):
                     raise ValueError('Knowledge changed during playback.')
                 receipt['expires'] = time.monotonic() + LEASE_SECONDS
@@ -341,15 +409,22 @@ class BrowserMeetingAnswers:
                 if receipt['done'].done():
                     raise ValueError('Playback already finished.')
                 if action == 'spoken':
+                    if not receipt['playing'] or not receipt['finished'] or receipt['played_samples'] != receipt['sent_samples']:
+                        raise ValueError('Playback is incomplete')
                     receipt['done'].set_result(None)
                 elif action == 'failed':
                     self.error = 'Browser playback failed. Check sound permissions, then ask again.'
+                    receipt['event']['_playback_failed'] = True
                     receipt['done'].set_exception(ValueError('Browser playback failed.'))
                 else:
                     await self.stop()
             await self.emit({'type': 'direct_ack', 'request_id': request_id, 'ok': True,
                 'playback': self.phase,
-                **({'question': receipt['event']['response'], 'audio': receipt.pop('audio')} if action == 'start' else {})})
+                **({'question': receipt['event']['response'], 'sample_rate': receipt['sample_rate']} if action == 'start' else {})})
+            if action == 'start':
+                receipt['authorized'].set()
+            elif action == 'failed' and self.task:
+                self.task.cancel()
         except (ValueError, KeyError):
             await self.emit({'type': 'direct_ack', 'request_id': request_id, 'ok': False,
                 'error': 'Playback is no longer current. Please ask again.'})

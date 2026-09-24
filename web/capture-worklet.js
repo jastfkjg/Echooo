@@ -1,10 +1,12 @@
 class PCM16CaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
+    this.reportAnchors = options.processorOptions?.reportAnchors === true;
     this.targetRate = options.processorOptions?.targetSampleRate || 16000;
     this.chunkSamples = options.processorOptions?.chunkSamples || 1600;
     this.buffer = new Int16Array(this.chunkSamples);
     this.offset = 0;
+    this.totalSamples = 0;
     this.phase = 0;
     this.sum = 0;
     this.count = 0;
@@ -38,10 +40,12 @@ class PCM16CaptureProcessor extends AudioWorkletProcessor {
       const value = Math.max(-1, Math.min(1, this.sum / this.count));
       this.buffer[this.offset] = value < 0 ? value * 0x8000 : value * 0x7fff;
       this.offset += 1;
+      this.totalSamples += 1;
       this.sum = 0;
       this.count = 0;
 
       if (this.offset === this.buffer.length) {
+        if(this.reportAnchors)this.port.postMessage({type:'capture_anchor',audioMs:this.totalSamples*1000/this.targetRate,contextTime:currentTime+(index+1)/sampleRate});
         const ready = this.buffer;
         this.port.postMessage(ready.buffer, [ready.buffer]);
         this.buffer = new Int16Array(this.chunkSamples);
