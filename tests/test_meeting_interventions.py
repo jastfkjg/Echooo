@@ -87,15 +87,184 @@ async def test_incremental_detection_and_audit(governed, client):
     assert m.view(a.who, a.mid)['intervention_progress']['last_check']['outcome'] == 'duplicate'
 
 
-async def test_followup_is_limited_to_one_retry(governed):
+async def test_followup_waits_for_new_evidence(governed):
     a, m = governed
     class Uncertain:
+        calls = 0
+        inputs = []
         async def json_call(self, prompt, data, fast=False):
+            self.calls += 1
+            self.inputs.append(data)
             return {'proposals':[], 'needs_followup':True}
     m.ai = Uncertain()
-    assert await m.detect(a.who, a.mid, incremental=True) == 'followup'
-    assert await m.detect(a.who, a.mid, incremental=True) is None
-    assert not m.followups
+    await m.detect(a.who, a.mid, incremental=True)
+    await m.detect(a.who, a.mid, incremental=True)
+    assert m.ai.calls == 1
+    assert (a.who, a.mid) in m.awaiting_evidence
+    with a.store.scope(a.who) as r:
+        r.add(db.utterances, meeting_id=a.mid, recording_id=None, speaker='Bob',
+              content='Alice will take responsibility.', start_ms=3000, end_ms=4000)
+    await m.detect(a.who, a.mid, incremental=True)
+    assert m.ai.calls == 2
+    assert m.ai.inputs[-1]['awaiting_clarification'] is True
+
+
+class ObservingModel:
+    def __init__(self):
+        self.inputs = []
+
+    async def json_call(self, prompt, data, fast=False):
+        self.inputs.append(data)
+        return {'proposals': [], 'needs_followup': True}
+
+
+def add_discussion(a, index):
+    with a.store.scope(a.who) as r:
+        return r.add(db.utterances, meeting_id=a.mid, recording_id=None, speaker='Bob',
+                     content=f'Discussion continues on item {index}.',
+                     start_ms=3000 + index * 1000, end_ms=4000 + index * 1000)
+
+
+async def wait_until(predicate):
+    async with asyncio.timeout(2):
+        while not predicate():
+            await asyncio.sleep(.005)
+
+
+async def test_automatic_batches_coalesce_continuous_speech_without_starvation(governed):
+    a, m = governed
+    now = [0.0]
+    m.clock, m.delay, m.ai = lambda: now[0], .001, ObservingModel()
+    key = a.who, a.mid
+    m.notify(*key)
+    try:
+        await wait_until(lambda: m.phases.get(key) == 'scheduled')
+        task = m.tasks[key]
+        for second in range(1, 30):
+            now[0] = second
+            add_discussion(a, second)
+            m.notify(*key)
+            assert m.tasks[key] is task
+            await asyncio.sleep(.002)
+        assert not m.ai.inputs
+        now[0] = 30
+        await wait_until(lambda: key not in m.tasks)
+        assert len(m.ai.inputs) == 1
+        assert len(m.ai.inputs[0]['new_record_ids']) == 31
+        now[0] = 100
+        await asyncio.sleep(.01)
+        assert len(m.ai.inputs) == 1  # Waiting for clarification does not poll the model.
+    finally:
+        await m.close()
+
+
+async def test_automatic_cooldown_batches_new_and_corrected_speech(governed):
+    a, m = governed
+    now = [0.0]
+    m.clock, m.quiet_seconds, m.ai = lambda: now[0], 0, ObservingModel()
+    await m.detect(a.who, a.mid, incremental=True, scheduled=True)
+    revised = add_discussion(a, 1)
+    for second in (1, 5, 19):
+        now[0] = second
+        with a.store.scope(a.who) as r:
+            r.change(db.utterances, revised['id'], content=f'Corrected discussion version {second}.')
+        assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
+    now[0] = 20
+    await m.detect(a.who, a.mid, incremental=True, scheduled=True)
+    assert len(m.ai.inputs) == 2
+    assert len(m.ai.inputs[-1]['new_record_ids']) == 1
+    assert m.ai.inputs[-1]['records'][-1]['content'] == 'Corrected discussion version 19.'
+
+
+async def test_append_rechecks_share_budget_and_defer_unchecked_drafts(governed):
+    a, m = governed
+    now = [0.0]
+    m.clock, m.quiet_seconds = lambda: now[0], 0
+    class Appending(IssueModel):
+        async def json_call(self, prompt, data, fast=False):
+            if 'candidates' in data:
+                self.calls += 1
+                return {'keep_ids': ['0']}
+            result = await super().json_call(prompt, data, fast=fast)
+            add_discussion(a, self.calls)
+            return result
+    m.ai = Appending()
+    await m.detect(a.who, a.mid, incremental=True, scheduled=True)
+    assert m.ai.calls == 2  # Generation plus append-only relevance check.
+    checked = dict(m.checked_units[a.who, a.mid])
+    now[0] = 20
+    assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
+    assert m.ai.calls == 3
+    assert m.checked_units[a.who, a.mid] == checked
+    assert m.view(a.who, a.mid)['intervention_progress']['last_check']['outcome'] == 'budget_deferred'
+    now[0] = 40
+    assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
+    assert m.ai.calls == 3
+    now[0] = 60
+    await m.detect(a.who, a.mid, incremental=True, scheduled=True)
+    assert m.ai.calls == 5
+    assert len(m.background_calls[a.who, a.mid]) == 3
+
+
+async def test_manual_check_bypasses_background_budget(governed):
+    a, m = governed
+    m.clock, m.quiet_seconds, m.ai = lambda: 0, 0, ObservingModel()
+    key = a.who, a.mid
+    m.background_calls[key].extend([0, 0, 0])
+    assert await m.detect(*key, incremental=True, scheduled=True) == 'scheduled'
+    m.force.add(key)
+    await m.detect(*key, incremental=True, scheduled=True)
+    assert len(m.ai.inputs) == 1
+    assert key not in m.force
+    assert len(m.background_calls[key]) == 3
+
+
+async def test_failed_automatic_calls_still_consume_budget(governed):
+    a, m = governed
+    now = [0.0]
+    m.clock, m.quiet_seconds = lambda: now[0], 0
+    async def fail(*args, **kwargs):
+        raise TimeoutError()
+    m.ai.json_call = fail
+    for second in (0, 20, 40):
+        now[0] = second
+        with pytest.raises(TimeoutError):
+            await m.detect(a.who, a.mid, incremental=True, scheduled=True)
+    now[0] = 59
+    assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
+    assert len(m.background_calls[a.who, a.mid]) == 3
+    assert m.view(a.who, a.mid)['intervention_progress']['last_check']['model_calls'] == 1
+
+
+async def test_inflight_check_coalesces_manual_requests_and_new_speech(governed, client):
+    a, m = governed
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Slow(ObservingModel):
+        async def json_call(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await super().json_call(*args, **kwargs)
+    now = [0.0]
+    m.clock, m.delay, m.quiet_seconds, m.ai = lambda: now[0], .001, 0, Slow()
+    key = a.who, a.mid
+    m.notify(*key)
+    try:
+        await entered.wait()
+        for _ in range(3):
+            assert client.post(f'/api/meetings/{a.mid}/interventions/check').status_code == 202
+        assert key not in m.force
+        add_discussion(a, 1)
+        m.notify(*key)
+        release.set()
+        await wait_until(lambda: m.phases.get(key) == 'scheduled')
+        assert len(m.ai.inputs) == 1
+        now[0] = 20
+        await wait_until(lambda: key not in m.tasks)
+        assert len(m.ai.inputs) == 2
+        assert len(m.ai.inputs[-1]['new_record_ids']) == 1
+    finally:
+        release.set()
+        await m.close()
 
 
 @pytest.mark.parametrize('keep', [True, False])
@@ -181,10 +350,44 @@ async def test_private_detection_dedup_review_audit_and_exact_speech(governed, c
     a.current_event = None
     assert captured == [question]
     assert m.view(a.who, a.mid)['interventions'][0]['status'] == 'spoken'
-    assert m.ai.calls == 4  # detection twice, approval, and pre-speech; no answer rewrite.
+    assert m.ai.calls == 3  # Detection twice and approval; unchanged pre-speech check is reused.
     exported = client.get('/api/meetings/'+a.mid+'/export').json()
     assert exported['intervention_reviews'][0]['after']['question'] == question
     assert exported['assistant_utterances'][0]['content'] == question
+
+
+@pytest.mark.parametrize('change', ['expired', 'legacy', 'new_speech'])
+async def test_approval_receipt_requires_fresh_matching_context(governed, change):
+    a, m = governed
+    p = await propose(governed)
+    await m.review(a.who, a.mid, p['id'], Review(action='approve', revision=1))
+    if change == 'new_speech':
+        add_discussion(a, 1)
+    else:
+        with a.store.scope(a.who) as r:
+            saved = r.get(db.meeting_interventions, p['id'])
+            state = dict(saved['state'])
+            if change == 'expired':
+                state['approved_checked_at'] = time.time() - m.approval_check_ttl - 1
+            else:
+                state.pop('approved_checked_at')
+                state.pop('approved_revision')
+            r.change(db.meeting_interventions, p['id'], state=state)
+    before = m.ai.calls
+    assert await m.prepare_speech(a, a.queue.get_nowait()) == p['question']
+    assert m.ai.calls == before + 1
+
+
+async def test_corrected_evidence_never_reuses_approval(governed):
+    a, m = governed
+    p = await propose(governed)
+    await m.review(a.who, a.mid, p['id'], Review(action='approve', revision=1))
+    with a.store.scope(a.who) as r:
+        r.change(db.utterances, p['evidence'][0]['utterance_id'], content='The task was cancelled.')
+    before = m.ai.calls
+    with pytest.raises(ValueError, match='no longer relevant'):
+        await m.prepare_speech(a, a.queue.get_nowait())
+    assert m.ai.calls == before  # Invalid original evidence is rejected locally.
 
 
 async def test_owner_only_routes_and_cross_meeting_access(governed, client, app):
@@ -225,6 +428,9 @@ async def test_resolved_question_cannot_be_spoken(governed, stage):
     if stage == 'queued':
         await m.review(a.who,a.mid,p['id'],Review(action='approve',revision=1))
     m.ai.relevant = False
+    with a.store.scope(a.who) as r:
+        r.add(db.utterances, meeting_id=a.mid, recording_id=None, speaker='Bob',
+              content='Alice owns the launch checklist now.', start_ms=3000, end_ms=4000)
     if stage == 'approval':
         with pytest.raises(Exception, match='Nothing was played'):
             await m.review(a.who,a.mid,p['id'],Review(action='approve',revision=1))
@@ -395,6 +601,7 @@ def test_final_transcript_feed_persists_suggestions_and_reloads(client, app):
     base = '/api/meetings/'+client.post('/api/meetings',json={'title':'Automatic proposals'}).json()['id']
     m = app.state.meeting_interventions
     m.ai, m.enabled, m.delay = IssueModel(), True, .01
+    m.quiet_seconds = .02
     for text in ['We need the checklist before launch, but no owner is assigned.', 'Next topic: support.']:
         assert client.post(base+'/utterances',json={'speaker':'Alice','content':text}).status_code == 201
     deadline = time.monotonic()+3

@@ -64,7 +64,7 @@ export function mountInterventions(root,{api,base,refresh,showSource,getLocalRec
     localSpeech.sync(value);
     const progress=value.intervention_progress||{},items=value.interventions||[],ended=value.status==='ended';
     root.hidden=!progress.available&&!items.length;
-    status.textContent=localSpeech.active?.audio?'Playing locally · recording continues':localSpeech.active?'Checking local playback…':busy?'Checking…':progress.phase==='checking'?'Checking recent discussion…':progress.phase==='waiting'?'Waiting for a complete, stable sentence…':progress.phase==='followup'?'Rechecking a possible issue…':items.some(active)?'':progress.last_check?.outcome==='no_issue'?'Checked · no new questions.':progress.last_check?.outcome==='expired'?'Check took too long. Try again.':'No questions awaiting approval.';
+    status.textContent=localSpeech.active?.audio?'Playing locally · recording continues':localSpeech.active?'Checking local playback…':busy?'Checking…':progress.phase==='checking'?'Checking recent discussion…':progress.phase==='waiting'?'Waiting for a complete, stable sentence…':progress.phase==='scheduled'?'Waiting for the next discussion check…':items.some(active)?'':progress.last_check?.outcome==='no_issue'?'Checked · no new questions.':progress.last_check?.outcome==='expired'?'Check took too long. Try again.':'No questions awaiting approval.';
     if(!busy)error.textContent=localError||progress.error||'';
     root.querySelector('[data-check-suggestions]').disabled=busy||ended||progress.phase==='checking'||!progress.available;
     if(editing&&!items.some(p=>p.id===editing.id&&p.revision===editing.revision&&['proposed','deferred','failed','cancelled'].includes(p.status))){editing=null;error.textContent='This suggestion changed. Review the latest question.';}
@@ -75,7 +75,7 @@ export function mountInterventions(root,{api,base,refresh,showSource,getLocalRec
     root.querySelector('[data-toggle-suggestions]').setAttribute('aria-expanded',String(expanded));
     root.querySelector('[data-suggestion-count]').textContent=String(rows.length+saved.length);
     list.hidden=!expanded;
-    status.hidden=!expanded&&!busy&&!localSpeech.active&&!['checking','waiting','followup'].includes(progress.phase)&&progress.last_check?.outcome!=='expired';
+    status.hidden=!expanded&&!busy&&!localSpeech.active&&!['checking','waiting','scheduled'].includes(progress.phase)&&progress.last_check?.outcome!=='expired';
     const row=p=>interventionHTML(p,(value.intervention_reviews||[]).filter(r=>r.intervention_id===p.id),ended,{local:isLocal(value),editing,records:value.utterances||[]});
     const html=rows.map(row).join('')+(saved.length?`<details data-suggestion-details="saved"><summary>Saved for later · ${saved.length}</summary>${saved.map(row).join('')}</details>`:'')+(history.length?`<details data-suggestion-details="history"><summary>Previous suggestions · ${history.length}</summary>${history.map(row).join('')}</details>`:'');
     if(list._html!==html){

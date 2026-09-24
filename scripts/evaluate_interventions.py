@@ -17,6 +17,14 @@ CASES = [
         'Yes, shipment will happen on Thursday.'], 'contradiction', []),
     ('two incompatible commitments in one speech unit', [
         'The signed agreement requires delivery on the third of October; our current committed plan delivers that same order on the tenth of October, and nobody has agreed to revise either commitment.'], 'contradiction', []),
+    ('same incompatible commitments across speech units', [
+        'The signed agreement requires delivery on the third of October.',
+        'Our current committed plan delivers that same order on the tenth of October.',
+        'Nobody has agreed to revise either commitment.'], 'contradiction', []),
+    ('resolved responsibility in one speech unit', [
+        'The access review was unassigned, but Alice has now agreed to own it and finish it before tomorrow\'s release; everyone has confirmed this plan.'], None, []),
+    ('different milestones in one speech unit', [
+        'The internal acceptance review is on the third of October and the customer delivery is on the tenth of October; these are separate milestones and both are confirmed.'], None, []),
     ('missing responsibility', [
         'The access review is required before tomorrow\'s release. Nobody has taken responsibility for it.',
         'We cannot release without it, but we have not assigned it.',
@@ -61,16 +69,22 @@ async def main():
 
     async def run(case):
         name, texts, expected, existing = case
-        records = [{'id':str(i),'speaker':'Participant '+str(i % 2 + 1),'content':text} for i,text in enumerate(texts)]
+        records = [{'id':str(i), 'version':str(i), 'recording_id':'evaluation',
+            'speaker':'Participant '+str(i % 2 + 1), 'content':text,
+            'start_ms':i * 5000, 'end_ms':(i + 1) * 5000} for i,text in enumerate(texts)]
         try:
             async with gate:
-                result = await asyncio.wait_for(ai.json_call(PROMPT, {'records':records,'existing':existing}, fast=True),60)
+                result = await asyncio.wait_for(ai.json_call(PROMPT, {
+                    'records':records, 'new_record_ids':[r['id'] for r in records],
+                    'awaiting_clarification':False, 'findings':[], 'existing':existing}, fast=True),60)
             proposals = result.get('proposals')
             passed = isinstance(proposals,list) and (not proposals if expected is None else any(p.get('kind')==expected for p in proposals))
             for p in proposals or []:
                 by_id = {r['id']:r['content'] for r in records}
                 passed = passed and bool(p.get('evidence')) and all(e.get('utterance_id') in by_id and e.get('quote','').strip() and e['quote'] in by_id[e['utterance_id']] for e in p['evidence'])
             print(('PASS' if passed else 'FAIL')+': '+name,flush=True)
+            if not passed:
+                print('  Expected: '+str(expected)+'; received: '+str(result),flush=True)
             return passed
         except Exception as exc:
             print('ERROR: '+name+' ('+type(exc).__name__+')',flush=True)

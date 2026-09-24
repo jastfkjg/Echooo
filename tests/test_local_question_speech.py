@@ -65,6 +65,17 @@ async def test_browser_receipt_required_and_relevance_rechecked(governed):
     assert m.view(a.who,a.mid)['interventions'][0]['status']=='failed'
 
 
+async def test_local_playback_rechecks_expired_semantic_receipt(governed):
+    a,m,p,rec,receipt,send = await local(governed)
+    with a.store.scope(a.who) as r:
+        saved = r.get(db.meeting_interventions, p['id'])
+        r.change(db.meeting_interventions, p['id'], state={**saved['state'],
+            'approved_checked_at': time.time() - m.approval_check_ttl - 1})
+    calls = m.ai.calls
+    await send('start')
+    assert m.ai.calls == calls + 1
+
+
 @pytest.mark.parametrize('content', [
     'Who owns the launch checklist?',
     'You asked who owns the launch checklist. I will own it.',

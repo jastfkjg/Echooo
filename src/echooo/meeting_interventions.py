@@ -7,7 +7,7 @@ import re
 import secrets
 import time
 from types import SimpleNamespace
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Literal
 
 from fastapi import Request
@@ -114,9 +114,18 @@ class MeetingInterventions:
         self.detection_locks = defaultdict(asyncio.Lock)
         self.delay = .4
         self.settle_seconds = 1.2
+        self.min_interval = 20
+        self.quiet_seconds = 4
+        self.max_batch_wait = 30
+        self.budget_window = 60
+        self.background_call_limit = 3
+        self.approval_check_ttl = 30
+        self.clock = time.monotonic
+        self.pending_since, self.last_activity, self.last_detection = {}, {}, {}
+        self.background_calls = defaultdict(deque)
         self.changed_at = {}
         self.checked_units = {}
-        self.followups = {}
+        self.awaiting_evidence = set()
         self.phases = {}
         self.force = set()
         self.closed = False
@@ -161,6 +170,7 @@ class MeetingInterventions:
             if r.get(db.meetings, mid):
                 r.add(db.meeting_intervention_checks, meeting_id=mid, outcome=outcome,
                     detail={'elapsed_ms': round((time.monotonic()-started)*1000),
+                        'input_characters': sum(len(s['content']) for s in units),
                         'input': [{'id': s['id'], 'version': s['version'], 'source_ids': [u['id'] for u in s['sources']]} for s in units], **detail})
 
     def emit(self, who, mid):
@@ -193,9 +203,28 @@ class MeetingInterventions:
                     'error': self.errors.get((who, mid), ''), 'available': self.enabled}}
 
     def notify(self, who, mid):
-        if self.closed or not self.enabled or (who, mid) in self.tasks:
+        if self.closed or not self.enabled:
+            return
+        key, now = (who, mid), self.clock()
+        self.pending_since.setdefault(key, now)
+        self.last_activity[key] = now
+        if key in self.tasks:
             return
         self.tasks[who, mid] = asyncio.create_task(self.run(who, mid))
+
+    def budget_available(self, key):
+        now, calls = self.clock(), self.background_calls[key]
+        while calls and now - calls[0] >= self.budget_window:
+            calls.popleft()
+        return len(calls) < self.background_call_limit
+
+    def batch_ready(self, key):
+        now = self.clock()
+        first = self.pending_since.setdefault(key, now)
+        quiet = now - self.last_activity.get(key, first) >= self.quiet_seconds
+        due = now - first >= self.max_batch_wait
+        cooled = key not in self.last_detection or now - self.last_detection[key] >= self.min_interval
+        return cooled and (quiet or due) and self.budget_available(key)
 
     async def run(self, who, mid):
         key = who, mid
@@ -203,18 +232,13 @@ class MeetingInterventions:
             while not self.closed:
                 await asyncio.sleep(self.delay)
                 _, _, _, fingerprint = self.snapshot(who, mid)
-                if self.processed.get(key) == fingerprint:
+                if self.processed.get(key) == fingerprint and key not in self.force:
                     break
-                result = await self.detect(who, mid, incremental=True)
-                if result == 'settling':
-                    continue
-                if result == 'followup':
-                    self.phases[key] = 'followup'
-                    self.emit(who, mid)
-                    await asyncio.sleep(2)
+                result = await self.detect(who, mid, incremental=True, scheduled=True)
+                if result in {'settling', 'scheduled'}:
                     continue
                 _, _, _, current = self.snapshot(who, mid)
-                if current == fingerprint:
+                if current == fingerprint and key not in self.force:
                     self.processed[key] = current
                     break
         except asyncio.CancelledError:
@@ -224,11 +248,12 @@ class MeetingInterventions:
             self.errors[key] = 'Could not check for suggestions. Try Check again.'
         finally:
             self.tasks.pop(key, None)
+            self.pending_since.pop(key, None)
             if self.phases.get(key) not in {'waiting', 'error'}:
                 self.phases[key] = 'idle'
             self.emit(who, mid)
 
-    async def detect(self, who, mid, *, incremental=False):
+    async def detect(self, who, mid, *, incremental=False, scheduled=False):
         async with self.detection_locks[who, mid]:
             started, key = time.monotonic(), (who, mid)
             if not self.enabled:
@@ -240,22 +265,30 @@ class MeetingInterventions:
             versions = {s['id']: s['version'] for s in units}
             previous = self.checked_units.get(key, {})
             new_ids = [s['id'] for s in units if previous.get(s['id']) != s['version']]
-            retry = fingerprint in self.followups
-            deadline = self.followups.get(fingerprint, started + 15)
-            if deadline <= started:
-                self.followups.pop(fingerprint, None)
-                self.record_check(who, mid, 'expired', started, units)
-                return
+            deadline = started + 15
             forced = key in self.force
             if forced:
                 new_ids = list(versions)
-            if not units or incremental and not new_ids and not retry and not forced:
+            if not units or incremental and not new_ids and not forced:
                 phase = 'waiting' if incomplete or settling else 'idle'
                 if self.phases.get(key) != phase:
                     self.phases[key] = phase
                     self.emit(who, mid)
                 return 'settling' if settling else None
+            background = scheduled and not forced
+            if background and not self.batch_ready(key):
+                if self.phases.get(key) != 'scheduled':
+                    self.phases[key] = 'scheduled'
+                    self.emit(who, mid)
+                return 'scheduled'
             self.force.discard(key)
+            self.pending_since.pop(key, None)
+            # Manual checks bypass the budget but still postpone the next automatic
+            # generation. Only actual automatic calls consume the rolling budget.
+            self.last_detection[key] = self.clock()
+            if background:
+                self.background_calls[key].append(self.clock())
+            model_calls = 1
             self.phases[key] = 'checking'
             self.emit(who, mid)
             with self.store.scope(who) as r:
@@ -263,7 +296,7 @@ class MeetingInterventions:
             try:
                 value = await asyncio.wait_for(self.ai.json_call(PROMPT, {
                     'records': [public_sentence(s) for s in units], 'new_record_ids': new_ids,
-                    'short_recheck': retry,
+                    'awaiting_clarification': key in self.awaiting_evidence,
                     'findings': [{k:f[k] for k in ('kind','statement','status','details')} for f in findings[-40:]],
                     'existing': [{k: p[k] for k in ('id', 'question', 'reason', 'status')} for p in items[-100:]],
                 }, fast=True), min(12, deadline - time.monotonic()))
@@ -285,24 +318,34 @@ class MeetingInterventions:
                     proposals.append({**p, 'question': display_text(p['question']), 'reason': display_text(p['reason']), 'evidence': evidence})
             except Exception as exc:
                 self.phases[key] = 'error'
-                self.record_check(who, mid, 'failed', started, units, error_type=type(exc).__name__)
+                self.record_check(who, mid, 'failed', started, units, model_calls=model_calls, error_type=type(exc).__name__)
                 raise
             meeting, current_rows, current_items, current = self.snapshot(who, mid)
             current_by_id = {u['id']:u for u in current_rows}
             input_rows = {u['id']:u for s in units for u in s['sources']}
             if meeting['status'] != 'active' or any(uid not in current_by_id or source_hash(u) != source_hash(current_by_id[uid]) for uid,u in input_rows.items()):
-                self.record_check(who, mid, 'source_changed', started, units)
+                self.record_check(who, mid, 'source_changed', started, units, model_calls=model_calls)
                 return
             # Append-only changes do not discard the draft. Check the latest stable
             # conversation once, within the same bounded delivery window.
             if current != fingerprint and proposals:
+                if background and not self.budget_available(key):
+                    # Do not publish an unchecked draft or mark its input processed.
+                    # The next batch will assess the latest discussion together.
+                    self.record_check(who, mid, 'budget_deferred', started, units, model_calls=1)
+                    self.phases[key] = 'scheduled'
+                    self.emit(who, mid)
+                    return 'scheduled'
                 latest, _, _ = self.stable_context(who, mid, current_rows, proposals)
                 input_rows.update({u['id']: u for s in latest for u in s['sources']})
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self.record_check(who, mid, 'expired', started, units)
+                    self.record_check(who, mid, 'expired', started, units, model_calls=model_calls)
                     return
                 try:
+                    if background:
+                        self.background_calls[key].append(self.clock())
+                    model_calls += 1
                     checked = await asyncio.wait_for(self.ai.json_call(CHECK + '\nCheck all candidates. Return {"keep_ids":["candidate ID"]}. Keep only questions still timely after the latest speech; suppress minor issues from a finished topic.', {
                         'candidates': [{'id':str(i),'question':p['question'],'evidence':p['evidence']} for i,p in enumerate(proposals)],
                         'records':[public_sentence(s) for s in latest]}, fast=True), remaining)
@@ -311,18 +354,18 @@ class MeetingInterventions:
                         raise ValueError('Invalid relevance result')
                     proposals = [p for i,p in enumerate(proposals) if str(i) in keep]
                 except Exception as exc:
-                    self.record_check(who, mid, 'recheck_failed', started, units, error_type=type(exc).__name__)
+                    self.record_check(who, mid, 'recheck_failed', started, units, model_calls=model_calls, error_type=type(exc).__name__)
                     raise
                 meeting, current_rows, current_items, _ = self.snapshot(who, mid)
                 current_by_id = {u['id']:u for u in current_rows}
                 if meeting['status'] != 'active' or any(uid not in current_by_id or source_hash(u) != source_hash(current_by_id[uid]) for uid,u in input_rows.items()):
-                    self.record_check(who, mid, 'source_changed', started, units)
+                    self.record_check(who, mid, 'source_changed', started, units, model_calls=model_calls)
                     return
             if time.monotonic() > deadline:
-                self.record_check(who, mid, 'expired', started, units)
+                self.record_check(who, mid, 'expired', started, units, model_calls=model_calls)
                 return
             if [(p['id'], p['revision']) for p in current_items] != [(p['id'], p['revision']) for p in items]:
-                self.record_check(who, mid, 'review_changed', started, units)
+                self.record_check(who, mid, 'review_changed', started, units, model_calls=model_calls)
                 return
             added = 0
             with self.store.scope(who) as r:
@@ -343,15 +386,16 @@ class MeetingInterventions:
                     added += 1
             self.errors.pop((who, mid), None)
             self.checked_units[key] = versions
-            followup = value.get('needs_followup') is True and not proposals and not retry and deadline - time.monotonic() > 2.4
-            if followup:
-                self.followups[fingerprint] = deadline
+            # The model's follow-up request is advisory. Scheduling waits for new
+            # evidence instead of paying for another verdict on identical input.
+            if value.get('needs_followup') is True and not proposals:
+                self.awaiting_evidence.add(key)
             else:
-                self.followups.pop(fingerprint, None)
-            self.record_check(who, mid, 'suggested' if added else 'followup' if followup else 'duplicate' if proposals else 'no_issue', started, units, proposed=added, new_units=len(new_ids))
+                self.awaiting_evidence.discard(key)
+            self.record_check(who, mid, 'suggested' if added else 'awaiting_evidence' if key in self.awaiting_evidence else 'duplicate' if proposals else 'no_issue', started, units, proposed=added, new_units=len(new_ids), model_calls=model_calls)
             self.phases[key] = 'waiting' if incomplete else 'idle'
         self.emit(who, mid)
-        return 'followup' if followup else 'settling' if settling else None
+        return 'settling' if settling else None
 
     def agent(self, who, mid):
         row = self.bots.row(who, mid)
@@ -382,14 +426,19 @@ class MeetingInterventions:
         if not {e['utterance_id'] for e in p['evidence']} <= {u['id'] for s in context for u in s['sources']}:
             raise Problem('Wait for the supporting speech to settle, then review again.', 409)
         started = time.monotonic()
-        result = await asyncio.wait_for(self.ai.json_call(CHECK, {'question': question,
-            'evidence': p['evidence'], 'records': [public_sentence(s) for s in context]}, fast=True), 12)
+        try:
+            result = await asyncio.wait_for(self.ai.json_call(CHECK, {'question': question,
+                'evidence': p['evidence'], 'records': [public_sentence(s) for s in context]}, fast=True), 12)
+        except Exception as exc:
+            self.record_check(who, mid, 'speech_check_failed', started, context,
+                              proposal_id=p['id'], model_calls=1, error_type=type(exc).__name__)
+            raise
         code = result.get('reason_code')
         if not isinstance(result.get('relevant'), bool) or (code is not None and (code not in {'unresolved', 'resolved', 'unsupported', 'unrelated', 'uncertain'} or (code == 'unresolved') != result['relevant'])):
-            self.record_check(who, mid, 'invalid_relevance', started, context, proposal_id=p['id'])
+            self.record_check(who, mid, 'invalid_relevance', started, context, proposal_id=p['id'], model_calls=1)
             raise Problem('The speech check returned an inconsistent result. Nothing was played. Try again.', 503)
         self.record_check(who, mid, 'speech_allowed' if result['relevant'] else 'speech_blocked', started, context,
-            proposal_id=p['id'], reason_code=code or 'unspecified', reason=display_text(str(result.get('reason', '')))[:500])
+            proposal_id=p['id'], model_calls=1, reason_code=code or 'unspecified', reason=display_text(str(result.get('reason', '')))[:500])
         current = self.snapshot(who, mid)
         if current[3] != fingerprint:
             raise Problem('The discussion changed during the check. Review the question again.', 409)
@@ -438,7 +487,8 @@ class MeetingInterventions:
                     raise Problem(message, 409)
                 if agent and (not agent.valid() or epoch != agent.turn_revision):
                     raise Problem('Speech was stopped or the discussion changed. Review again.', 409)
-                state.update(approved_question=question, approved_context=fingerprint)
+                state.update(approved_question=question, approved_context=fingerprint,
+                             approved_checked_at=time.time(), approved_revision=p['revision'] + 1)
                 state.update(delivery=data.delivery, delivery_error='')
                 if data.delivery == 'browser':
                     self.local_recording(who, mid, data.recording_id)
@@ -502,8 +552,11 @@ class MeetingInterventions:
                     try:
                         # Reuse the just-approved semantic check only for identical
                         # transcript content and the short-lived one-shot receipt.
-                        if fingerprint != state['approved_context']:
+                        if not self.approval_check_current(p, fingerprint):
                             fingerprint = await self.relevant(who, mid, p, state['approved_question'])
+                        else:
+                            self.record_check(who, mid, 'speech_check_reused', time.monotonic(),
+                                              proposal_id=pid, model_calls=0)
                     except Problem:
                         raise
                     except Exception as exc:
@@ -562,7 +615,14 @@ class MeetingInterventions:
         p = self.proposal_for_event(agent, event)
         if not p or p['status'] != 'approved' or str(p['revision']) != event['source_key'].split(':')[2]:
             raise ValueError('Speech approval is no longer valid')
-        fingerprint = await self.relevant(agent.who, agent.mid, p, p['state']['approved_question'])
+        meeting, rows, _, fingerprint = self.snapshot(agent.who, agent.mid)
+        if meeting['status'] != 'active' or not evidence_current(p, {u['id']: u for u in rows}):
+            fingerprint = None
+        elif not self.approval_check_current(p, fingerprint):
+            fingerprint = await self.relevant(agent.who, agent.mid, p, p['state']['approved_question'])
+        else:
+            self.record_check(agent.who, agent.mid, 'speech_check_reused', time.monotonic(),
+                              proposal_id=p['id'], model_calls=0)
         if not fingerprint:
             with self.store.scope(agent.who) as r:
                 r.change(db.meeting_interventions, p['id'], status='stale', revision=p['revision'] + 1)
@@ -570,6 +630,15 @@ class MeetingInterventions:
         agent.intervention_context = fingerprint
         self.guard(agent, event)
         return p['state']['approved_question']
+
+    def approval_check_current(self, proposal, fingerprint):
+        state = proposal['state']
+        age = time.time() - state.get('approved_checked_at', 0)
+        return (proposal['status'] == 'approved'
+                and proposal['revision'] == state.get('approved_revision')
+                and proposal['question'] == state.get('approved_question')
+                and fingerprint == state.get('approved_context')
+                and 0 <= age < self.approval_check_ttl)
 
     def guard(self, agent, event):
         p = self.proposal_for_event(agent, event)
@@ -630,6 +699,8 @@ def install_intervention_routes(app, manager, owner):
             raise Problem('This meeting has ended.', 409)
         if not manager.enabled:
             raise Problem('Configure a live LLM to check suggestions.', 409)
+        if manager.phases.get((who, mid)) == 'checking':
+            return manager.view(who, mid)
         manager.processed.pop((who, mid), None)
         manager.force.add((who, mid))
         manager.notify(who, mid)
