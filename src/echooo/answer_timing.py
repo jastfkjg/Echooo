@@ -22,9 +22,15 @@ def begin(agent, event, anchor=None):
         'input': {k: v for k, v in anchor.items() if k != 'received'}}
     if anchor:
         timing['stages']['stt_final_received'] = 0
+    prepared = event.get('_prepared_answer')
+    if prepared:
+        timing['input']['follow_up_combined'] = True
+        # The first call precedes acceptance; retain its original monotonic clock.
+        timing['stages'].update({stage: round((at - event['_timing_origin']) * 1000)
+            for stage, at in prepared['stages'].items()})
     with agent.store.scope(agent.who) as r:
         r.add(db.meeting_answer_traces, meeting_id=agent.mid, event_id=event['id'],
-            detail={'version': 1, 'calls': [], 'timing': timing})
+            detail={'version': 1, 'calls': [prepared['call']] if prepared else [], 'timing': timing})
     mark(agent, event, 'queued')
 
 

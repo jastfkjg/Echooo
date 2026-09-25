@@ -134,7 +134,7 @@ synthetic model evaluation does not certify them.
 - Each recording socket owns an independent direct-answer session. Only newly saved
   final transcripts with an opening address such as “Hello, Echooo” start a
   conversation through the shared recent-context/search/answer pipeline. A 15-second
-  follow-up window uses the same semantic respond/listen/end classifier as Attendee;
+  follow-up window uses the same combined semantic turn/answer decision as Attendee;
   acknowledgements and unrelated discussion do not automatically trigger replies.
   Partial transcripts never initiate answers. Turn deduplication and speaker revisions cannot replay earlier questions.
 - **Answer when called** defaults on; **Stop speaking** cancels generation or speech.
@@ -165,8 +165,14 @@ synthetic model evaluation does not certify them.
   and command guard; they do not acquire the direct-answer follow-up window.
 - Both transports use the owner’s server TTS selection. Local replies and approved
   local suggestions now make TTS API calls; browser speech synthesis is not a fallback.
-  Eligible follow-ups add one fast
-  turn-classification model call before answering. Demo STT does not transcribe.
+  Eligible follow-ups combine turn selection and the first answer/search decision in
+  one model call. Listen/end decisions remain silent; accepted answers reuse that call
+  and its original authorized evidence snapshot. Recent answers require one call;
+  historical retrieval requires at most two, including the combined decision. Stop,
+  new speech, disable and disconnect still invalidate pending decisions. Demo STT does
+  not transcribe. Debug labels LLM 1 as including the follow-up decision; its duration
+  is also inside final-transcript-to-queued and must not be counted twice. Existing
+  traces retain their separate classification timing.
 
 Run `.venv/bin/pytest -q tests/test_browser_answers.py` and
 `node --test tests/test_browser_answer_speech.mjs tests/test_local_question_speech.mjs`.
@@ -226,7 +232,7 @@ They are nearby activity, not a guaranteed causal association with a question.
 Browser STT includes connection number, audio anchors and lag behind the saved-audio
 cursor where timed words exist; this is not a network latency measurement.
 Partial hypotheses are not durable and the page does not record raw audio or secrets.
-Follow-up classification input/output is included when it occurs; this is not a
+Combined follow-up turn/answer input/output is included when it occurs; this is not a
 trace of every background LLM operation (such as findings or summaries).
 
 Answer inputs omit absent project configuration and knowledge-status UI strings.
@@ -307,8 +313,9 @@ New answer traces include a `timing` object, visible in **Debug → Answer timin
 and in answer/meeting/workspace JSON exports. No database table migration is needed.
 Server milestones cover STT final receipt, queue, context preparation, each LLM call,
 retrieval, validation, floor waiting (Attendee), TTS request/first chunk/end,
-playback authorization, first output report and completion/failure. Follow-up
-classification is included in final-receipt-to-queue time. Server durations use
+playback authorization, first output report and completion/failure. The combined
+follow-up LLM 1 is included in final-receipt-to-queue time, not a separate classification
+call. Older traces still display their independent classification duration. Server durations use
 one process's monotonic clock; only relative milliseconds are persisted.
 
 Question end is an STT word-end offset in the recording. A bounded in-memory audio

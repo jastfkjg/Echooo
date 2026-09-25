@@ -194,7 +194,7 @@ class BrowserMeetingAnswers:
             final = STTEvent(STTEventType.FINAL, u['content'], raw={'speaker_label': u['speaker'], '_answer_timing': anchor})
             await MeetingAgent.transcript(self, final, self.recording_id + ':' + u['id'])
 
-    async def accept(self, key, text, audience, sender, *, timing=None):
+    async def accept(self, key, text, audience, sender, *, timing=None, prepared=None):
         if not self.valid():
             return
         with self.store.scope(self.who) as r:
@@ -204,6 +204,7 @@ class BrowserMeetingAnswers:
             e = r.add(db.meeting_agent_events, meeting_id=self.mid, connection_id=self.cid,
                 source_key=key, audience=audience, sender=sender, request=text,
                 response='', status='queued', error='')
+        e['_prepared_answer'] = prepared
         answer_timing.begin(self, e, timing)
         e['_input_anchor'] = timing or {}
         self.current_event = e

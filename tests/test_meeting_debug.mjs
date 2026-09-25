@@ -42,3 +42,15 @@ test('grouped evidence renders readable turns and matches original sources',asyn
   assert.ok(html.includes('Evidence block 1'));
   assert.ok(!html.includes('started <January>'));
 });
+
+test('combined follow-up timing identifies overlap and uses pre-call context preparation',async()=>{
+  const {renderAnswerTiming}=await import('../web/meeting-debug.js');
+  const html=renderAnswerTiming({input:{follow_up_combined:true},stages:{
+    stt_final_received:0,follow_up_context_started:2,follow_up_context_finished:8,
+    generation_started:8,llm_1_started:8,llm_1_finished:1608,queued:1610,answer_started:1611,
+  }});
+  assert.ok(html.includes('LLM 1 (includes follow-up decision)'));
+  assert.ok(html.includes('Final transcript → queued (includes LLM 1)'));
+  assert.ok(html.includes('<th scope="row">Context preparation</th><td>6 ms</td>'));
+  assert.ok(!html.includes('-1603 ms'));
+});

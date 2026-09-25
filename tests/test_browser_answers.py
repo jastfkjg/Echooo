@@ -386,7 +386,7 @@ async def test_sustained_interruption_stops_then_final_is_semantically_routed(br
     contexts = []
     async def classify(system, context, **kwargs):
         contexts.append(context)
-        return {'action': 'respond'}
+        return {'action': 'answer', 'support': 'not_applicable', 'reply': 'Here is more detail.', 'citations': []}
     b.intelligence.json_call = classify
     await final(b, 'Can you explain the reasoning?', start=11000, end=12000)
     await wait_for(lambda: len(events(b)) == 2)
@@ -401,11 +401,12 @@ async def test_followup_uses_shared_turn_model_and_public_context(browser, actio
     await receipt(b, 'spoken')
     await b.task
     async def model(system, context, **kwargs):
-        from echooo.meeting_agent import TURN_SYSTEM
-        assert system == TURN_SYSTEM
+        from echooo.meeting_answers import FOLLOWUP_PROTOCOL, SEARCH_PROTOCOL
+        assert FOLLOWUP_PROTOCOL in system and SEARCH_PROTOCOL in system
         assert context['recent_questions'][-1]['reply']
         assert context['audience'] == 'voice'
-        return {'action': action}
+        return {'action': action} if action in {'listen', 'end'} else {
+            'action': 'answer', 'support': 'not_applicable', 'reply': 'Here is more detail.', 'citations': []}
     b.intelligence.json_call = model
     await final(b, 'Could you expand on that?', start=14000, end=15000)
     task = b.decision_task
@@ -430,7 +431,7 @@ async def test_expired_followup_and_stop_cancel_late_classifier(browser):
     async def slow(*args, **kwargs):
         entered.set()
         await asyncio.sleep(30)
-        return {'action': 'respond'}
+        return {'action': 'answer', 'support': 'not_applicable', 'reply': 'Here is more detail.', 'citations': []}
     b.intelligence.json_call = slow
     await final(b, 'Could you expand on that?', start=16000, end=17000)
     await entered.wait()
@@ -628,3 +629,33 @@ def test_stt_finalization_uses_frame_arrival_clock_even_when_audio_cursor_stops(
     untimed = STTEvent(STTEventType.FINAL, 'Unknown time')
     live.annotate_final_timing(untimed, 0)
     assert stt_anchor(untimed, 'recording', 0, 100)['stt_finalization_ms'] is None
+
+
+async def test_browser_followup_reuses_combined_answer_and_keeps_source_receipt(browser):
+    from dataclasses import replace
+    from echooo.meeting_answers import FOLLOWUP_PROTOCOL
+    b = browser
+    await final(b)
+    await receipt(b, 'start')
+    await receipt(b, 'spoken')
+    await b.task
+    b.settings = replace(b.settings, llm_provider='openai_compatible')
+    with b.store.scope(b.who) as r:
+        source = r.add(db.utterances, meeting_id=b.mid, recording_id=b.recording_id,
+            speaker='Alice', content='We selected Telegram.', start_ms=12000, end_ms=13000)
+    calls = []
+    async def model(system, context, **kwargs):
+        calls.append(context)
+        assert FOLLOWUP_PROTOCOL in system
+        return {'action': 'answer', 'support': 'supported', 'reply': 'Telegram.', 'citations': [source['id']]}
+    b.intelligence.json_call = model
+    await final(b, 'Which platform was selected?', start=14000, end=15000)
+    await b.decision_task
+    await receipt(b, 'start')
+    await receipt(b, 'spoken')
+    await b.task
+    assert len(calls) == 1
+    result = events(b)[-1]
+    assert result['status'] == 'spoken' and result['response'] == 'Telegram.'
+    citations = b.manager.knowledge.citations(b.who, b.mid, result['id'])
+    assert citations[0]['content'] == source['content']

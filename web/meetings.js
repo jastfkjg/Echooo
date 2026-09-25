@@ -1,4 +1,4 @@
-import {answerSources,answerLink} from './answer-sources.js?v=1';
+import {answerSources,answerLink} from './answer-sources.js?v=2';
 import {BrowserAnswerSpeech} from './browser-answer-speech.js?v=streaming-3';
 import {mountFindings} from './meeting-findings.js?v=13';
 import {mountInterventions} from './meeting-interventions.js?v=server-tts-1';
@@ -82,7 +82,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     error:message=>{if(!disposed){$('#recording-answer-status').hidden=false;$('#recording-answer-status').textContent=message;}},
     status:packet=>{
       if(disposed)return;
-      if(packet.response){$('#recording-answer-sources').hidden=false;$('#recording-answer-sources').onclick=()=>openAnswer(packet.id);}
+      if(packet.response){const button=$('#recording-answer-sources');button.dataset.answerId=packet.id;button.hidden=true;button.onclick=()=>openAnswer(packet.id);}
       const labels={thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing playback…',speaking:'Speaking · recording continues',paused:'Listening to interruption…',spoken:'Reply finished',interrupted:'Reply stopped',error:'Reply failed'};
       $('#recording-answer-status').hidden=false;
       $('#recording-answer-status').textContent=packet.error||labels[packet.status]||packet.status;
@@ -130,7 +130,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   const colorFor=speaker=>{const letter=/^Speaker ([A-Z])$/.exec(speaker);return letter?(letter[1].charCodeAt(0)-65)%6:[...speaker].reduce((hash,c)=>(hash*31+c.codePointAt(0))>>>0,0)%6;};
   const phraseHTML=(u,view)=>`<span role="button" tabindex="0" class="meeting-phrase" id="${view}-${u.id}" data-select="${u.id}" data-view="${view}" aria-label="${esc(`${meetingTime(u.start_ms)}: ${textOf(u)}`)}">${view==='full'?highlighted(textOf(u)):esc(textOf(u))}</span>`;
   const actionsHTML=u=>u?.assistant?`<span>Spoken reply${u.timing_estimated?' · Time estimated':''}. Original reply text; outbound speech may not be in the recording.</span><button class="meeting-text-button" data-clear>Close</button>`:u?`<span>${meetingTime(u.start_ms)}</span>${u.recording_id?`<button class="meeting-text-button" data-play="${u.id}">Play original</button>`:''}<button class="meeting-text-button" data-edit="${u.id}">Edit text / speaker</button><button class="meeting-text-button" data-clear>Close</button>`:'';
-  function groupHTML(g,view){const selected=selectedView===view?g.records.find(u=>u.id===selectedPassage):null;return `<article class="meeting-paragraph" data-group="${g.records[0].id}" data-speaker-color="${g.records[0].assistant?'assistant':colorFor(g.speaker)}"><div class="paragraph-meta"><span class="paragraph-speaker">${esc(g.speaker)}</span><span class="paragraph-time">${g.records[0].assistant?'Spoken reply · ':''}${g.records[0].timing_estimated?'~':''}${g.recordingId?meetingTime(g.records[0].start_ms):'Note'}</span></div><p class="meeting-prose">${g.records.map(u=>phraseHTML(u,view)).join(' ')}</p>${g.records[0].assistant&&g.records[0].event_id?`<button class="meeting-text-button meeting-answer-source-link" data-open-answer="${esc(g.records[0].event_id)}" aria-haspopup="dialog">View answer & sources</button>`:''}<div class="meeting-passage-actions" ${selected?'':'hidden'}>${actionsHTML(selected)}</div></article>`;}
+  function groupHTML(g,view){const selected=selectedView===view?g.records.find(u=>u.id===selectedPassage):null;return `<article class="meeting-paragraph" data-group="${g.records[0].id}" data-speaker-color="${g.records[0].assistant?'assistant':colorFor(g.speaker)}"><div class="paragraph-meta"><span class="paragraph-speaker">${esc(g.speaker)}</span><span class="paragraph-time">${g.records[0].assistant?'Spoken reply · ':''}${g.records[0].timing_estimated?'~':''}${g.recordingId?meetingTime(g.records[0].start_ms):'Note'}</span></div><p class="meeting-prose">${g.records.map(u=>phraseHTML(u,view)).join(' ')}</p>${g.records[0].assistant&&g.records[0].has_sources?`<button class="meeting-text-button meeting-answer-source-link" data-open-answer="${esc(g.records[0].event_id)}" aria-haspopup="dialog">View answer & sources</button>`:''}<div class="meeting-passage-actions" ${selected?'':'hidden'}>${actionsHTML(selected)}</div></article>`;}
   function setHTML(node,html){if(node._html!==html){node.innerHTML=html;node._html=html;}}
   const hiddenEchoTargets=new Map();
   function renderTranscript(records){
@@ -143,6 +143,12 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       let node=[...root.children].find(n=>n.dataset.group===g.records[0].id);
       if(!node){const template=document.createElement('template');template.innerHTML=groupHTML(g,'full');node=template.content.firstElementChild;}
       if(root.children[index]!==node)root.insertBefore(node,root.children[index]||null);
+      const sourceButton=node.querySelector('.meeting-answer-source-link');
+      if(g.records[0].assistant&&g.records[0].has_sources&&!sourceButton){
+        const button=document.createElement('button');button.className='meeting-text-button meeting-answer-source-link';
+        button.dataset.openAnswer=g.records[0].event_id;button.setAttribute('aria-haspopup','dialog');button.textContent='View answer & sources';
+        node.querySelector('.meeting-passage-actions').before(button);
+      }else if(sourceButton&&!g.records[0].has_sources)sourceButton.remove();
       const name=node.querySelector('.paragraph-speaker');if(name.textContent!==g.speaker)name.textContent=g.speaker;
       node.dataset.speakerColor=g.records[0].assistant?'assistant':colorFor(g.speaker);
       const body=node.querySelector('.meeting-prose'),ids=new Set(g.records.map(u=>u.id));
@@ -307,9 +313,11 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       $('#bot-stop').hidden=!['thinking','searching','speaking','paused'].includes(agent.phase);
     }
     const events=[...(agent?.events||[]),...(meeting.browser_answers||[])].sort((a,b)=>a.created_at-b.created_at).slice(-20);
+    const latestSourceButton=$('#recording-answer-sources');
+    latestSourceButton.hidden=!meeting.browser_answers?.find(e=>e.id===latestSourceButton.dataset.answerId)?.citations?.length;
     $('#bot-agent-history').hidden=!events.length;
     $('#meeting-activity-empty').hidden=!!events.length;
-    setHTML($('#bot-agent-events'),events.map(e=>`<li><p class="muted">${esc({private:'Private reply to sender',public:'Meeting chat',voice:'Spoken reply'}[e.audience])} · ${esc({submitted:'Submitted to meeting chat',spoken:'Speech played',thinking:'Thinking…',searching:'Checking earlier discussion…',speaking:'Speaking…',queued:'Queued',interrupted:'Interrupted',uncertain:'Delivery unconfirmed',error:'Failed',skipped:'Skipped'}[e.status]||e.status)}</p><p>${esc(e.request)}</p>${e.response?`<p class="meeting-agent-answer">${esc(e.response)}</p><button class="meeting-text-button" data-open-answer="${e.id}">View answer & sources</button>`:''}${e.answer_check&&['insufficient','conflicting'].includes(e.answer_check.support)?`<p class="muted">${esc({insufficient:'No supported answer found in the available records.',conflicting:'Sources disagree; no confirmed resolution.'}[e.answer_check.support])}</p>`:''}${e.citations?.length?`<details class="project-answer-sources"><summary>Sources · ${e.citations.length}</summary>${e.citations.map(c=>`<blockquote><strong>${esc(c.title)}${Number.isFinite(c.start_ms)?' · '+meetingTime(c.start_ms):''}${c.version?' · v'+c.version:''}</strong><p>${esc(c.unavailable?'Source unavailable':c.changed?'Source changed since this answer.':c.content)}</p>${c.unavailable?'':c.kind==='utterance'?`<button class="meeting-text-button" data-answer-passage="${c.id}">View passage</button>`:`<a href="#domain/${encodeURIComponent(c.domain_id)}/memories">Open knowledge domain</a>`}</blockquote>`).join('')}</details>`:''}${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}</li>`).join(''));
+    setHTML($('#bot-agent-events'),events.map(e=>`<li><p class="muted">${esc({private:'Private reply to sender',public:'Meeting chat',voice:'Spoken reply'}[e.audience])} · ${esc({submitted:'Submitted to meeting chat',spoken:'Speech played',thinking:'Thinking…',searching:'Checking earlier discussion…',speaking:'Speaking…',queued:'Queued',interrupted:'Interrupted',uncertain:'Delivery unconfirmed',error:'Failed',skipped:'Skipped'}[e.status]||e.status)}</p><p>${esc(e.request)}</p>${e.response?`<p class="meeting-agent-answer">${esc(e.response)}</p>${e.citations?.length?`<button class="meeting-text-button" data-open-answer="${e.id}">View answer & sources</button>`:''}`:''}${e.answer_check&&['insufficient','conflicting'].includes(e.answer_check.support)?`<p class="muted">${esc({insufficient:'No supported answer found in the available records.',conflicting:'Sources disagree; no confirmed resolution.'}[e.answer_check.support])}</p>`:''}${e.citations?.length?`<details class="project-answer-sources"><summary>Sources · ${e.citations.length}</summary>${e.citations.map(c=>`<blockquote><strong>${esc(c.title)}${Number.isFinite(c.start_ms)?' · '+meetingTime(c.start_ms):''}${c.version?' · v'+c.version:''}</strong><p>${esc(c.unavailable?'Source unavailable':c.changed?'Source changed since this answer.':c.content)}</p>${c.unavailable?'':c.kind==='utterance'?`<button class="meeting-text-button" data-answer-passage="${c.id}">View passage</button>`:`<a href="#domain/${encodeURIComponent(c.domain_id)}/memories">Open knowledge domain</a>`}</blockquote>`).join('')}</details>`:''}${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}</li>`).join(''));
     if(bot&&!socket)status(active?(bot.desired_state==='left'?'Saving meeting audio…':connector.audio_connected?'Recording from Echooo AI':'Waiting for Echooo AI audio'):meeting.recordings.length?'Audio saved':'Ready to record');
   }
   function bindContent(){
@@ -359,7 +367,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       if(disposed||revision!==answerRevision||!answerDialog.open)return;
       const e=result.event;
       const status={spoken:'Speech played',speaking:'Speaking…',thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing speech…',interrupted:'Interrupted',error:'Failed'}[e.status]||e.status;
-      detail.innerHTML=`<p class="muted">${esc(status)}</p><p>${esc(e.request)}</p><p class="meeting-agent-answer">${esc(e.response||'No answer yet.')}</p>${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}${answerSources(result,id,eid)}`;
+      detail.innerHTML=`<p class="answer-detail-status">${esc(status)}</p><section class="answer-detail-question" aria-label="Question"><h3>Question</h3><p>${esc(e.request)}</p></section><section class="answer-detail-response" aria-label="Answer"><h3>Answer</h3><p>${esc(e.response||'No answer yet.')}</p></section>${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}${answerSources(result,id,eid)}`;
       detail.querySelectorAll('[data-citation-jump]').forEach(b=>b.onclick=()=>jumpToPassage(b.dataset.citationJump));
       detail.querySelectorAll('[data-citation-play]').forEach(b=>{
         const source=result.citations.find(c=>c.id===b.dataset.citationPlay);

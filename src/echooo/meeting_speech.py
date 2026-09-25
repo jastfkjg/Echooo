@@ -35,6 +35,8 @@ def mark_speech(agent, event, *, complete=False):
 def speech_transcript(r, mid, recordings):
     records = {x['id']: x for x in recordings}
     anchors = {x['event_id']: x for x in r.list(db.meeting_speech, db.meeting_speech.c.meeting_id == mid)}
+    sourced = {x['event_id'] for x in r.list(db.meeting_answer_sources,
+        db.meeting_answer_sources.c.meeting_id == mid) if x['citations']}
     result = []
     for event in r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid,
             db.meeting_agent_events.c.audience == 'voice', db.meeting_agent_events.c.status == 'spoken'):
@@ -63,5 +65,6 @@ def speech_transcript(r, mid, recordings):
             end, estimated, created = start, True, event['created_at']
         result.append({'id': 'assistant-' + event['id'], 'meeting_id': mid, 'recording_id': rid,
             'speaker': 'Echooo AI', 'content': event['response'], 'start_ms': start, 'end_ms': end,
-            'created_at': created, 'assistant': True, 'event_id': event['id'], 'timing_estimated': estimated})
+            'created_at': created, 'assistant': True, 'event_id': event['id'],
+            'has_sources': event['id'] in sourced, 'timing_estimated': estimated})
     return result

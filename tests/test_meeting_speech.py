@@ -44,6 +44,7 @@ async def test_completed_speech_has_durable_sample_clock_anchor_without_human_ev
     speech = detail['assistant_utterances'][0]
     assert speech['speaker'] == 'Echooo AI' and speech['assistant']
     assert speech['content'] == event['response'] and speech['recording_id'] == rec['id']
+    assert not speech['has_sources']
     assert speech['start_ms'] == 12000 and not speech['timing_estimated']
     assert detail['utterances'] == []  # No generated evidence for memories or human minutes.
     assert client.get(base + '/export').json()['assistant_utterances'] == [speech]
@@ -55,11 +56,17 @@ async def test_completed_speech_has_durable_sample_clock_anchor_without_human_ev
 def test_historical_speech_is_available_beyond_activity_limit_and_estimates_time(agent, client, app):
     rec = recording(agent)
     for n in range(25):
-        reply(agent, rec['id'], str(n))
+        event = reply(agent, rec['id'], str(n))
+        if n == 0:
+            sourced_event_id = event['id']
+            with agent.store.scope(agent.who) as r:
+                r.add(db.meeting_answer_sources, meeting_id=agent.mid, event_id=event['id'],
+                    scope={}, citations=[{'kind': 'utterance', 'id': 'historical-source'}])
     base = '/api/meetings/' + agent.mid
     detail = client.get(base).json()
     assert len(detail['assistant_utterances']) == 25
     assert len({u['id'] for u in detail['assistant_utterances']}) == 25
+    assert {u['event_id'] for u in detail['assistant_utterances'] if u['has_sources']} == {sourced_event_id}
     assert all(u['timing_estimated'] and u['start_ms'] == 10000 for u in detail['assistant_utterances'])
     agent.manager.update(agent.row, state='ended', desired_state='left')
     assert len(client.get(base).json()['assistant_utterances']) == 25
