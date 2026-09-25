@@ -585,3 +585,5 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .answer-source-actions button, .answer-source-actions a { min-height: 44px; display: inline-flex; align-items: center; }
 #meeting-answer-dialog { max-height: 85vh; overflow: auto; }
 #meeting-answer-dialog:focus-visible, .answer-source:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+
+.meeting-answer-source-link{display:block;margin-top:4px;min-height:44px}

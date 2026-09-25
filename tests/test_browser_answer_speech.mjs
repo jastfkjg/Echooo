@@ -3,6 +3,28 @@ import assert from 'node:assert/strict';
 import {BrowserAnswerSpeech} from '../web/browser-answer-speech.js';
 
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('reply toggle is available before recording starts and detects missing streaming APIs',()=>{
+  const names=['AudioContext','AudioWorkletNode'];
+  const saved=names.map(name=>Object.getOwnPropertyDescriptor(globalThis,name));
+  try{
+    class Context {constructor(){throw new Error('Do not open audio during capability detection');}}
+    Object.defineProperty(Context.prototype,'audioWorklet',{get(){throw new Error('Do not invoke native getters');}});
+    Object.defineProperty(globalThis,'AudioContext',{configurable:true,value:Context});
+    Object.defineProperty(globalThis,'AudioWorkletNode',{configurable:true,value:class {}});
+    const speech=new BrowserAnswerSpeech();
+    assert.equal(speech.getContext(),null);
+    assert.equal(speech.available,true);
+    Object.defineProperty(globalThis,'AudioWorkletNode',{configurable:true,value:undefined});
+    assert.equal(speech.available,false);
+    Object.defineProperty(globalThis,'AudioWorkletNode',{configurable:true,value:class {}});
+    Object.defineProperty(globalThis,'AudioContext',{configurable:true,value:class {}});
+    assert.equal(speech.available,false);
+    Object.defineProperty(globalThis,'AudioContext',{configurable:true,value:undefined});
+    assert.equal(speech.available,false);
+  }finally{
+    names.forEach((name,index)=>{if(saved[index])Object.defineProperty(globalThis,name,saved[index]);else delete globalThis[name];});
+  }
+});
 function setup({ack=true}={}){
   const packets=[],streams=[],errors=[];
   class Audio {

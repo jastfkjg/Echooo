@@ -10,6 +10,12 @@ export class BrowserAnswerSpeech {
     this.beforePlay=options.beforePlay||(()=>{});
     this.pending=new Map();this.sequence=0;this.socket=null;this.eventId=null;
   }
+  get available(){
+    // The recording AudioContext does not exist until capture starts.
+    return typeof globalThis.AudioContext==='function'&&
+      typeof globalThis.AudioWorkletNode==='function'&&
+      'audioWorklet' in globalThis.AudioContext.prototype;
+  }
   attach(socket){this.close();this.socket=socket;}
   send(packet){
     if(this.socket?.readyState!==1)throw new Error('Recording disconnected. Nothing will replay automatically.');

@@ -288,8 +288,9 @@ retains the text, and never retries or switches voices automatically.
 
 ### Answer timing and evidence (2026-09-24)
 
-Open a completed Echooo transcript entry or **View answer & sources** in the latest
-reply / Messages & activity. The owner-only `GET /api/meetings/{mid}/answers/{eid}`
+Each completed Echooo transcript entry keeps a visible **View answer & sources**
+button, independently of the latest response. The same detail is available from the
+latest reply and Messages & activity. The owner-only `GET /api/meetings/{mid}/answers/{eid}`
 loads any saved answer by ID, independently of the latest-20 activity window.
 The first cited passage is visible immediately; additional citations expand under
 **More sources**. Sources show speaker, recording-relative start/end timestamps,
