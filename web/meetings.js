@@ -1,4 +1,4 @@
-import {answerSources,answerLink} from './answer-sources.js?v=2';
+import {answerSources,answerLink} from './answer-sources.js?v=3';
 import {BrowserAnswerSpeech} from './browser-answer-speech.js?v=streaming-3';
 import {mountFindings} from './meeting-findings.js?v=13';
 import {mountInterventions} from './meeting-interventions.js?v=server-tts-1';
@@ -31,7 +31,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   let liveDraft=null,feedConnected=false,refreshAgain=false;
   let eventFeed;
   const panelScroll={transcript:0,review:0,summary:0};
-  let sourceReturn=null,captureAnchor=null;
+  let sourceReturn=null,answerReturn=null,activeAnswer=null,captureAnchor=null;
   let botBusy=false,projectUpdatesBusy=false,projectUpdateError='';
   const botActive=()=>!!meeting.connector?.bot&&!['ended','fatal_error','data_deleted','not_created'].includes(meeting.connector.bot.state);
   const base=`/meetings/${id}`,$=s=>document.querySelector(s);
@@ -48,7 +48,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       <div class="meeting-live-controls"><span id="meeting-read-status" role="status"></span><button class="btn" id="meeting-latest" hidden>Back to live ↓</button><label class="meeting-follow"><input type="checkbox" id="meeting-follow" checked> Follow live</label></div>
     </div>
     <section id="panel-transcript" role="tabpanel" aria-labelledby="tab-transcript" class="meeting-transcript-section">
-      <button id="return-to-review" class="meeting-text-button" hidden>← Back to review</button><h2 id="transcript-heading" class="sr-only" tabindex="-1">Conversation</h2>
+      <button id="return-to-review" class="meeting-text-button" hidden>← Back to review</button><button id="return-to-answer" class="btn" hidden>← Back to answer</button><h2 id="transcript-heading" class="sr-only" tabindex="-1">Conversation</h2>
       <div class="meeting-feed" aria-label="Conversation transcript"><div id="meeting-transcript"></div><article id="meeting-draft" class="meeting-paragraph meeting-draft" hidden><div class="paragraph-meta"><span id="draft-speaker">Listening</span><span class="paragraph-time">Transcribing…</span></div><p id="meeting-partial" class="meeting-prose"></p></article><div id="meeting-live-anchor"></div></div>
 
     </section>
@@ -345,10 +345,18 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   let answerRevision=0;
   const answerDialog=$('#meeting-answer-dialog');
   $('#close-meeting-answer').onclick=()=>answerDialog.close();
-  answerDialog.addEventListener('close',()=>{answerRevision++;});
+  const stopAnswerAudio=()=>answerDialog.querySelectorAll('.answer-source-player').forEach(player=>{player.pause();player.onloadedmetadata=null;player.onerror=null;});
+  answerDialog.addEventListener('close',()=>{answerRevision++;stopAnswerAudio();activeAnswer=null;});
   function jumpToPassage(uid,play=false){
     const u=meeting.utterances.find(u=>u.id===uid);
     if(!u){toast('Source unavailable');return;}
+    if(answerDialog.open&&activeAnswer){
+      answerReturn={eid:activeAnswer,sid:uid,scroll:answerDialog.scrollTop,
+        expanded:[...answerDialog.querySelectorAll('.answer-evidence details')].map(d=>d.open),
+        origin:{panel:activePanel,recording:selectedRecording,passage:selectedPassage,view:selectedView,
+          scroll:window.scrollY,follow:$('#meeting-follow').checked,followPlayback:$('#follow-playback').checked}};
+      $('#return-to-answer').hidden=false;
+    }
     answerDialog.close();$('#meeting-source-dialog').close();$('#meeting-activity-dialog').close();
     if(selectedRecording!==(u.recording_id||'notes'))selectRecording(u.recording_id||'notes');
     selectedPassage=u.id;selectedView='full';stopFollowing();setPanel('transcript');draw();
@@ -356,9 +364,12 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
     const phrase=openPassage(u.id);phrase?.scrollIntoView({block:'center'});phrase?.focus({preventScroll:true});
     history.replaceState(null,'',`#meetings/${encodeURIComponent(id)}/passages/${encodeURIComponent(uid)}`);
   }
-  async function openAnswer(eid,sid){
+  async function openAnswer(eid,sid,restore=null){
+    if(!restore){answerReturn=null;$('#return-to-answer').hidden=true;}
+    activeAnswer=eid;
     const revision=++answerRevision;
     $('#meeting-activity-dialog').close();
+    stopAnswerAudio();
     const detail=$('#meeting-answer-detail');detail.innerHTML='<p role="status">Loading answer…</p>';
     if(!answerDialog.open)answerDialog.showModal();
     history.replaceState(null,'',answerLink(id,eid,sid));
@@ -367,22 +378,44 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       if(disposed||revision!==answerRevision||!answerDialog.open)return;
       const e=result.event;
       const status={spoken:'Speech played',speaking:'Speaking…',thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing speech…',interrupted:'Interrupted',error:'Failed'}[e.status]||e.status;
-      detail.innerHTML=`<p class="answer-detail-status">${esc(status)}</p><section class="answer-detail-question" aria-label="Question"><h3>Question</h3><p>${esc(e.request)}</p></section><section class="answer-detail-response" aria-label="Answer"><h3>Answer</h3><p>${esc(e.response||'No answer yet.')}</p></section>${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}${answerSources(result,id,eid)}`;
+      detail.innerHTML=`<p class="answer-detail-status">${esc(status)}</p><section class="answer-detail-question" aria-label="Question"><h3>Question</h3><p>${esc(e.request)}</p></section><section class="answer-detail-response" aria-label="Answer"><h3>Answer</h3><p>${esc(e.response||'No answer yet.')}</p></section>${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}${answerSources(result,id,eid,meeting.utterances)}`;
       detail.querySelectorAll('[data-citation-jump]').forEach(b=>b.onclick=()=>jumpToPassage(b.dataset.citationJump));
       detail.querySelectorAll('[data-citation-play]').forEach(b=>{
         const source=result.citations.find(c=>c.id===b.dataset.citationPlay);
         const live=source.recording_id===captureRecording||meeting.recording&&source.recording_id===meeting.recordings.at(-1)?.id;
         b.disabled=!!live;if(live)b.title='Original audio is available after recording stops.';
-        b.onclick=()=>jumpToPassage(b.dataset.citationPlay,true);
+        b.onclick=()=>{
+          const player=b.closest('.answer-source').querySelector('.answer-source-player');
+          stopAnswerAudio();player.hidden=false;
+          const start=Math.max(0,Number(b.dataset.playStart)||0)/1000,end=Number(b.dataset.playEnd)/1000;
+          player.ontimeupdate=()=>{if(Number.isFinite(end)&&player.currentTime>=end+.5)player.pause();};
+          player.onerror=()=>toast('Could not play the source audio.');
+          const play=()=>{player.currentTime=Math.min(start,Number.isFinite(player.duration)?player.duration:start);player.play().catch(error=>{if(error.name!=='AbortError')toast('Use the audio controls to play this source.');});};
+          if(player.readyState>=1)play();
+          else{player.onloadedmetadata=play;player.src=`/api${base}/recordings/${encodeURIComponent(source.recording_id)}/audio`;player.load();}
+        };
       });
       detail.querySelectorAll('[data-copy-source]').forEach(a=>a.onclick=async event=>{
         event.preventDefault();
         try{await navigator.clipboard.writeText(new URL(a.getAttribute('href'),location.href).href);toast('Source link copied.');}
         catch{toast('Copy the source link from the link menu.');}
       });
-      if(sid){const source=document.getElementById(`answer-source-${sid}`);if(source){for(let p=source.parentElement;p&&p!==detail;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;source.tabIndex=-1;source.scrollIntoView({block:'center'});source.focus({preventScroll:true});}}
+      if(sid){const source=[...detail.querySelectorAll('.answer-source')].find(card=>JSON.parse(card.dataset.citationIds||'[]').includes(sid));if(source){for(let p=source.parentElement;p&&p!==detail;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;if(!restore){source.tabIndex=-1;source.scrollIntoView({block:'center'});source.focus({preventScroll:true});}}}
+      if(restore){detail.querySelectorAll('.answer-evidence details').forEach((d,i)=>{d.open=!!restore.expanded[i];});answerDialog.scrollTop=restore.scroll;detail.querySelector(`[data-citation-jump="${restore.sid}"]`)?.focus({preventScroll:true});}
     }catch(error){if(!disposed&&revision===answerRevision)detail.innerHTML=`<p role="status">${esc(error.message)}</p>`;}
   }
+  $('#return-to-answer').onclick=()=>{
+    const previous=answerReturn;if(!previous)return;
+    answerReturn=null;$('#return-to-answer').hidden=true;
+    const origin=previous.origin;
+    const changedRecording=selectedRecording!==origin.recording;
+    if(changedRecording)selectedRecording=origin.recording;
+    selectedPassage=origin.passage;selectedView=origin.view;setPanel(origin.panel);draw();
+    if(changedRecording)loadSelectedAudio();
+    $('#meeting-follow').checked=origin.follow;$('#follow-playback').checked=origin.followPlayback;
+    requestAnimationFrame(()=>window.scrollTo({top:origin.scroll,behavior:'instant'}));
+    openAnswer(previous.eid,previous.sid,previous);
+  };
   function showSource(item){
     sourceReturn=activePanel==='review'?{scroll:window.scrollY,focus:document.activeElement}:null;
     const dialog=$('#meeting-source-dialog');$('#meeting-source-point').textContent=item.text;

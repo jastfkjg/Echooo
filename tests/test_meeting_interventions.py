@@ -273,6 +273,7 @@ async def test_append_only_rechecks_instead_of_discarding(governed, keep):
     class Append(IssueModel):
         async def json_call(self, prompt, data, fast=False):
             if 'candidates' in data:
+                assert '"keep_ids"' in prompt and 'relevant (boolean)' not in prompt
                 return {'keep_ids':['0'] if keep else []}
             result = await super().json_call(prompt, data, fast=fast)
             with a.store.scope(a.who) as r:

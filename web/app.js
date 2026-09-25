@@ -2,7 +2,7 @@ import {mountAssistantVoice} from './assistant-voice-settings.js?v=1';
 let disposeAssistantVoice=()=>{};
 import {showMeetingDebug} from './meeting-debug.js?v=5';
 import { Voice } from './voice.js';
-import {showMeetings, leaveMeeting} from './meetings.js?v=answer-source-visibility-1';
+import {showMeetings, leaveMeeting} from './meetings.js?v=answer-context-return-1';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js?v=project-simple-3';
 import {enhanceSelects} from './select.js';
