@@ -59,10 +59,12 @@ Keep the question and reason free of internal IDs or machine citation handles.
 Write the reason in one or two concise sentences; source IDs belong only in evidence.
 new_record_ids identifies added or revised units; assess these with the supplied
 context and related findings. Do not re-propose unrelated historical issues.
-When followup_task_ids is nonempty, reassess those tasks even if new_record_ids is
-empty. For an eligible task with readiness=review and no suppressing prior question,
-return a task-linked proposal as well as its task_update; changing internal readiness
-alone does not put a question in the host's queue.
+Generate a private host question in the FIRST assessment of a concrete task with
+a material unresolved responsibility or coordination detail. Use readiness=review
+and return a task-linked proposal together with the task_update. Do not require
+a later turn, follow-up timer or topic transition. Changing internal readiness alone
+does not put a question in the host's queue. When followup_task_ids is nonempty,
+reassess those tasks even if new_record_ids is empty.
 When reassess_pending=true, review tracked tasks still missing a queue item after
 host handling or the bounded followup_task_ids window. Follow the task policy for
 private-review eligibility. This scheduling event is not new evidence, a topic boundary,
@@ -152,9 +154,9 @@ class MeetingInterventions:
         self.detection_locks = defaultdict(asyncio.Lock)
         self.delay = .4
         self.settle_seconds = 1.2
-        self.min_interval = 20
-        self.quiet_seconds = 4
-        self.max_batch_wait = 30
+        self.min_interval = 5
+        self.quiet_seconds = 2
+        self.max_batch_wait = 10
         self.budget_window = 60
         self.background_call_limit = 6
         self.approval_check_ttl = 30
@@ -163,7 +165,7 @@ class MeetingInterventions:
         self.background_calls = defaultdict(deque)
         self.pending_drafts = {}
         self.pending_reassessment = set()
-        self.task_grace_seconds = 20
+        self.task_grace_seconds = 6
         self.followup_tasks, self.followup_context, self.followup_attempted = {}, {}, {}
         self.changed_at = {}
         self.checked_units = {}
@@ -256,12 +258,13 @@ class MeetingInterventions:
                     'error': self.errors.get((who, mid)) or self.response_errors.get((who, mid), ''),
                     'available': self.enabled}}
 
-    def notify(self, who, mid):
+    def notify(self, who, mid, *, activity=True):
         if self.closed or not self.enabled:
             return
         key, now = (who, mid), self.clock()
         self.pending_since.setdefault(key, now)
-        self.last_activity[key] = now
+        if activity:
+            self.last_activity[key] = now
         if key in self.tasks:
             return
         self.tasks[who, mid] = asyncio.create_task(self.run(who, mid))
@@ -323,7 +326,7 @@ class MeetingInterventions:
             if meeting['status'] == 'active' and fingerprint == context['fingerprint'] and ids:
                 context.update(task_ids=sorted(ids), due=True)
                 self.pending_reassessment.add(key)
-                self.notify(who, mid)
+                self.notify(who, mid, activity=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -487,12 +490,10 @@ class MeetingInterventions:
                 self.phases[key] = 'idle'
             self.emit(who, mid)
 
-    def detection_result(self, value, units, rows, tasks, followup_ids=()):
+    def detection_result(self, value, units, rows, tasks, items=()):
         if not isinstance(value, dict) or not isinstance(value.get('proposals'), list) or not isinstance(value.get('resolved_ids', []), list):
             raise ValueError('Invalid intervention output')
         updates = task_gaps.validate(value, units, rows, tasks)
-        if any(t['assessment']['readiness'] == 'review' and t['ref'] not in followup_ids for t in updates):
-            raise ValueError('Private task review requires an eligible follow-up')
         refs = {t['ref'] for t in updates}
         proposals = []
         non_task_count = 0
@@ -518,7 +519,7 @@ class MeetingInterventions:
                     rows, {u['id'] for u in rows})[0]['evidence'])
             proposals.append({**p, 'task_refs': list(dict.fromkeys(task_refs)),
                 'question': display_text(p['question']), 'reason': display_text(p['reason']), 'evidence': evidence})
-        return proposals, updates
+        return task_gaps.fill_questions(proposals, updates, items), updates
 
     async def detect(self, who, mid, *, incremental=False, scheduled=False):
         async with self.detection_locks[who, mid]:
@@ -559,9 +560,9 @@ class MeetingInterventions:
             versions = {s['id']: s['version'] for s in units}
             previous = self.checked_units.get(key, {})
             new_ids = [s['id'] for s in units if previous.get(s['id']) != s['version']]
-            # Private follow-up batches can include several tracked deliverables.
+            # Private batches can include several tracked deliverables.
             # Give them time to generate and review without changing voice checks.
-            deadline = started + (45 if followup_ids else 15)
+            deadline = started + 30
             if forced:
                 new_ids = list(versions)
             if not units or incremental and not new_ids and not forced and not reassess_pending and not draft:
@@ -606,10 +607,10 @@ class MeetingInterventions:
                 }
             try:
                 prompt = task_gaps.FOLLOWUP if followup_ids else PROMPT
-                value = draft['value'] if draft else await asyncio.wait_for(self.ai.json_call(prompt, payload(units, rows), fast=True), min(25 if followup_ids else 12, deadline - time.monotonic()))
-                proposals, updates = self.detection_result(value, units, rows, tasks, followup_ids)
+                value = draft['value'] if draft else await asyncio.wait_for(self.ai.json_call(prompt, payload(units, rows), fast=True), min(25, deadline - time.monotonic()))
+                proposals, updates = self.detection_result(value, units, rows, tasks, items)
                 if updates:
-                    deadline = started + (45 if followup_ids else 25)  # Includes independent task review.
+                    deadline = started + 45  # Includes independent task review.
             except Exception as exc:
                 self.phases[key] = 'error'
                 self.record_check(who, mid, 'failed', started, units, model_calls=model_calls,
@@ -651,7 +652,7 @@ class MeetingInterventions:
                     if task_recheck:
                         # A new answer can change the task state as well as the question.
                         value = await asyncio.wait_for(self.ai.json_call(PROMPT, payload(latest, current_rows), fast=True), min(12, remaining))
-                        proposals, updates = self.detection_result(value, latest, current_rows, tasks)
+                        proposals, updates = self.detection_result(value, latest, current_rows, tasks, current_items)
                     else:
                         checked = await asyncio.wait_for(self.ai.json_call(BATCH_CHECK, {
                             'candidates': [{'id':str(i),'question':p['question'],'evidence':p['evidence']} for i,p in enumerate(proposals)],
@@ -689,14 +690,13 @@ class MeetingInterventions:
                     self.background_calls[key].append(self.clock())
                 model_calls += 1
                 try:
-                    review_prompt = task_gaps.FOLLOWUP_REVIEW if followup_ids else task_gaps.REVIEW
-                    review = await asyncio.wait_for(self.ai.json_call(review_prompt, {
+                    review = await asyncio.wait_for(self.ai.json_call(task_gaps.REVIEW, {
                         'task_candidates': candidates, 'records': [public_sentence(s) for s in units],
                         'followup_task_ids': followup_ids,
                         'new_record_ids': [s['id'] for s in units if previous.get(s['id']) != s['version']],
                         'existing': [{**{k: p[k] for k in ('id', 'question', 'reason', 'status')},
                                       **{k: p['state'].get(k) for k in ('task_ids', 'task_missing', 'task_reassess')}} for p in items],
-                    }, fast=True), min(15 if followup_ids else 10, max(0, deadline - time.monotonic())))
+                    }, fast=True), min(15, max(0, deadline - time.monotonic())))
                     task_reviews = task_gaps.review_result(review, candidates, items)
                 except Exception as exc:
                     self.record_check(who, mid, 'task_review_failed', started, units,

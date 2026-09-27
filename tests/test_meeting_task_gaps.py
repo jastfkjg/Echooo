@@ -54,10 +54,11 @@ async def test_grace_expiry_publishes_host_review_question_without_more_speech(g
     a, m = governed
     now = await start_waiting_task(governed)
     key = a.who, a.mid
-    now[0] = 19
+    m.quiet_seconds = 2  # Timer wake-up must not add another quiet interval.
+    now[0] = m.task_grace_seconds - 1
     await m.detect(*key, incremental=True, scheduled=True)
     assert len(m.ai.inputs) == 1
-    now[0] = 20
+    now[0] = m.task_grace_seconds
     await wait_until(lambda: bool(m.view(*key)['interventions']))
     await wait_until(lambda: key not in m.tasks)
     view = m.view(*key)
@@ -65,6 +66,7 @@ async def test_grace_expiry_publishes_host_review_question_without_more_speech(g
     ids = [view['tracked_tasks'][0]['id']]
     assert m.ai.inputs[-1]['new_record_ids'] == []
     assert m.ai.inputs[-1]['followup_task_ids'] == m.ai.review_inputs[0]['followup_task_ids'] == ids
+    assert m.last_activity[key] == 0
     assert view['tracked_tasks'][0]['readiness'] == 'review'
     assert view['interventions'][0]['status'] == 'proposed' and a.queue.empty()
     assert view['intervention_progress']['last_check']['followup_task_ids'] == ids
@@ -78,7 +80,7 @@ async def test_grace_reassessment_does_not_poll_unchanged_unready_discussion(gov
     a, m = governed
     now = await start_waiting_task(governed, still_wait=True)
     key = a.who, a.mid
-    now[0] = 20
+    now[0] = m.task_grace_seconds
     await wait_until(lambda: len(m.ai.inputs) == 2 and key not in m.tasks)
     assert not m.ai.review_inputs and not m.view(*key)['interventions']
     assert key not in m.followup_tasks and key not in m.followup_context
@@ -95,11 +97,11 @@ async def test_natural_answer_during_grace_cancels_pending_question(governed):
     a, m = governed
     now = await start_waiting_task(governed)
     key = a.who, a.mid
-    now[0] = 19
+    now[0] = m.task_grace_seconds - 1
     add_discussion(a, 1)
     m.ai.result = lambda data: assessment(data, status='resolved', missing=[])
     m.notify(*key)
-    now[0] = 20
+    now[0] = m.task_grace_seconds
     await wait_until(lambda: key not in m.tasks)
     assert len(m.ai.inputs) == 2 and m.ai.inputs[-1]['followup_task_ids'] == []
     assert m.view(*key)['tracked_tasks'][0]['status'] == 'resolved'
@@ -112,7 +114,7 @@ async def test_due_followup_waits_for_budget_without_losing_eligibility(governed
     now = await start_waiting_task(governed)
     key = a.who, a.mid
     m.background_calls[key].extend([0] * 4)  # Only one slot remains.
-    now[0] = 20
+    now[0] = m.task_grace_seconds
     await wait_until(lambda: m.followup_context.get(key, {}).get('due'))
     assert len(m.ai.inputs) == 1
     now[0] = 60
@@ -130,7 +132,7 @@ async def test_answer_arriving_during_timed_generation_is_rechecked_before_publi
             return assessment(data, readiness='review', propose=True)
         return assessment(data, status='resolved', missing=[])
     m.ai.result = result
-    now[0] = 20
+    now[0] = m.task_grace_seconds
     await wait_until(lambda: len(m.ai.inputs) == 3 and key not in m.tasks)
     assert m.ai.inputs[1]['followup_task_ids']
     assert m.ai.inputs[2]['followup_task_ids'] == []
@@ -154,18 +156,99 @@ async def test_pending_grace_never_publishes_after_end_delete_or_shutdown(govern
             else:
                 for u in r.list(db.utterances):
                     r.remove(db.utterances, u['id'])
-    now[0] = 20
+    now[0] = m.task_grace_seconds
     await wait_until(lambda: key not in m.followup_tasks)
     assert len(m.ai.inputs) == 1 and not m.ai.review_inputs
     assert not m.view(*key)['interventions']
 
 
-async def test_model_cannot_use_review_readiness_without_an_eligible_followup(governed):
+async def test_first_assessment_publishes_review_question_without_grace_or_speech(governed):
     a, m = governed
+    with a.store.scope(a.who) as r:
+        rows = r.list(db.utterances)
+        r.change(db.utterances, rows[0]['id'], content='We need to prepare the walkthrough.')
+        for row in rows[1:]:
+            r.remove(db.utterances, row['id'])
+    now = [0.0]
+    m.clock, m.delay = lambda: now[0], .001
     m.ai = TaskModel(lambda data: assessment(data, readiness='review', propose=True))
-    with pytest.raises(ValueError, match='eligible follow-up'):
-        await m.detect(a.who, a.mid)
-    assert not m.view(a.who, a.mid)['interventions']
+    key = a.who, a.mid
+    m.notify(*key)
+    await wait_until(lambda: m.phases.get(key) == 'scheduled')
+    now[0] = 2  # Default coalescing window, with no topic transition or follow-up.
+    await wait_until(lambda: key not in m.tasks)
+    view = m.view(*key)
+    assert len(m.ai.inputs) == len(m.ai.review_inputs) == 1
+    assert m.ai.inputs[0]['followup_task_ids'] == []
+    assert len(view['interventions']) == 1 and view['interventions'][0]['status'] == 'proposed'
+    assert key not in m.followup_tasks and a.queue.empty()
+    now[0] = 120
+    await m.detect(*key, incremental=True, scheduled=True)
+    assert len(m.ai.inputs) == 1
+
+
+async def test_answer_arriving_during_first_generation_prevents_obsolete_question(governed):
+    a, m = governed
+    def result(data):
+        if len(m.ai.inputs) == 1:
+            add_discussion(a, 1)
+            return assessment(data, readiness='review', propose=True)
+        return assessment(data, status='resolved', missing=[])
+    m.ai = TaskModel(result)
+    await m.detect(a.who, a.mid)
+    assert len(m.ai.inputs) == 2 and not m.ai.review_inputs
+    assert m.view(a.who, a.mid)['tracked_tasks'][0]['status'] == 'resolved'
+    assert not m.view(a.who, a.mid)['interventions'] and a.queue.empty()
+
+
+@pytest.mark.parametrize('missing', [['owner'], ['timing'], ['scope'], ['owner', 'timing']])
+async def test_ready_assessment_with_omitted_wording_still_gets_independent_review(governed, missing):
+    a, m = governed
+    m.ai = TaskModel(lambda data: assessment(data, readiness='review', missing=missing))
+    await m.detect(a.who, a.mid)
+    question = m.view(a.who, a.mid)['interventions'][0]['question']
+    assert len(m.ai.inputs) == len(m.ai.review_inputs) == 1
+    assert ('who will take responsibility' in question) == ('owner' in missing)
+    assert ('when should it be ready' in question) == ('timing' in missing)
+    assert ('what work does the assignment cover' in question) == ('scope' in missing)
+    assert a.queue.empty()
+    p = m.view(a.who, a.mid)['interventions'][0]
+    await m.review(a.who, a.mid, p['id'], Review(action='reject', revision=p['revision']))
+    add_discussion(a, 1)
+    await m.detect(a.who, a.mid)
+    assert len(m.ai.review_inputs) == 1  # No new fallback for the rejected task.
+    assert [p['status'] for p in m.view(a.who, a.mid)['interventions']] == ['rejected']
+
+
+async def test_omitted_wording_fallback_cannot_bypass_semantic_review(governed):
+    a, m = governed
+    class Hold(TaskModel):
+        async def json_call(self, prompt, data, fast=False):
+            result = await super().json_call(prompt, data, fast=fast)
+            if 'task_candidates' in data:
+                result['checks'][0].update(ready=False, reason='The information has already been supplied.')
+            return result
+    m.ai = Hold(lambda data: assessment(data, readiness='review'))
+    await m.detect(a.who, a.mid)
+    assert len(m.ai.review_inputs) == 1
+    assert not m.view(a.who, a.mid)['interventions'] and a.queue.empty()
+
+
+async def test_fallback_refreshes_saved_question_to_only_remaining_gap(governed):
+    a, m = governed
+    m.ai = TaskModel(lambda data: assessment(data, readiness='review'))
+    await m.detect(a.who, a.mid)
+    original = m.view(a.who, a.mid)['interventions'][0]
+    await m.review(a.who, a.mid, original['id'], Review(action='defer', revision=1))
+    add_discussion(a, 1)
+    m.ai.result = lambda data: assessment(data, readiness='review', missing=['timing'])
+    await m.detect(a.who, a.mid)
+    queue = m.view(a.who, a.mid)['interventions']
+    assert len(queue) == 1 and queue[0]['id'] == original['id']
+    assert queue[0]['status'] == 'deferred' and queue[0]['revision'] > original['revision']
+    assert 'when should it be ready' in queue[0]['question']
+    assert 'who will take responsibility' not in queue[0]['question']
+    assert len(m.ai.review_inputs) == 2 and a.queue.empty()
 
 
 async def test_waiting_task_survives_reload_and_long_discussion_without_visible_reminder(governed, client):
@@ -387,6 +470,11 @@ async def test_host_handling_rechecks_unqueued_tasks_once_without_new_speech(gov
     m.processed[key] = m.snapshot(*key)[3]
     view = m.view(*key)
     other = next(t for t in view['tracked_tasks'] if t['task'] == 'Support handover')
+    # Simulate a ready task saved by the older pipeline without a queue item.
+    with a.store.scope(a.who) as r:
+        for queued in view['interventions']:
+            if other['id'] in queued['state']['task_ids']:
+                r.remove(db.meeting_interventions, queued['id'])
     m.ai.result = lambda data: assessment(data, readiness='boundary', propose=True, ref=other['id'], task=other['task'])
     p = view['interventions'][0]
     await m.review(*key, p['id'], Review(action='reject', revision=1))

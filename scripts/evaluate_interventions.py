@@ -12,6 +12,14 @@ from echooo import meeting_task_gaps
 
 
 CASES = [
+    ('first assessment of required work without transition', [
+        'We need to produce the walkthrough.'], 'missing_detail', []),
+    ('first assessment of multiple concrete deliverables', [
+        'We need to prepare the presentation. And we need to finish the low-level design and the high-level design document.'], 'missing_detail', []),
+    ('first assessment of required work, Mandarin', [
+        '我们需要准备客户演示，还要完成部署文档。'], 'missing_detail', []),
+    ('new task with owner but missing coordination timing', [
+        'Ari will prepare the handover package. We need to know when it will be ready so support can schedule the transition.'], 'missing_detail', []),
     ('implicit schedule change with repeated new value', [
         'The inspection is on Wednesday and shipment is on Friday.',
         'Make sure inspection is finished on Tuesday and shipment happens on Thursday.',
@@ -86,6 +94,9 @@ CASES = [
 async def review_task_drafts(ai, gate, result, records, existing, new_ids=None, followup_ids=()):
     """Apply the production semantic publication review to task-linked drafts."""
     updates = {t['ref']: t for t in result.get('task_updates', [])}
+    normalized = [{**t, 'assessment': t} for t in updates.values()]
+    result = {**result, 'proposals': meeting_task_gaps.fill_questions(
+        result.get('proposals', []), normalized, existing)}
     candidates, held = [], set()
     for i, p in enumerate(result.get('proposals', [])):
         refs = p.get('task_refs', [])
@@ -100,7 +111,7 @@ async def review_task_drafts(ai, gate, result, records, existing, new_ids=None, 
                        'assessment': {k: t[k] for k in ('status', 'missing', 'readiness', 'material_change', 'reason')}} for t in linked]})
     if candidates:
         async with gate:
-            review = await asyncio.wait_for(ai.json_call(meeting_task_gaps.FOLLOWUP_REVIEW if followup_ids else meeting_task_gaps.REVIEW, {
+            review = await asyncio.wait_for(ai.json_call(meeting_task_gaps.REVIEW, {
                 'task_candidates': candidates, 'records': records, 'existing': existing,
                 'followup_task_ids': list(followup_ids),
                 'new_record_ids': new_ids if new_ids is not None else [r['id'] for r in records]}, fast=True), 60)
@@ -113,7 +124,7 @@ async def review_task_drafts(ai, gate, result, records, existing, new_ids=None, 
     return {**result, 'proposals': [p for i,p in enumerate(result.get('proposals', [])) if i not in held]}
 
 
-async def grace_checks(ai, gate):
+async def grace_checks(ai, gate, *, names=None):
     """Private queue eligibility after one grace window, without a topic boundary."""
     cases = [
         ('committed delivery without a topic transition',
@@ -160,7 +171,7 @@ async def grace_checks(ai, gate):
         except Exception as exc:
             print('ERROR: grace / '+name+' ('+type(exc).__name__+')', flush=True)
             return False
-    return await asyncio.gather(*(run(*case) for case in cases))
+    return await asyncio.gather(*(run(*case) for case in cases if names is None or case[0] in names))
 
 
 async def task_sequence(ai, gate, *, resolved):

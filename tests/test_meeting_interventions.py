@@ -140,17 +140,17 @@ async def test_automatic_batches_coalesce_continuous_speech_without_starvation(g
     try:
         await wait_until(lambda: m.phases.get(key) == 'scheduled')
         task = m.tasks[key]
-        for second in range(1, 30):
+        for second in range(1, 10):
             now[0] = second
             add_discussion(a, second)
             m.notify(*key)
             assert m.tasks[key] is task
             await asyncio.sleep(.002)
         assert not m.ai.inputs
-        now[0] = 30
+        now[0] = 10
         await wait_until(lambda: key not in m.tasks)
         assert len(m.ai.inputs) == 1
-        assert len(m.ai.inputs[0]['new_record_ids']) == 31
+        assert len(m.ai.inputs[0]['new_record_ids']) == 11
         now[0] = 100
         await asyncio.sleep(.01)
         assert len(m.ai.inputs) == 1  # Waiting for clarification does not poll the model.
@@ -164,16 +164,16 @@ async def test_automatic_cooldown_batches_new_and_corrected_speech(governed):
     m.clock, m.quiet_seconds, m.ai = lambda: now[0], 0, ObservingModel()
     await m.detect(a.who, a.mid, incremental=True, scheduled=True)
     revised = add_discussion(a, 1)
-    for second in (1, 5, 19):
+    for second in (1, 3, 4):
         now[0] = second
         with a.store.scope(a.who) as r:
             r.change(db.utterances, revised['id'], content=f'Corrected discussion version {second}.')
         assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
-    now[0] = 20
+    now[0] = 5
     await m.detect(a.who, a.mid, incremental=True, scheduled=True)
     assert len(m.ai.inputs) == 2
     assert len(m.ai.inputs[-1]['new_record_ids']) == 1
-    assert m.ai.inputs[-1]['records'][-1]['content'] == 'Corrected discussion version 19.'
+    assert m.ai.inputs[-1]['records'][-1]['content'] == 'Corrected discussion version 4.'
 
 
 async def test_append_rechecks_share_budget_and_defer_unchecked_drafts(governed):

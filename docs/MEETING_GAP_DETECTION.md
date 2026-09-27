@@ -10,10 +10,10 @@ deadlines, decisions, or resolutions.
 | Control | Default | Behaviour |
 | --- | --- | --- |
 | Transcript stability | 1.2 seconds | Recently changed speech waits before entering detection. |
-| Quiet interval | 4 seconds | Prefer a pause in transcript updates before assessing a batch. This is not an audio silence detector. |
-| Minimum generation interval | 20 seconds | New automatic generations cannot start more frequently. |
-| Task clarification grace | 20 seconds from the assessment start | One bounded reassessment for unqueued waiting tasks, even without new speech; subject to quiet time, model latency and the call budget. |
-| Maximum batch wait | 30 seconds | Continuous transcript updates cannot postpone an eligible batch indefinitely. |
+| Quiet interval | 2 seconds | Prefer a pause in transcript updates before assessing a batch. This is not an audio silence detector. |
+| Minimum generation interval | 5 seconds | New automatic generations cannot start more frequently. |
+| Uncertain-task fallback | 6 seconds from the assessment start | One bounded reassessment only for unqueued waiting tasks. Clear task gaps are proposed on their first assessment. Timer wake-ups do not restart quiet time. |
+| Maximum batch wait | 10 seconds | Continuous transcript updates cannot postpone an eligible batch indefinitely. |
 | Automatic call budget | 6 calls per rolling 60 seconds, per meeting | Includes generation, append-only relevance checks, task publication reviews, and failed attempts. New generations require at least two available calls. |
 | Approval check reuse | 30 seconds | Reuse only for the same question, proposal revision, and exact transcript fingerprint. |
 
@@ -21,8 +21,10 @@ The maximum batch wait is a scheduling target, not an end-to-end latency promise
 Stable complete input, an available budget, and completion of an in-flight check
 are still required. A model request and any necessary relevance check add latency.
 Budget exhaustion takes precedence over the batch wait; work remains pending.
-The generation interval still limits new automatic generations to one every 20
-seconds. Reserving capacity for generation plus review prevents fresh generations
+The generation interval still limits new automatic generations to one every 5
+seconds. The six-call budget remains a hard cap; the shorter interval permits
+responsive bursts, not an unlimited two-call assessment every five seconds.
+Reserving capacity for generation plus review prevents fresh generations
 from repeatedly consuming the only available call. A pending draft resumes its
 remaining checks as soon as a call is available, without another generation delay.
 These scheduling counters and pending drafts are process-local and reset on server restart. Existing
@@ -64,19 +66,21 @@ Resolved/dropped tasks and tasks with obsolete evidence are hidden from tracking
 Tasks already represented by queued, saved, dismissed, or spoken questions are not
 duplicated there; persisted semantic links to legacy questions also count. Corrected
 tasks awaiting a replacement can remain visible until a reviewed question is ready.
-New speech updates tracking and can produce a question through the existing review
-pipeline. An unqueued waiting task also receives one bounded reassessment after the
-clarification grace window. If supported, a question enters **Suggested questions**,
+New speech updates tracking and can produce a question in the FIRST assessment,
+through the existing independent review pipeline. An unqueued waiting task also
+receives one bounded reassessment after the shorter uncertainty window. If supported, a question enters **Suggested questions**,
 where the host can approve or dismiss it. Silence never starts speech.
 
 The model assesses each task's remaining ownership, timing or assignment-scope gap
 from context. A first-person commitment from an unnamed participant is not by itself
 missing ownership. Useful relative timing can be sufficient. Speculative work does
 not need an invented deadline. During an ongoing allocation exchange, the task is
-initially held internally. After the grace window, a concrete committed deliverable
-with a material unresolved assignment or coordination detail can use `readiness=review`
-and enter the private queue without an explicit topic transition. Generation and
-independent review both apply this rule. Unfinished speech, speculative work and an
+held internally only when actual speech indicates that an answer is in progress
+or the relevant detail is not yet established. A concrete executable deliverable
+with a material unresolved assignment or coordination detail uses `readiness=review`
+on its first assessment and can enter the private queue without waiting for a
+timer, another turn or an explicit topic transition. Generation and independent
+review both apply this rule. Unfinished speech, speculative work and an
 allocation answer demonstrably in progress still wait. Elapsed time is scheduling
 context, not evidence of a task, missing field or urgency. A relevant topic transition or verbal meeting wrap-up can make a
 reminder appropriate; a current blocker can justify an earlier question. The end
@@ -111,11 +115,12 @@ New task reminders combine related gaps and follow a separate publication policy
 Before a task-linked draft becomes visible, an independent semantic review checks
 the current discussion stage and compares it with prior questions. Waiting tasks do
 not incur this extra call. The review consumes the same automatic call budget, with
-a 10-second call limit and a 25-second total task-assessment window for ordinary
-batches. Timed private follow-ups allow up to 25 seconds for generation, 15 seconds
-for review and 45 seconds for the whole assessment, because several saved tasks
-can require more output. Approval and voice-check limits are unchanged. Budget or
-context changes defer publication. Ordinary non-task detection retains its earlier window.
+up to 25 seconds for generation, 15 seconds for task review and 45 seconds for
+the whole task assessment. These are timeout ceilings, not intentional waits.
+First-pass batches can now generate several task questions in the same response,
+so they receive the same output allowance as fallback batches. Approval and voice-check limits are unchanged. Budget or
+context changes defer publication. A non-task assessment has a 30-second total
+window, including any append-only relevance check.
 This is a deliberate cost/latency tradeoff to reduce premature and duplicate reminders.
 
 Task identity, materiality and discussion boundaries are semantic model judgments,
@@ -132,7 +137,48 @@ includes the storage table. Check audit records include `task_updates`, `task_re
 identifies tasks reassessed after the grace window. Historical interval
 and active-slot holds remain in earlier audit records.
 
-### Bounded follow-up verification (2026-09-27)
+### First-assessment queueing (2026-09-27)
+
+Clear task gaps now use the first generation plus independent publication review,
+without a grace generation. The backend accepts `readiness=review` for new tasks.
+Both generation and review allow an identifiable required deliverable to qualify
+without a topic transition, a complete specification or an explicit blocker.
+Uncertain/actively answered tasks retain the bounded fallback; speech still needs
+host approval and its existing current-context check.
+
+Live testing exposed another omission: the model could mark tasks ready but return
+no question text. The pipeline now renders a standard question from the validated
+semantic missing fields in that case, quoting the task name unchanged. This English
+fallback does not classify speech, invent fields, or override a wait assessment.
+It goes through the same independent review, evidence, disposition and duplicate
+guards as model-authored wording. Model wording takes precedence when present.
+Questions already handled by the host stay suppressed; changed remaining gaps can
+refresh a pending/saved question without losing its identity or deferral.
+
+A real-model, in-memory replay of the reported multi-deliverable transcript produced
+three proposed questions in 16.63 seconds from transcript insertion/notification:
+about 2 seconds coalescing, 9.39 seconds generation and 5.16 seconds review. There
+were two model calls, no fallback round, no approval and zero speech records.
+This measures one transcript-to-queue observation, excluding microphone/STT latency;
+provider response times and budget waits still vary.
+
+The full deterministic regression run passed 498 Python tests (1 skipped) and
+146 JavaScript tests. After adding a saved-question fallback refresh case, the
+focused intervention/task suite passed 98 tests. Coverage includes first-pass
+publication, the bounded fallback without a second quiet interval, omitted question
+wording, independent review vetoes, host rejection, natural completion, updates to
+saved questions, budget deferral and unchanged speech-approval guards.
+
+An initial full live evaluation passed 28/32 before the omitted-wording fix and
+semantic clarifications. A focused rerun then passed 9/9, including all four new
+first-assessment cases, natural completion, active allocation, speculation, dismissal
+and resolution before speech. A further targeted run passed 5/6, covering wrap-up
+and the fallback scenarios; its remaining failure confused required work without
+an assignee with mere aspiration. After clarifying that distinction in the fallback
+prompt, the focused failing case passed 1/1. The entire 32-case suite was not rerun
+after these refinements. This is finite semantic evidence, not a recall guarantee.
+
+### Earlier bounded follow-up verification (2026-09-27, before first-pass queueing)
 
 The scheduler now arms one follow-up for unqueued waiting tasks, checks current
 meeting/evidence/disposition at expiry, and preserves eligibility while the call
@@ -192,8 +238,10 @@ To verify locally, restart the backend and refresh the meeting page:
 
 1. In a fresh meeting, discuss several committed deliverables with consequential
    missing assignments or timing. Leave a pause without explicitly moving on.
-   After the 20-second grace window plus quiet time and generation/review latency,
-   supported questions should enter the private queue. A budget wait may delay this.
+   After the two-second transcript coalescing window plus generation and review,
+   supported questions should enter the private queue on the first assessment.
+   Do not expect a fixed 20-second grace or a second generation for clear gaps.
+   Provider latency or a budget wait can still delay publication.
    No question should speak until the host approves it.
 2. Open **Suggested questions**. At most three are initially visible; additional
    questions are available under **More questions**. New arrivals must not reopen
@@ -284,9 +332,9 @@ speech. Run `scripts/evaluate_interventions.py` with the configured live LLM to
 evaluate semantic judgments, including multi-batch completion and wrap-up scenarios.
 
 For a manual recording test, introduce a concrete deliverable. Then either assign
-it with sufficient timing during the grace window, or leave its material assignment
-gap open. The first path should close the task silently; the second can surface a
-private question after the bounded reassessment, without requiring a topic change. Dismiss it and repeat the same unresolved
+it with sufficient timing, or leave its material assignment gap open. The first
+path should close the task and withdraw any outdated pending question; the second
+can surface a private question on the first assessment, without a topic change. Dismiss it and repeat the same unresolved
 point to check suppression. A new substantive requirement can justify reassessment.
 Refresh between turns to verify persistence. The intervention checks endpoint and
 `tracked_tasks` in the meeting export show why a task was held or resolved.
