@@ -195,6 +195,11 @@ meeting_answer_traces = owned_table("meeting_answer_traces", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("detail", JSON, nullable=False),
     constraints=(UniqueConstraint("event_id"),))
+meeting_answer_triggers = owned_table("meeting_answer_triggers", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("utterance_id", String, ForeignKey("meeting_utterances.id", ondelete="CASCADE"), nullable=False),
+    Column("snapshot", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id", "utterance_id"),))
 meeting_speech = owned_table("meeting_speech", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="SET NULL")),
@@ -234,12 +239,24 @@ meeting_intervention_reviews = owned_table("meeting_intervention_reviews", meeti
 
 meeting_intervention_checks = owned_table('meeting_intervention_checks', meeting_ref(),
     Column('outcome', String, nullable=False), Column('detail', JSON, nullable=False))
+meeting_task_gaps = owned_table('meeting_task_gaps', meeting_ref(),
+    Column('task', Text, nullable=False), Column('evidence', JSON, nullable=False),
+    Column('assessment', JSON, nullable=False), Column('revision', Integer, nullable=False))
+meeting_intervention_responses = owned_table('meeting_intervention_responses', meeting_ref(),
+    Column('intervention_id', String, ForeignKey('meeting_interventions.id', ondelete='CASCADE'), nullable=False),
+    Column('utterance_id', String, ForeignKey('meeting_utterances.id', ondelete='CASCADE'), nullable=False),
+    Column('snapshot', JSON, nullable=False),
+    constraints=(UniqueConstraint('intervention_id', 'utterance_id'),))
+meeting_intervention_findings = owned_table('meeting_intervention_findings', meeting_ref(),
+    Column('intervention_id', String, ForeignKey('meeting_interventions.id', ondelete='CASCADE'), nullable=False),
+    Column('finding_id', String, ForeignKey('meeting_findings.id', ondelete='CASCADE'), nullable=False),
+    constraints=(UniqueConstraint('intervention_id', 'finding_id'),))
 
 OWNED = [assistant_voice_settings, domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
-    meeting_knowledge, meeting_answer_sources, meeting_answer_checks, meeting_answer_traces, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
-    meeting_interventions, meeting_intervention_reviews, meeting_intervention_checks]
+    meeting_knowledge, meeting_answer_sources, meeting_answer_checks, meeting_answer_traces, meeting_answer_triggers, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
+    meeting_interventions, meeting_intervention_reviews, meeting_intervention_checks, meeting_task_gaps, meeting_intervention_responses, meeting_intervention_findings]
 
 
 class Store:

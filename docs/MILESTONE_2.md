@@ -92,6 +92,25 @@ never authorizes speaking or adds anything to the approved meeting record.
   servers cancel approved/in-flight suggestions instead of replaying them.
 - Completed questions appear as Echooo AI speech, separately from human evidence.
   Approving speech does not approve a finding or save a project memory.
+- Concrete task gaps now persist across discussion batches, separately from visible
+  suggestions. Natural assignments close them silently; relevant discussion boundaries
+  and blockers can produce a combined reminder. Task-linked reminders have durable
+  deduplication and a quiet private queue with no cross-task publication cooldown.
+  The first three questions are shown by priority; remaining and deferred questions
+  are expandable. Partial answers refresh unspoken questions while preserving deferral.
+  See `MEETING_GAP_DETECTION.md` for semantics, lifecycle and local verification.
+- Direct spoken answers retain the triggering final transcript passage, including
+  original speaker, recording time and a transcript link. Corrected passages are
+  marked as changed; answer citations remain separate from the question trigger.
+- After an approved clarification is fully spoken, a separate semantic check looks
+  for actual participant answers in the next two minutes of the same recording,
+  stopping at another assistant turn. It waits for a short transcript pause and
+  considers at most 20 recent candidate passages. Temporal proximity alone never
+  creates an answer link. A provisional action item links to the clarification only
+  when its own evidence cites a linked answer; its review status remains independent.
+  The links and successful check fingerprint survive reload. Corrections invalidate links to reviewed
+  action evidence until current support is established again. Each changed batch
+  may require an additional live-model call; it does not use the gap-detection budget.
 - Findings now also support **Contradiction** and **Risk**, including category
   corrections with review history and approved-only record/export sections.
 
@@ -213,5 +232,8 @@ providers. Unit/browser checks and synthetic model evaluations are recorded sepa
   `cancelled`). Start rechecks relevance; subsequent callbacks validate the current
   approval, recording, evidence context and lease. Duplicate starts are rejected.
 - Meeting detail/export and workspace export include intervention records and reviews.
+- Meeting detail/export also include linked participant replies and their provisional
+  or reviewed action items. Answer detail/export include the original question's
+  transcript source, speaker and time.
 - Source recording deletion removes linked proposals, review snapshots and their speech
   events. Meeting deletion cascades through the new tables.

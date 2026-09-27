@@ -23,6 +23,7 @@ from echooo.meeting_retrieval import recent_passages, transcript_stamp
 from echooo.intelligence import Intelligence
 from echooo.models import STTEventType
 from echooo.meeting_playback import MeetingPlayback
+from echooo.meeting_links import answer_triggers, save_answer_triggers
 from echooo.assistant_voice import factory as assistant_tts, providers as speech_providers
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,8 @@ class MeetingAgent:
                 'phase': 'stopped' if row['desired_state'] == 'left' else 'waiting', 'error': '',
                 'events': [{**{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at')},
                     'citations': manager.knowledge.citations(row['owner_id'], row['meeting_id'], e['id']),
-                    'answer_check': answer_checks.get(e['id'])}
+                    'answer_check': answer_checks.get(e['id']),
+                    'triggers': answer_triggers(r, e['id'])}
                     for e in reversed(list(events))]}
 
     def __init__(self, manager, row):
@@ -139,9 +141,12 @@ class MeetingAgent:
                     db.meeting_agent_events.c.created_at.desc()).limit(limit)).mappings()
             events = [dict(row) for row in reversed(list(rows))]
         answer_checks = meeting_answers.checks(self.store, self.who, self.mid)
+        with self.store.scope(self.who) as r:
+            triggers = {event['id']: answer_triggers(r, event['id']) for event in events}
         for event in events:
             event['answer_check'] = answer_checks.get(event['id'])
             event['citations'] = self.manager.knowledge.citations(self.who, self.mid, event['id'])
+            event['triggers'] = triggers[event['id']]
         return events
 
     def view(self):
@@ -153,7 +158,7 @@ class MeetingAgent:
             'audio_metrics': self.playback.metrics,
             'deciding_turn': bool(self.decision_task and not self.decision_task.done()),
             'turn_decision': self.turn_decision,
-            'events': [{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at', 'citations', 'answer_check')}
+            'events': [{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at', 'citations', 'answer_check', 'triggers')}
                 for e in self.events() if e['status'] != 'observed']}
 
     def change(self, event, **values):
@@ -174,7 +179,7 @@ class MeetingAgent:
         # Cancel work already generated under the previous policy, including queued turns.
         await self.stop(all_replies=True)
 
-    async def accept(self, key, text, audience, sender, *, reply=True, timing=None, prepared=None):
+    async def accept(self, key, text, audience, sender, *, reply=True, timing=None, prepared=None, trigger_rows=()):
         if not self.valid() or not isinstance(text, str) or not text.strip() or len(text) > 6000:
             return
         with self.store.scope(self.who) as r:
@@ -184,6 +189,7 @@ class MeetingAgent:
             event = r.add(db.meeting_agent_events, meeting_id=self.mid, connection_id=self.cid,
                 source_key=key, audience=audience, sender=sender, request=text, response='',
                 status='queued' if reply else 'observed', error='')
+            save_answer_triggers(r, event, trigger_rows)
         if not reply:
             return
         event['_prepared_answer'] = prepared
@@ -259,7 +265,7 @@ class MeetingAgent:
         if self.decision_task and self.decision_task is not asyncio.current_task():
             self.decision_task.cancel()
 
-    async def decide_turn(self, text, key, speaker, revision, timing=None):
+    async def decide_turn(self, text, key, speaker, revision, timing=None, trigger_rows=()):
         try:
             timing = dict(timing or {'received': time.monotonic()})
             prepared = await asyncio.wait_for(meeting_answers.prepare_followup(
@@ -277,7 +283,8 @@ class MeetingAgent:
                     await self.stop(end_conversation=False)
                 self.conversation_speaker = speaker
                 self.conversation_until = time.monotonic() + 15
-                await self.accept('voice:' + key, text, 'voice', speaker or '', timing=timing, prepared=prepared)
+                await self.accept('voice:' + key, text, 'voice', speaker or '', timing=timing,
+                                  prepared=prepared, trigger_rows=trigger_rows)
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -343,7 +350,7 @@ class MeetingAgent:
             if self.barge_task is asyncio.current_task():
                 self.barge_task = None
 
-    async def transcript(self, event, key):
+    async def transcript(self, event, key, trigger_rows=()):
         if not self.valid() or not self.prefs['voice_enabled']:
             return
         text = event.transcript.strip()
@@ -393,10 +400,12 @@ class MeetingAgent:
                 await self.stop(end_conversation=False)  # Supersede stale thinking with the follow-up.
             self.conversation_speaker = speaker
             self.conversation_until = time.monotonic() + 15
-            await self.accept('voice:' + key, text, 'voice', speaker or '', timing=event.raw.get('_answer_timing'))
+            await self.accept('voice:' + key, text, 'voice', speaker or '',
+                              timing=event.raw.get('_answer_timing'), trigger_rows=trigger_rows)
         elif candidate:
             # Run separately so model latency never blocks transcription or Stop.
-            self.decision_task = asyncio.create_task(self.decide_turn(text, key, speaker, self.turn_revision, event.raw.get('_answer_timing')))
+            self.decision_task = asyncio.create_task(self.decide_turn(text, key, speaker, self.turn_revision,
+                event.raw.get('_answer_timing'), trigger_rows))
 
     def context(self, event):
         current_scope = self.manager.knowledge.snapshot(self.who, self.mid)[4]

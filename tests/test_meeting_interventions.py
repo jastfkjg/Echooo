@@ -180,6 +180,7 @@ async def test_append_rechecks_share_budget_and_defer_unchecked_drafts(governed)
     a, m = governed
     now = [0.0]
     m.clock, m.quiet_seconds = lambda: now[0], 0
+    m.background_call_limit = 3  # Exercise the original constrained budget too.
     class Appending(IssueModel):
         async def json_call(self, prompt, data, fast=False):
             if 'candidates' in data:
@@ -194,46 +195,50 @@ async def test_append_rechecks_share_budget_and_defer_unchecked_drafts(governed)
     checked = dict(m.checked_units[a.who, a.mid])
     now[0] = 20
     assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
-    assert m.ai.calls == 3
+    assert m.ai.calls == 2  # One remaining slot cannot start a two-call batch.
     assert m.checked_units[a.who, a.mid] == checked
-    assert m.view(a.who, a.mid)['intervention_progress']['last_check']['outcome'] == 'budget_deferred'
     now[0] = 40
     assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
-    assert m.ai.calls == 3
+    assert m.ai.calls == 2
     now[0] = 60
     await m.detect(a.who, a.mid, incremental=True, scheduled=True)
-    assert m.ai.calls == 5
-    assert len(m.background_calls[a.who, a.mid]) == 3
+    assert m.ai.calls == 4
+    assert len(m.background_calls[a.who, a.mid]) == 2
 
 
 async def test_manual_check_bypasses_background_budget(governed):
     a, m = governed
     m.clock, m.quiet_seconds, m.ai = lambda: 0, 0, ObservingModel()
     key = a.who, a.mid
-    m.background_calls[key].extend([0, 0, 0])
+    m.background_calls[key].extend([0] * m.background_call_limit)
     assert await m.detect(*key, incremental=True, scheduled=True) == 'scheduled'
     m.force.add(key)
     await m.detect(*key, incremental=True, scheduled=True)
     assert len(m.ai.inputs) == 1
     assert key not in m.force
-    assert len(m.background_calls[key]) == 3
+    assert len(m.background_calls[key]) == m.background_call_limit
 
 
 async def test_failed_automatic_calls_still_consume_budget(governed):
     a, m = governed
     now = [0.0]
     m.clock, m.quiet_seconds = lambda: now[0], 0
+    m.background_call_limit = 3
     async def fail(*args, **kwargs):
         raise TimeoutError()
     m.ai.json_call = fail
-    for second in (0, 20, 40):
+    for second in (0, 20):
         now[0] = second
         with pytest.raises(TimeoutError):
             await m.detect(a.who, a.mid, incremental=True, scheduled=True)
     now[0] = 59
     assert await m.detect(a.who, a.mid, incremental=True, scheduled=True) == 'scheduled'
-    assert len(m.background_calls[a.who, a.mid]) == 3
+    assert len(m.background_calls[a.who, a.mid]) == 2
     assert m.view(a.who, a.mid)['intervention_progress']['last_check']['model_calls'] == 1
+    now[0] = 60
+    with pytest.raises(TimeoutError):
+        await m.detect(a.who, a.mid, incremental=True, scheduled=True)
+    assert len(m.background_calls[a.who, a.mid]) == 2
 
 
 async def test_inflight_check_coalesces_manual_requests_and_new_speech(governed, client):
@@ -305,7 +310,7 @@ def test_stable_input_wait_is_bounded(governed):
 
 
 @pytest.fixture
-def governed(agent):
+async def governed(agent):
     m = agent.manager.interventions
     m.ai = IssueModel()
     m.enabled = True
@@ -318,7 +323,10 @@ def governed(agent):
                                   'Let us move on to the support plan.']):
             r.add(db.utterances, meeting_id=agent.mid, recording_id=None, speaker='Alice', content=text,
                 start_ms=i*1000, end_ms=(i+1)*1000)
-    return agent, m
+    try:
+        yield agent, m
+    finally:
+        await m.close()
 
 
 async def propose(governed):
@@ -355,6 +363,74 @@ async def test_private_detection_dedup_review_audit_and_exact_speech(governed, c
     exported = client.get('/api/meetings/'+a.mid+'/export').json()
     assert exported['intervention_reviews'][0]['after']['question'] == question
     assert exported['assistant_utterances'][0]['content'] == question
+
+
+async def test_spoken_clarification_links_semantic_reply_and_its_reviewable_action(governed, client):
+    from echooo.meeting_findings import source_hash
+
+    a, m = governed
+    p = await propose(governed)
+    with a.store.scope(a.who) as r:
+        rec = r.add(db.recordings, meeting_id=a.mid, sample_rate=16000, samples=160000)
+        event = r.add(db.meeting_agent_events, meeting_id=a.mid, connection_id=a.cid,
+            source_key=f'intervention:{p["id"]}:1', audience='voice', sender=a.who,
+            request=p['question'], response=p['question'], status='spoken', error='')
+        r.add(db.meeting_speech, meeting_id=a.mid, event_id=event['id'], recording_id=rec['id'],
+            timing={'start_ms': 1000, 'end_ms': 3000, 'completed_at': time.time()})
+        r.change(db.meeting_interventions, p['id'], status='spoken',
+            state={**p['state'], 'event_id': event['id'], 'approved_question': p['question']})
+        unrelated = r.add(db.utterances, meeting_id=a.mid, recording_id=rec['id'],
+            speaker='Bob', content='The slides use a blue background.', start_ms=4000, end_ms=5000)
+        reply = r.add(db.utterances, meeting_id=a.mid, recording_id=rec['id'],
+            speaker='Alice', content='I will own the checklist and finish it on Friday.',
+            start_ms=5200, end_ms=7400)
+    class ResponseModel:
+        answer_ids = [reply['id']]
+
+        async def json_call(self, prompt, data, fast=False):
+            assert data['question'] == p['question']
+            assert [u['id'] for u in data['candidates']] == [unrelated['id'], reply['id']]
+            return {'answer_ids': self.answer_ids}
+    model = m.ai = ResponseModel()
+    m.response_delay = .01
+    m.schedule_responses(a.who, a.mid)
+    await wait_until(lambda: bool(m.view(a.who, a.mid)['interventions'][0]['responses']))
+    response = m.view(a.who, a.mid)['interventions'][0]['responses']
+    assert [x['utterance_id'] for x in response] == [reply['id']]
+    assert response[0]['speaker'] == 'Alice' and response[0]['start_ms'] == 5200
+    evidence = [{'utterance_id': reply['id'], 'recording_id': rec['id'],
+        'speaker': 'Alice', 'start_ms': 5200, 'end_ms': 7400,
+        'quote': reply['content'], 'source_hash': source_hash(reply)}]
+    with a.store.scope(a.who) as r:
+        finding = r.add(db.meeting_findings, meeting_id=a.mid, kind='action_item',
+            statement='Finish the checklist on Friday.', original={}, evidence=evidence,
+            details={'owner': 'Alice', 'deadline_text': 'Friday'}, fingerprint='linked-action',
+            status='provisional', revision=1)
+    linked = client.get(f'/api/meetings/{a.mid}/interventions').json()['interventions'][0]
+    assert linked['action_items'][0]['id'] == finding['id']
+    assert linked['action_items'][0]['status'] == 'provisional'
+    with a.store.scope(a.who) as r:
+        r.change(db.meeting_findings, finding['id'], status='approved', revision=2)
+    assert m.view(a.who, a.mid)['interventions'][0]['action_items'][0]['status'] == 'approved'
+    reopened = db.Store(a.settings.database_url)
+    try:
+        with reopened.scope(a.who) as r:
+            assert len(r.list(db.meeting_intervention_responses)) == 1
+            assert len(r.list(db.meeting_intervention_findings)) == 1
+    finally:
+        reopened.close()
+    with a.store.scope(a.who) as r:
+        r.change(db.utterances, reply['id'], content='I will only review the slides.')
+    changed = m.view(a.who, a.mid)['interventions'][0]
+    assert changed['responses'][0]['changed']
+    assert changed['action_items'] == []
+    model.answer_ids = ['foreign-utterance']
+    with pytest.raises(ValueError, match='Invalid intervention response IDs'):
+        await m.link_responses(a.who, a.mid)
+    assert len(m.view(a.who, a.mid)['interventions'][0]['responses']) == 1
+    model.answer_ids = []
+    await m.link_responses(a.who, a.mid)
+    assert m.view(a.who, a.mid)['interventions'][0]['responses'] == []
 
 
 @pytest.mark.parametrize('change', ['expired', 'legacy', 'new_speech'])

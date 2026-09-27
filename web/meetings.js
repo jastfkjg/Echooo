@@ -1,7 +1,7 @@
-import {answerSources,answerLink} from './answer-sources.js?v=3';
+import {answerSources,answerTriggers,answerLink} from './answer-sources.js?v=4';
 import {BrowserAnswerSpeech} from './browser-answer-speech.js?v=streaming-3';
-import {mountFindings} from './meeting-findings.js?v=13';
-import {mountInterventions} from './meeting-interventions.js?v=server-tts-1';
+import {mountFindings} from './meeting-findings.js?v=14';
+import {mountInterventions} from './meeting-interventions.js?v=tracked-gaps-1';
 import {editMeetingKnowledge, reviewMeetingUpdate, newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import {TranscriptUpdates} from './meeting-live.js?v=live-transcript-1';
 import {MeetingAudio} from './meeting-audio.js?v=browser-turns-1';
@@ -100,6 +100,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   });
   if(!browserSpeech.available){$('#recording-answer-enabled').checked=false;$('#recording-answer-enabled').disabled=true;}
   const interventionsPanel=mountInterventions($('#meeting-interventions'),{api,base,refresh,openDialog,showSource,
+    openFinding:fid=>{const f=meeting.findings?.find(item=>item.id===fid);if(f?.evidence?.[0])selectRecording(f.evidence[0].recording_id||'notes');setPanel('review');if(!findingsPanel.openFinding(fid))$('#meeting-findings').scrollIntoView({block:'start'});},
     getLocalRecording:()=>!disposed&&!stopping&&socket?.readyState===WebSocket.OPEN?captureRecording:null,
     onLocalSpeech:active=>browserSpeech.guard(active),
     });
@@ -378,7 +379,8 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
       if(disposed||revision!==answerRevision||!answerDialog.open)return;
       const e=result.event;
       const status={spoken:'Speech played',speaking:'Speaking…',thinking:'Thinking…',searching:'Checking earlier discussion…',sending:'Preparing speech…',interrupted:'Interrupted',error:'Failed'}[e.status]||e.status;
-      detail.innerHTML=`<p class="answer-detail-status">${esc(status)}</p><section class="answer-detail-question" aria-label="Question"><h3>Question</h3><p>${esc(e.request)}</p></section><section class="answer-detail-response" aria-label="Answer"><h3>Answer</h3><p>${esc(e.response||'No answer yet.')}</p></section>${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}${answerSources(result,id,eid,meeting.utterances)}`;
+      detail.innerHTML=`<p class="answer-detail-status">${esc(status)}</p><section class="answer-detail-question" aria-label="Question"><h3>Question</h3><p>${esc(e.request)}</p></section>${answerTriggers(result.triggers)}<section class="answer-detail-response" aria-label="Answer"><h3>Answer</h3><p>${esc(e.response||'No answer yet.')}</p></section>${e.error?`<p class="meeting-warning">${esc(e.error)}</p>`:''}${answerSources(result,id,eid,meeting.utterances)}`;
+      detail.querySelectorAll('[data-trigger-jump]').forEach(b=>b.onclick=()=>jumpToPassage(b.dataset.triggerJump));
       detail.querySelectorAll('[data-citation-jump]').forEach(b=>b.onclick=()=>jumpToPassage(b.dataset.citationJump));
       detail.querySelectorAll('[data-citation-play]').forEach(b=>{
         const source=result.citations.find(c=>c.id===b.dataset.citationPlay);

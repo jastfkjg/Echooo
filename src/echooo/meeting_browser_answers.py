@@ -16,6 +16,7 @@ from echooo.meeting_live import timed_words
 from echooo.models import STTEvent, STTEventType
 from echooo.meeting_retrieval import transcript_stamp
 from echooo.meeting_speech import mark_speech
+from echooo.meeting_links import answer_triggers, save_answer_triggers
 
 logger = logging.getLogger(__name__)
 PENDING = {'queued', 'thinking', 'searching', 'sending', 'speaking'}
@@ -30,8 +31,11 @@ def history(manager, who, mid):
     with manager.store.scope(who) as r:
         rows = r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid,
             db.meeting_agent_events.c.connection_id.like('browser-recording:%'))
+    with manager.store.scope(who) as r:
+        triggers = {e['id']: answer_triggers(r, e['id']) for e in rows}
     return [{**{k: e[k] for k in ('id', 'audience', 'request', 'response', 'status', 'error', 'created_at')},
-        'answer_check': audit.get(e['id']), 'citations': manager.knowledge.citations(who, mid, e['id'])}
+        'answer_check': audit.get(e['id']), 'citations': manager.knowledge.citations(who, mid, e['id']),
+        'triggers': triggers[e['id']]}
         for e in sorted(rows, key=lambda e: e['created_at'])[-20:]]
 
 
@@ -192,9 +196,9 @@ class BrowserMeetingAnswers:
                 agent_record(self, 'trigger', decision='echo', text=u['content'][:2000], source_id=u['id'])
                 continue
             final = STTEvent(STTEventType.FINAL, u['content'], raw={'speaker_label': u['speaker'], '_answer_timing': anchor})
-            await MeetingAgent.transcript(self, final, self.recording_id + ':' + u['id'])
+            await MeetingAgent.transcript(self, final, self.recording_id + ':' + u['id'], (u,))
 
-    async def accept(self, key, text, audience, sender, *, timing=None, prepared=None):
+    async def accept(self, key, text, audience, sender, *, timing=None, prepared=None, trigger_rows=()):
         if not self.valid():
             return
         with self.store.scope(self.who) as r:
@@ -204,6 +208,7 @@ class BrowserMeetingAnswers:
             e = r.add(db.meeting_agent_events, meeting_id=self.mid, connection_id=self.cid,
                 source_key=key, audience=audience, sender=sender, request=text,
                 response='', status='queued', error='')
+            save_answer_triggers(r, e, trigger_rows)
         e['_prepared_answer'] = prepared
         answer_timing.begin(self, e, timing)
         e['_input_anchor'] = timing or {}

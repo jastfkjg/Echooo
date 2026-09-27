@@ -163,6 +163,30 @@ async def test_voice_final_only_echo_suppression_pcm_format_and_tail(agent):
     agent.manager.sockets.pop(agent.cid)
 
 
+async def test_direct_question_keeps_its_trigger_passage_after_reopen(agent, client):
+    with agent.store.scope(agent.who) as r:
+        rec = r.add(db.recordings, meeting_id=agent.mid, sample_rate=16000, samples=160000)
+        question = r.add(db.utterances, meeting_id=agent.mid, recording_id=rec['id'],
+            speaker='Alice', content='Echooo, what did we decide?', start_ms=4200, end_ms=6100)
+    await agent.transcript(STTEvent(STTEventType.FINAL, question['content']), 'recording:turn-1', (question,))
+    event = agent.queue.get_nowait()
+    detail = client.get(f'/api/meetings/{agent.mid}/answers/{event["id"]}').json()
+    assert detail['triggers'][0]['utterance_id'] == question['id']
+    assert detail['triggers'][0]['speaker'] == 'Alice'
+    assert detail['triggers'][0]['start_ms'] == 4200
+    assert not detail['triggers'][0]['changed']
+    reopened = db.Store(agent.settings.database_url)
+    try:
+        with reopened.scope(agent.who) as r:
+            assert r.list(db.meeting_answer_triggers)[0]['event_id'] == event['id']
+    finally:
+        reopened.close()
+    with agent.store.scope(agent.who) as r:
+        r.change(db.utterances, question['id'], content='Corrected question.')
+    changed = client.get(f'/api/meetings/{agent.mid}/answers/{event["id"]}').json()['triggers'][0]
+    assert changed['changed'] and changed['content'] == 'Echooo, what did we decide?'
+
+
 async def test_stop_cancels_generation_and_pending_voice_not_private_chat(agent):
     entered = asyncio.Event()
     async def slow(event):

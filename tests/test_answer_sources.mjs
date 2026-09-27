@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {answerLink,answerSourceGroups,answerSources} from '../web/answer-sources.js';
+import {answerLink,answerSourceGroups,answerSources,answerTriggers} from '../web/answer-sources.js';
 import {renderAnswerTiming} from '../web/meeting-debug.js';
 
 test('answer evidence shows original words, speaker, time and durable source navigation',()=>{
@@ -10,6 +10,14 @@ test('answer evidence shows original words, speaker, time and durable source nav
   assert.ok(html.includes('We chose Telegram.'));
   assert.ok(html.includes('data-citation-jump="source"'));
   assert.ok(html.includes(answerLink('meeting','old-answer','source')));
+});
+
+test('direct question trigger shows its own transcript source and changed state',()=>{
+  const html=answerTriggers([{utterance_id:'question',speaker:'<Alice>',content:'Echooo, which option?',start_ms:4000,changed:true}]);
+  assert.match(html,/Question in transcript/);
+  assert.match(html,/&lt;Alice&gt; · 0:04 · Transcript changed/);
+  assert.match(html,/data-trigger-jump="question"/);
+  assert.match(html,/View current transcript/);
 });
 
 test('changed and deleted sources never masquerade as original evidence',()=>{

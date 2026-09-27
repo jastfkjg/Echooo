@@ -98,6 +98,7 @@ async def test_direct_final_answers_without_attendee_and_completion_is_durable(b
     assert (await receipt(b, 'spoken'))['ok']
     await b.task
     assert events(b)[0]['status'] == 'spoken'
+    assert events(b)[0]['triggers'][0]['utterance_id'] == u['id']
     with b.store.scope(b.who) as r:
         assert r.get(db.utterances, u['id'])['content'] == 'Hello, Echooo.'
         assert not r.list(db.meeting_bots) and not r.list(db.meeting_agent_settings)
@@ -105,6 +106,7 @@ async def test_direct_final_answers_without_attendee_and_completion_is_durable(b
     exported = client.get(f'/api/meetings/{b.mid}/export').json()
     assert exported['browser_answers'][0]['response'] == ack['question']
     assert exported['assistant_utterances'][0]['content'] == ack['question']
+    assert exported['answers'][0]['triggers'][0]['content'] == 'Hello, Echooo.'
     assert 'token' not in str(exported)
     assert (await receipt(b, 'start'))['ok'] is False
 

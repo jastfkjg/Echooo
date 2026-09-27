@@ -1,8 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {interventionHTML,evidenceGroups} from '../web/meeting-interventions.js';
+import {interventionHTML,evidenceGroups,suggestionQueue,suggestionQueueHTML,unaskedTaskGaps,trackedGapHTML,trackedGapsHTML} from '../web/meeting-interventions.js';
 import {approvedRecordHTML, findingEditorHTML} from '../web/meeting-findings.js';
 const p={id:'p',kind:'missing_detail',status:'proposed',question:'Who owns <script>this</script>?',reason:'Missing owner',evidence:[{utterance_id:'u',speaker:'Alice',quote:'<b>Owner needed</b>',start_ms:61000}],state:{}};
+const task={id:'t',task:'Prepare the launch checklist',status:'open',readiness:'wait',missing:['owner','timing'],evidence_current:true,reason:'The allocation exchange is still continuing.',evidence:p.evidence};
+test('recognized gaps remain visible when no question is ready, with no speech controls',()=>{
+  const tasks=unaskedTaskGaps([task],[]);
+  assert.equal(tasks.length,1);
+  const html=suggestionQueueHTML(suggestionQueue([]),p=>interventionHTML(p),trackedGapsHTML(tasks));
+  assert.match(html,/Tracked gaps/);
+  assert.match(html,/Missing owner · Timing not agreed/);
+  assert.match(html,/data-task-source="t"/);
+  assert.ok(!html.includes('data-proposal-action')&&!html.includes('Play locally')&&!html.includes('Ask in meeting'));
+  assert.ok(!html.includes('<b>'));
+  assert.ok(trackedGapHTML({...task,task:'<script>unsafe</script>',reason:'<b>unsafe</b>'}).includes('&lt;script&gt;'));
+});
+test('tracking follows partial answers and resolution, without inferring a missing deadline',()=>{
+  assert.match(trackedGapHTML({...task,missing:['owner']}),/Missing owner/);
+  assert.ok(!trackedGapHTML({...task,missing:['owner']}).includes('Timing not agreed'));
+  const partial=trackedGapHTML({...task,missing:['timing']});
+  assert.ok(!partial.includes('Missing owner'));
+  assert.deepEqual(unaskedTaskGaps([{...task,status:'resolved',missing:[]},{...task,status:'dropped',missing:[]},{...task,evidence_current:false}]),[]);
+});
+test('tracked gaps do not duplicate pending, saved, dismissed, or spoken questions',()=>{
+  for(const status of ['proposed','deferred','approved','speaking','spoken','rejected','cancelled','failed']){
+    assert.deepEqual(unaskedTaskGaps([task],[{...p,status,state:{task_ids:['t']}}]),[]);
+    assert.deepEqual(unaskedTaskGaps([{...task,related_proposal_ids:['p']}],[{...p,status}]),[]);
+  }
+  assert.equal(unaskedTaskGaps([task],[{...p,state:{task_ids:['other']}}]).length,1);
+  assert.equal(unaskedTaskGaps([task],[{...p,status:'stale',state:{task_ids:['t'],task_reassess:true}}]).length,1);
+  assert.deepEqual(unaskedTaskGaps([task],[{...p,status:'stale',state:{task_ids:['t']}}]),[]);
+});
+test('large tracked gap lists use progressive disclosure without losing items',()=>{
+  const html=trackedGapsHTML(Array.from({length:5},(_,i)=>({...task,id:String(i)})));
+  assert.match(html,/<summary>More tracked gaps · 2<\/summary>/);
+  assert.equal((html.match(/data-tracked-task=/g)||[]).length,5);
+});
+test('queue prioritizes delivery and blockers, retains all overflow and saved questions',()=>{
+  const items=[0,1,2,3,4].map(i=>({...p,id:String(i),created_at:i}));
+  items[4]={...items[4],state:{task_priority:'blocking'}};
+  items.push({...p,id:'speaking',status:'speaking'},{...p,id:'saved',status:'deferred'}, {...p,id:'dismissed',status:'rejected'});
+  const original=JSON.stringify(items),queue=suggestionQueue(items);
+  assert.deepEqual(queue.visible.map(p=>p.id),['speaking','4','0']);
+  assert.deepEqual(queue.more.map(p=>p.id),['1','2','3']);
+  assert.deepEqual(queue.saved.map(p=>p.id),['saved']);
+  assert.deepEqual(queue.history.map(p=>p.id),['dismissed']);
+  assert.equal(JSON.stringify(items),original);
+  const html=suggestionQueueHTML(queue,p=>interventionHTML(p));
+  assert.match(html,/<details data-suggestion-details="queue"><summary>More questions · 3/);
+  assert.match(html,/Saved for later · 1/);
+  assert.equal((html.match(/data-intervention=/g)||[]).length,items.length);
+  assert.deepEqual(suggestionQueue(items,'3').visible.map(p=>p.id),['speaking','3','4']);
+});
 test('private suggestions escape model text and show explicit speech approval controls',()=>{
   const html=interventionHTML(p);
   assert.ok(!html.includes('<script>')&&!html.includes('<b>'));
@@ -54,6 +103,15 @@ test('delivery is explicit and editing is inline with escaped draft text',()=>{
 });
 test('review history preserves changed wording',()=>{
   assert.ok(interventionHTML(p,[{action:'approve',created_at:0,before:{question:'Original'},after:{question:'Edited'}}]).includes('Original → Edited'));
+});
+test('linked participant answer and provisional action remain separate from approval',()=>{
+  const html=interventionHTML({...p,status:'spoken',responses:[{utterance_id:'reply',speaker:'Alice',content:'I will do it Friday.',start_ms:9000}],
+    action_items:[{id:'finding',statement:'Prepare the presentation.',status:'provisional'}]});
+  assert.match(html,/Participant replies · 1/);
+  assert.match(html,/data-proposal-source="reply"/);
+  assert.match(html,/Awaiting review/);
+  assert.match(html,/data-proposal-finding="finding"/);
+  assert.ok(!html.includes('Confirmed'));
 });
 test('approved risks and contradictions appear in the record and category editor',()=>{
   const finding={...p,statement:'Release dates conflict.',details:{},evidence:[],evidence_current:true,kind:'contradiction'};

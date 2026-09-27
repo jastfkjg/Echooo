@@ -197,7 +197,7 @@ class BotRecording:
         rows = self.writer.consume(event, offset_ms, session, round(self.samples * 1000 / RATE))
         agent = self.manager.agents.get(self.row['id'])
         if agent and (event.type == STTEventType.PARTIAL or event.type == STTEventType.FINAL and rows):
-            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", self.samples)}')
+            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", self.samples)}', rows)
 
     def feed(self, pcm):
         self.samples += len(pcm) // 2

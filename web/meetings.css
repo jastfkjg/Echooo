@@ -360,6 +360,7 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 /* Review evidence and audit are separate, quiet disclosures. */
 .meeting-findings .finding-row{border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:20px 0}
 .meeting-findings .finding-row:hover,.meeting-findings .finding-row:focus-within{background:transparent}
+.meeting-findings .finding-row:focus{outline:2px solid var(--accent);outline-offset:3px}
 .finding-disclosures{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:0 24px;margin-top:8px;min-width:0}
 .meeting-findings .finding-disclosures>.finding-details{grid-column:auto;grid-row:auto;flex:0 0 auto}
 .meeting-findings .finding-disclosures>.finding-details[open]{flex-basis:100%;order:1}
@@ -507,6 +508,7 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .intervention-row .intervention-evidence { margin:12px 0; padding:12px 16px; border-left:3px solid var(--line); background:var(--soft); }
 .intervention-evidence p { white-space:pre-wrap; line-height:1.65; font-size:15px; }
 .intervention-evidence footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 16px; margin-top:6px; color:var(--muted); font-size:13px; }
+.intervention-linked-action{margin:8px 0;line-height:1.55;overflow-wrap:anywhere}
 
 .meeting-controls #recording-answer-status,.meeting-controls #recording-answer-text{flex-basis:100%;margin:0;overflow-wrap:anywhere}
 
@@ -570,6 +572,14 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .meeting-suggestions-toggle svg{width:14px;height:14px}
 .meeting-suggestions-toggle[aria-expanded="true"] svg{transform:rotate(90deg)}
 .meeting-suggestions-toggle [data-suggestion-count]{color:var(--muted);font-size:12px;font-weight:400}
+.meeting-suggestions-toggle{flex-wrap:wrap;row-gap:2px}
+.meeting-suggestions-toggle svg{flex-shrink:0}
+.meeting-suggestions-toggle [data-tracked-gap-count]{color:var(--muted);font-size:12px;font-weight:400;white-space:nowrap}
+.tracked-gaps{margin-top:16px}
+.tracked-gaps>h3{font-size:14px;margin:0 0 6px}
+.tracked-gaps>.muted{font-size:13px;margin:0 0 8px}
+.tracked-gaps .intervention-question{font-size:15px;margin-bottom:6px}
+.tracked-gap-fields{font-size:13px;color:var(--accent);margin:0}
 .meeting-interventions>[data-intervention-status]{font-size:12px}
 .meeting-interventions>[data-intervention-error]:not(:empty){font-size:13px;margin:8px 0;color:var(--danger)}
 @media(max-width:600px){
@@ -582,9 +592,14 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 
 .answer-detail-status{margin:0 0 14px;color:var(--muted);font-size:12px}
 .answer-detail-question{margin-bottom:16px;overflow-wrap:anywhere}
-.answer-detail-question h3,.answer-detail-response h3,.answer-evidence h3{font-size:13px;font-weight:650;line-height:1.4}
+.answer-detail-question h3,.answer-trigger h3,.answer-detail-response h3,.answer-evidence h3{font-size:13px;font-weight:650;line-height:1.4}
 .answer-detail-question h3{margin-bottom:4px;color:var(--muted)}
 .answer-detail-question p{font-size:14px;line-height:1.55}
+.answer-trigger{margin:0 0 16px;overflow-wrap:anywhere}
+.answer-trigger h3{margin-bottom:6px;color:var(--muted)}
+.answer-trigger blockquote{margin:0 0 8px;padding:8px 12px;border-left:2px solid var(--line);background:var(--soft)}
+.answer-trigger blockquote p{margin:0 0 4px;font-size:14px;line-height:1.55;white-space:pre-wrap}
+.answer-trigger blockquote p.muted{font-size:12px}
 .answer-detail-response{padding:14px 16px;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;background:var(--soft);overflow-wrap:anywhere}
 .answer-detail-response h3{margin-bottom:7px;color:var(--accent)}
 .answer-detail-response p{font-size:16px;line-height:1.6;white-space:pre-wrap}

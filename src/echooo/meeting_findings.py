@@ -545,6 +545,8 @@ class MeetingFindings:
                         signatures.add(signature)
                         existing = r.list(db.meeting_findings, db.meeting_findings.c.meeting_id == mid)
                         by_id = {f['id']: f for f in existing}
+                    from echooo.meeting_links import sync_action_links
+                    sync_action_links(r, mid)
                     p = self.progress(r, mid)
                     processed = {k: v for k, v in p['processed'].items() if k in current}
                     processed.update({u['id']: source_hash(u) for u in batch if u['id'] not in blocked})
@@ -632,6 +634,8 @@ class MeetingFindings:
                 r.change(db.meeting_findings, fid, **values)
                 r.add(db.meeting_finding_reviews, meeting_id=mid, finding_id=fid, action=data.action,
                     before=f, after={**f, **values})
+                from echooo.meeting_links import sync_action_links
+                sync_action_links(r, mid)
             self.emit(who, mid)
         return self.view(who, mid)
 

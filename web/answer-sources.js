@@ -2,6 +2,11 @@ const esc=(s='')=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'
 const time=ms=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 export const answerLink=(mid,eid,sid)=>`#meetings/${encodeURIComponent(mid)}/answers/${encodeURIComponent(eid)}${sid?'/sources/'+encodeURIComponent(sid):''}`;
 
+export function answerTriggers(triggers=[]){
+  if(!triggers.length)return '';
+  return `<section class="answer-trigger" aria-label="Question transcript"><h3>Question in transcript</h3>${triggers.map(t=>`<blockquote><p class="muted">${esc(t.speaker)}${Number.isFinite(t.start_ms)?` · ${time(t.start_ms)}`:''}${t.changed?' · Transcript changed':''}</p><p>${esc(t.content)}</p><button class="meeting-text-button" data-trigger-jump="${esc(t.utterance_id)}">${t.changed?'View current transcript':'Open transcript'}</button></blockquote>`).join('')}</section>`;
+}
+
 function nearbyTurn(citation,utterances){
   if(citation.kind!=='utterance'||!citation.recording_id||citation.changed||citation.unavailable)return null;
   const rows=utterances.filter(u=>u.recording_id===citation.recording_id)

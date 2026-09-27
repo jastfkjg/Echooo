@@ -72,6 +72,7 @@ test('review controls include edit and reject and permit explicit re-review',()=
 
 test('compact queue folds reviewed items and combines evidence and history',()=>{
   const html=decisionListHTML([item,{...item,id:'done',status:'approved'}]);
+  assert.match(html,/data-finding-id="done"[^>]*tabindex="-1"/);
   assert.match(html,/<summary>Source<\/summary>/);
   assert.ok(!html.includes('<summary>Review history</summary>'));
   assert.match(html,/<details class="finding-reviewed"[^>]*><summary>Reviewed · 1/);
