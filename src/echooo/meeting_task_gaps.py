@@ -4,6 +4,10 @@ from echooo.meeting_findings import clean_decisions, evidence_current
 from echooo.meeting_sentences import expand_evidence
 
 
+class InconsistentAssessment(ValueError):
+    """A model assessment needs contextual reconsideration, not normalization."""
+
+
 POLICY = """
 Track concrete meeting tasks across turns, independently of whether a reminder is
 appropriate now. Return at most 12 changed task_updates. Task and reason use the
@@ -29,6 +33,13 @@ when the required details are supported, and dropped for cancelled work or a
 candidate that context shows was never a real task. Resolved/dropped tasks have
 missing=[] and readiness=wait. Never manufacture tasks from brainstorming or general
 aspirations. Waiting tasks persist across batches; omission does not close them.
+These statuses describe clarification needs, NOT execution progress: work can be
+unfinished while its clarification status is resolved. An open assessment must
+identify at least one contextually supported missing owner, timing or scope detail.
+Do not invent a gap to keep unfinished work open. Dropped means the work was
+cancelled or was not a real task; missing=[] then means no clarification is being
+pursued, not that every detail was supplied. A host dismissing a question is a
+separate reminder disposition, not evidence that the task's gaps were resolved.
 
 Assess ownership, timing and assignment scope from context. A first-person offer
 is evidence of willingness or responsibility even when diarization lacks a person's
@@ -114,6 +125,10 @@ Return JSON only:
 "reason":"brief substantive reason", "task_refs":["supplied tracked task ID"],
 "evidence":[{"utterance_id":"supplied record ID", "quote":"exact substring"}]}],
 "resolved_ids":[], "needs_followup":false}.
+Status describes clarification needs, not whether execution is complete. Open
+requires at least one contextually supported missing detail; resolved and dropped
+require missing=[] and readiness=wait. Unfinished work with sufficient details is
+resolved for clarification purposes. Dismissing a reminder does not resolve a gap.
 
 Apply these steps to each supplied follow-up task:
 1. Establish whether this is real executable work. Drop mere speculation or
@@ -301,9 +316,9 @@ def validate(value, units, rows, tasks):
                 or not isinstance(update.get('material_change', False), bool)):
             raise ValueError('Invalid task assessment')
         if (update['status'] == 'open') != bool(missing):
-            raise ValueError('Task status disagrees with missing details')
+            raise InconsistentAssessment('Task status disagrees with missing details')
         if update['status'] != 'open' and update['readiness'] != 'wait':
-            raise ValueError('Closed task cannot request a reminder')
+            raise InconsistentAssessment('Closed task cannot request a reminder')
         raw = expand_evidence(update.get('evidence'), units)
         evidence = []
         for offset in range(0, len(raw), 12):

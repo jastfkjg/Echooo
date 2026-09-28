@@ -35,6 +35,109 @@ class TaskModel:
         return self.result(data)
 
 
+@pytest.mark.parametrize(('status', 'missing', 'readiness'), [
+    ('open', [], 'wait'), ('resolved', ['owner'], 'wait'),
+    ('dropped', ['timing'], 'wait'), ('resolved', [], 'review'),
+])
+async def test_inconsistent_assessment_is_contextually_repaired(governed, status, missing, readiness):
+    a, m = governed
+    def result(data):
+        if 'validation_failure' in data:
+            assert data['records'] == m.ai.inputs[0]['records']
+            assert data['rejected_response']['task_updates'][0]['status'] == status
+            return assessment(data, readiness='review', propose=True)
+        return assessment(data, status=status, missing=missing, readiness=readiness)
+    m.ai = TaskModel(result)
+    await m.detect(a.who, a.mid)
+    view = m.view(a.who, a.mid)
+    assert len(m.ai.inputs) == 2 and len(m.ai.review_inputs) == 1
+    assert len(view['interventions']) == 1
+    assert view['tracked_tasks'][0]['status'] == 'open'
+    assert not view['intervention_progress']['error']
+    assert view['intervention_progress']['last_check']['model_calls'] == 3
+
+
+@pytest.mark.parametrize('repair_failure', ['inconsistent', 'invalid_evidence', 'timeout'])
+async def test_failed_assessment_repair_is_quiet_and_bounded(governed, repair_failure):
+    a, m = governed
+    key = a.who, a.mid
+    def result(data):
+        if 'validation_failure' in data:
+            if repair_failure == 'timeout':
+                raise TimeoutError('Repair timed out')
+            if repair_failure == 'invalid_evidence':
+                value = assessment(data, readiness='review', propose=True)
+                value['task_updates'][0]['evidence'][0]['quote'] = 'invented evidence'
+                return value
+        return assessment(data, status='open', missing=[])
+    m.ai = TaskModel(result)
+    m.errors[key] = 'Old check failed'
+    m.quiet_seconds = 0
+    m.notify(*key)
+    await wait_until(lambda: key not in m.tasks)
+    view = m.view(*key)
+    assert len(m.ai.inputs) == 2 and not m.ai.review_inputs
+    assert not view['interventions'] and not view['tracked_tasks']
+    assert not view['intervention_progress']['error']
+    assert view['intervention_progress']['phase'] == 'idle'
+    check = view['intervention_progress']['last_check']
+    assert check['outcome'] == 'no_issue' and check['validation_fallback']
+    assert check['model_calls'] == 2 and len(m.background_calls[key]) == 2
+    m.notify(*key, activity=False)
+    await wait_until(lambda: key not in m.tasks)
+    assert len(m.ai.inputs) == 2
+
+
+async def test_initial_transport_failure_is_not_hidden(governed):
+    a, m = governed
+    def fail(data):
+        raise TimeoutError('Initial request timed out')
+    m.ai = TaskModel(fail)
+    with pytest.raises(TimeoutError):
+        await m.detect(a.who, a.mid)
+    assert len(m.ai.inputs) == 1
+    assert m.view(a.who, a.mid)['intervention_progress']['last_check']['outcome'] == 'failed'
+
+
+async def test_quiet_fallback_preserves_dismissal_and_allows_later_checks(governed):
+    a, m = governed
+    key = a.who, a.mid
+    m.ai = TaskModel(lambda data: assessment(data, readiness='review', propose=True))
+    await m.detect(*key)
+    question = m.view(*key)['interventions'][0]
+    await m.review(*key, question['id'], Review(action='reject', revision=question['revision']))
+    before = m.view(*key)
+    m.ai = TaskModel(lambda data: assessment(data, status='resolved', missing=['owner']))
+    await m.detect(*key)
+    after = m.view(*key)
+    assert after['tracked_tasks'] == before['tracked_tasks']
+    assert after['interventions'] == before['interventions']
+    assert after['intervention_reviews'] == before['intervention_reviews']
+    assert not after['intervention_progress']['error']
+    # A later explicit check may use valid evidence to resolve the gap.
+    m.ai = TaskModel(lambda data: assessment(data, status='resolved', missing=[]))
+    await m.detect(*key)
+    assert m.view(*key)['tracked_tasks'][0]['status'] == 'resolved'
+    assert m.view(*key)['interventions'][0]['status'] == 'rejected'
+
+
+async def test_assessment_repair_respects_background_budget(governed):
+    a, m = governed
+    key = a.who, a.mid
+    m.quiet_seconds = 0
+    # Simulate exhausted capacity when the generation returns: the repair must
+    # check the budget again instead of unconditionally making an extra call.
+    def result(data):
+        m.background_calls[key].extend([m.clock()] * m.background_call_limit)
+        return assessment(data, missing=[])
+    m.ai = TaskModel(result)
+    await m.detect(*key, scheduled=True)
+    assert len(m.ai.inputs) == 1
+    check = m.view(*key)['intervention_progress']['last_check']
+    assert check['validation_fallback'] and not check['repair_attempted']
+    assert check['model_calls'] == 1
+
+
 async def start_waiting_task(governed, *, still_wait=False):
     a, m = governed
     now = [0.0]
