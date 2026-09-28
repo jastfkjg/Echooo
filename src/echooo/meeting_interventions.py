@@ -480,7 +480,8 @@ class MeetingInterventions:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning('Intervention check failed: error_type=%s', type(exc).__name__)
+            logger.exception('Intervention check failed: meeting_id=%s error_type=%s',
+                             mid, type(exc).__name__)
             self.errors[key] = 'Could not check for suggestions. Try Check again.'
         finally:
             self.tasks.pop(key, None)
