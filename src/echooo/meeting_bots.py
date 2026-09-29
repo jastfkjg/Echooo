@@ -191,10 +191,13 @@ class BotRecording:
             self.writer.clear()
 
     async def consume(self, event, offset_ms, session):
+        from echooo.answer_timing import stt_anchor
+        if event.type == STTEventType.FINAL:
+            event.raw['_answer_timing'] = stt_anchor(event, self.rec['id'], offset_ms, round(self.samples * 1000 / RATE))
         rows = self.writer.consume(event, offset_ms, session, round(self.samples * 1000 / RATE))
         agent = self.manager.agents.get(self.row['id'])
         if agent and (event.type == STTEventType.PARTIAL or event.type == STTEventType.FINAL and rows):
-            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", self.samples)}')
+            await agent.transcript(event, f'{self.rec["id"]}:{session}:{event.raw.get("turn_order", self.samples)}', rows)
 
     def feed(self, pcm):
         self.samples += len(pcm) // 2
@@ -219,10 +222,7 @@ class BotRecording:
                 self.pending.clear()
             await self.live.finish()
         self.writer.clear()
-        if self.samples and self.manager.transcriptions.available:
-            self.manager.transcriptions.start(self.who, self.mid, self.rec['id'])
-        else:
-            await self.state('unverified', '')
+        await self.manager.transcriptions.finish_recording(self.who, self.mid, self.rec['id'], self.live)
 
 
 class MeetingBots:

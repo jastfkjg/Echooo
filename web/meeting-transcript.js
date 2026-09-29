@@ -5,18 +5,50 @@ export function speakerName(value) {
 
 // Presentation groups only: original utterances and audio anchors stay intact.
 export function groupTranscript(records) {
-  const groups = [];
-  for (const record of records) {
-    const last = groups.at(-1), speaker = speakerName(record.speaker);
-    if (last && !record.assistant && !last.records[0].assistant && last.speaker === speaker && last.recordingId === record.recording_id &&
-        record.start_ms - last.records.at(-1).end_ms <= 12000 &&
-        record.start_ms - last.records[0].start_ms <= 45000 &&
-        last.length + record.content.length <= 450) {
-      last.records.push(record);
-      last.length += record.content.length;
-    } else {
-      groups.push({speaker, recordingId:record.recording_id, records:[record], length:record.content.length});
+  const normalized=text=>text.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}]/gu,'');
+  // Match complete playback text before grouping for display: transcription may
+  // split one reply across several turns and change its automatic speaker label.
+  // Keep originals intact, and require exact text plus a bounded playback window.
+  const replies=records.filter(u=>u.assistant&&!u.timing_estimated&&u.recording_id&&u.end_ms>u.start_ms);
+  const associations=new Map();
+  for(const reply of replies){
+    const expected=normalized(reply.content);
+    if(expected.length<40)continue;
+    const turns=records.filter(u=>!u.assistant&&u.recording_id===reply.recording_id)
+      .sort((a,b)=>a.start_ms-b.start_ms||a.end_ms-b.end_ms);
+    for(let i=0;i<turns.length;i++){
+      let text='';const matched=[];
+      for(let j=i;j<turns.length;j++){
+        const u=turns[j],speaker=speakerName(u.speaker),part=normalized(u.content);
+        if(u.user_edited||!(speaker==='Unidentified speaker'||/^Speaker [A-Z]+(?: \(connection \d+\))?$/.test(speaker))||
+          u.start_ms<reply.start_ms-250||u.start_ms>reply.end_ms||u.end_ms<reply.start_ms||u.end_ms>reply.end_ms+2000||!part)break;
+        text+=part;matched.push(u);
+        if(!expected.startsWith(text))break;
+        if(text===expected){
+          for(const turn of matched){
+            if(!associations.has(turn))associations.set(turn,new Set());
+            associations.get(turn).add(reply);
+          }
+          break;
+        }
+      }
     }
+  }
+  const hidden=new Map([...associations].filter(([,matches])=>matches.size===1).map(([u,matches])=>[u,[...matches][0]]));
+  const groups=[];
+  for(const record of records){
+    if(hidden.has(record))continue;
+    const last=groups.at(-1),speaker=speakerName(record.speaker);
+    if(last&&!record.assistant&&!last.records[0].assistant&&last.speaker===speaker&&last.recordingId===record.recording_id&&
+      record.start_ms-last.records.at(-1).end_ms<=12000&&record.start_ms-last.records[0].start_ms<=45000&&last.length+record.content.length<=450){
+      last.records.push(record);last.length+=record.content.length;
+    }else{
+      groups.push({speaker,recordingId:record.recording_id,records:[record],length:record.content.length});
+    }
+  }
+  for(const [record,reply] of hidden){
+    const group=groups.find(g=>g.records[0]===reply);
+    (group.echoGroups??=[]).push({speaker:speakerName(record.speaker),recordingId:record.recording_id,records:[record],length:record.content.length});
   }
   return groups;
 }

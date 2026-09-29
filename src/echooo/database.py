@@ -45,6 +45,14 @@ def owned_table(name: str, *columns: Column, constraints=()) -> Table:
         *columns, Column("created_at", Float, nullable=False), *constraints)
 
 
+assistant_voice_settings = owned_table("assistant_voice_settings",
+    Column("provider", String, nullable=False), Column("voice", String, nullable=False),
+    constraints=(UniqueConstraint("owner_id"),))
+
+custom_voices = owned_table("custom_voices",
+    Column("voice_id", String, nullable=False, unique=True))
+
+
 domains = owned_table("domains", Column("name", String, nullable=False),
     Column("description", Text, nullable=False), Column("color", String, nullable=False),
     constraints=(UniqueConstraint("owner_id", "name"),))
@@ -182,6 +190,19 @@ meeting_answer_sources = owned_table("meeting_answer_sources", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("scope", JSON, nullable=False), Column("citations", JSON, nullable=False),
     constraints=(UniqueConstraint("event_id"),))
+meeting_answer_checks = owned_table("meeting_answer_checks", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("detail", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
+meeting_answer_traces = owned_table("meeting_answer_traces", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("detail", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id"),))
+meeting_answer_triggers = owned_table("meeting_answer_triggers", meeting_ref(),
+    Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
+    Column("utterance_id", String, ForeignKey("meeting_utterances.id", ondelete="CASCADE"), nullable=False),
+    Column("snapshot", JSON, nullable=False),
+    constraints=(UniqueConstraint("event_id", "utterance_id"),))
 meeting_speech = owned_table("meeting_speech", meeting_ref(),
     Column("event_id", String, ForeignKey("meeting_agent_events.id", ondelete="CASCADE"), nullable=False),
     Column("recording_id", String, ForeignKey("meeting_recordings.id", ondelete="SET NULL")),
@@ -192,10 +213,53 @@ meeting_proposal_links = owned_table("meeting_proposal_links", meeting_ref(),
     Column("evidence", JSON, nullable=False),
     constraints=(UniqueConstraint("proposal_id"),))
 
-OWNED = [domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
+# Independent reviewed decisions; create_all adds these tables to existing databases.
+meeting_findings = owned_table("meeting_findings", meeting_ref(),
+    Column("kind", String, nullable=False), Column("statement", Text, nullable=False),
+    Column("original", JSON, nullable=False), Column("evidence", JSON, nullable=False),
+    Column("details", JSON, nullable=False, default=dict),
+    Column("fingerprint", String, nullable=False), Column("status", String, nullable=False),
+    Column("revision", Integer, nullable=False),
+    constraints=(UniqueConstraint("meeting_id", "fingerprint"),))
+meeting_finding_reviews = owned_table("meeting_finding_reviews", meeting_ref(),
+    Column("finding_id", String, ForeignKey("meeting_findings.id", ondelete="CASCADE"), nullable=False),
+    Column("action", String, nullable=False), Column("before", JSON, nullable=False),
+    Column("after", JSON, nullable=False))
+meeting_finding_progress = owned_table("meeting_finding_progress", meeting_ref(),
+    Column("processed", JSON, nullable=False), Column("phase", String, nullable=False),
+    Column("error", Text, nullable=False),
+    constraints=(UniqueConstraint("meeting_id"),))
+
+meeting_interventions = owned_table("meeting_interventions", meeting_ref(),
+    Column("kind", String, nullable=False), Column("question", Text, nullable=False),
+    Column("reason", Text, nullable=False), Column("evidence", JSON, nullable=False),
+    Column("status", String, nullable=False), Column("revision", Integer, nullable=False),
+    Column("state", JSON, nullable=False))
+meeting_intervention_reviews = owned_table("meeting_intervention_reviews", meeting_ref(),
+    Column("intervention_id", String, ForeignKey("meeting_interventions.id", ondelete="CASCADE"), nullable=False),
+    Column("action", String, nullable=False), Column("before", JSON, nullable=False),
+    Column("after", JSON, nullable=False))
+
+meeting_intervention_checks = owned_table('meeting_intervention_checks', meeting_ref(),
+    Column('outcome', String, nullable=False), Column('detail', JSON, nullable=False))
+meeting_task_gaps = owned_table('meeting_task_gaps', meeting_ref(),
+    Column('task', Text, nullable=False), Column('evidence', JSON, nullable=False),
+    Column('assessment', JSON, nullable=False), Column('revision', Integer, nullable=False))
+meeting_intervention_responses = owned_table('meeting_intervention_responses', meeting_ref(),
+    Column('intervention_id', String, ForeignKey('meeting_interventions.id', ondelete='CASCADE'), nullable=False),
+    Column('utterance_id', String, ForeignKey('meeting_utterances.id', ondelete='CASCADE'), nullable=False),
+    Column('snapshot', JSON, nullable=False),
+    constraints=(UniqueConstraint('intervention_id', 'utterance_id'),))
+meeting_intervention_findings = owned_table('meeting_intervention_findings', meeting_ref(),
+    Column('intervention_id', String, ForeignKey('meeting_interventions.id', ondelete='CASCADE'), nullable=False),
+    Column('finding_id', String, ForeignKey('meeting_findings.id', ondelete='CASCADE'), nullable=False),
+    constraints=(UniqueConstraint('intervention_id', 'finding_id'),))
+
+OWNED = [assistant_voice_settings, custom_voices, domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
-    meeting_knowledge, meeting_answer_sources, meeting_proposal_links, meeting_speech]
+    meeting_knowledge, meeting_answer_sources, meeting_answer_checks, meeting_answer_traces, meeting_answer_triggers, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,
+    meeting_interventions, meeting_intervention_reviews, meeting_intervention_checks, meeting_task_gaps, meeting_intervention_responses, meeting_intervention_findings]
 
 
 class Store:
@@ -217,8 +281,9 @@ class Store:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA secure_delete=ON")
         metadata.create_all(self.engine)
-        from echooo.migrations import allow_unscoped_private_chats
+        from echooo.migrations import allow_unscoped_private_chats, add_finding_details
         allow_unscoped_private_chats(self.engine)
+        add_finding_details(self.engine)
         # Upgrade existing empty workspaces without moving their data or scopes.
         with self.engine.begin() as c:
             empty_owners = c.execute(select(users.c.id).where(~select(domains.c.id).where(

@@ -153,3 +153,23 @@ async def test_sse_delivers_partial_before_final_and_cleans_up(app):
         server.should_exit = True
         await asyncio.wait_for(task, 5)
         sock.close()
+
+
+def test_batch_splits_machine_turns_by_word_speaker_and_is_repeatable(client, app):
+    from echooo.meeting_live import remember
+    m, rec, _ = setup_writer(client, app)
+    with app.state.store.scope(m['owner_id']) as r:
+        u = r.add(db.utterances, meeting_id=m['id'], recording_id=rec['id'], speaker='Unknown speaker',
+                  content='Hello Which option?', start_ms=0, end_ms=2000)
+        remember(r, u, words=[])
+        result = {'utterances':[{'words':[
+            {'text':'Hello', 'start':0, 'end':500, 'speaker':'A'},
+            {'text':'Which', 'start':600, 'end':1000, 'speaker':'B'},
+            {'text':'option?', 'start':1000, 'end':1800, 'speaker':'B'}]}]}
+        existing = [u]
+        changes = reconcile_passages(r, result, existing, rec['id'])
+        assert len(changes) == 2
+        assert existing[0]['id'] == u['id']
+        assert [row['content'] for row in existing] == ['Hello', 'Which option?']
+        assert existing[0]['speaker'] != existing[1]['speaker']
+        assert reconcile_passages(r, result, existing, rec['id']) == []

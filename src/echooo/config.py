@@ -137,6 +137,8 @@ class Settings:
     llm_temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.4))
     llm_timeout_seconds: float = field(default_factory=lambda: _float("LLM_TIMEOUT_SECONDS", 60))
 
+    assistant_tts_providers: str = field(default_factory=lambda: os.getenv("ASSISTANT_TTS_PROVIDERS", ""))
+
     cosyvoice_base_url: str = field(
         default_factory=lambda: os.getenv("COSYVOICE_BASE_URL", "http://127.0.0.1:50000")
     )

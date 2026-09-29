@@ -517,16 +517,27 @@ def test_dashscope_uses_cloud_voice_and_retry_reuses_checked_text(client,app,mon
     assert len(client.get(f"/api/sessions/{s['id']}").json()['messages'])==2
 
 
-def test_owner_can_select_an_allowed_dashscope_voice(client,app):
-    app.state.rooms.settings.tts_provider='dashscope'
-    app.state.rooms.settings.dashscope_api_key='test-key'
+@pytest.mark.parametrize('model,default_voice,selected_voice,other_model_voice', [
+    ('cosyvoice-v3-flash', 'longanyang', 'longanhuan', 'longanlufeng'),
+    ('qwen-audio-3.0-tts-plus', 'longanlingxin', 'longanlufeng', 'longanhuan'),
+])
+def test_owner_can_select_an_allowed_dashscope_voice(client,app,model,default_voice,selected_voice,other_model_voice):
+    settings=app.state.rooms.settings
+    settings.tts_provider='dashscope'
+    settings.dashscope_api_key='test-key'
+    # Do not inherit model/voice overrides from the developer's .env.
+    settings.dashscope_tts_model=model
+    settings.dashscope_tts_voice=default_voice
+    settings.dashscope_tts_custom_voices=()
     d=domain(client,'Voice choice')
     s=session(client,d['id'],[],mode='private')
-    changed=client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':'longanlufeng'})
-    assert changed.status_code==200
-    assert changed.json()['voice']['dashscope_voice']=='longanlufeng'
-    assert client.get(f"/api/sessions/{s['id']}").json()['voice']['dashscope_voice']=='longanlufeng'
-    assert client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':'unknown'}).status_code==422
+    changed=client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':selected_voice})
+    assert changed.status_code==200, changed.text
+    assert changed.json()['voice']['dashscope_voice']==selected_voice
+    assert client.get(f"/api/sessions/{s['id']}").json()['voice']['dashscope_voice']==selected_voice
+    for rejected_voice in ('unknown', other_model_voice):
+        assert client.patch(f"/api/sessions/{s['id']}/voice",json={'dashscope_voice':rejected_voice}).status_code==422
+    assert client.get(f"/api/sessions/{s['id']}").json()['voice']['dashscope_voice']==selected_voice
 
 
 def test_cloud_voice_selection_is_provider_scoped_and_owner_only(client,app):

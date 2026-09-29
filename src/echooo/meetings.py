@@ -16,16 +16,21 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import Field
 
 from echooo import database as db
+from echooo import meeting_debug
+from sqlalchemy import select
 from echooo import meeting_minutes as minutes_rules
 from echooo.contracts import Input
 from echooo.models import STTEventType
-from echooo.meeting_live import TranscriptWriter, remember
+from echooo.meeting_live import TranscriptWriter, remember, timed_words
 from echooo.meeting_transcription import RecordingTranscriptions, LiveTranscription
 from echooo.providers.factory import create_stt
 from echooo.service import Problem, need
 from echooo.auth import AuthError
 from echooo.meeting_knowledge import MeetingKnowledge, KnowledgeInput
 from echooo.meeting_speech import speech_transcript
+from echooo.meeting_links import answer_triggers
+from echooo.meeting_browser_answers import BrowserMeetingAnswers, history as browser_answer_history
+from echooo.meeting_findings import MeetingFindings, install_finding_routes, purge_findings
 
 
 class MeetingInput(Input):
@@ -98,11 +103,42 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     captures = set()
     transcriptions = RecordingTranscriptions(store, settings, locks)
     app.state.meeting_transcriptions = transcriptions
+    findings = MeetingFindings(store, ai, transcriptions.feed, settings.llm_provider != "mock")
+    app.state.meeting_findings = findings
+    install_finding_routes(app, findings, owner)
     knowledge = MeetingKnowledge(store, ai)
     app.state.meeting_knowledge = knowledge
     from echooo.meeting_bots import install_meeting_bots
     bots = install_meeting_bots(app, store, settings, transcriptions, captures, owner)
     bots.knowledge = knowledge
+    from echooo.meeting_interventions import MeetingInterventions, install_intervention_routes, purge_interventions
+    interventions = MeetingInterventions(store, ai, transcriptions.feed, bots, settings.llm_provider != 'mock')
+    app.state.meeting_interventions = interventions
+    install_intervention_routes(app, interventions, owner)
+
+    async def prepare_approved_record(who, mid):
+        bots.require_detached(who, mid)
+        if mid in captures:
+            raise Problem('Stop recording before generating the final record.', 409)
+        queue = transcriptions.feed.subscribe(who, mid)
+        deadline = asyncio.get_running_loop().time() + 40
+        try:
+            while True:
+                with store.scope(who) as r:
+                    need(r.get(db.meetings, mid), 'Meeting')
+                    states = r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid)
+                if not any(row['state'].get('phase') == 'verifying' for row in states):
+                    return  # Old generated notes may still run; they do not gate the approved record.
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise Problem('Saved audio is still being processed. Try again shortly.', 409)
+                try:
+                    await asyncio.wait_for(queue.get(), 1)
+                except TimeoutError:
+                    pass
+        finally:
+            transcriptions.feed.unsubscribe(who, mid, queue)
+
+    findings.before_record = prepare_approved_record
 
     def get(r, mid, active=False):
         m = need(r.get(db.meetings, mid), "Meeting")
@@ -113,19 +149,24 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
     def view(who, mid):
         with store.scope(who) as r:
             m = get(r, mid)
+            edited = {s['utterance_id'] for s in r.list(db.utterance_sources, db.utterance_sources.c.meeting_id == mid)
+                if s['state'].get('content_edited') or s['state'].get('speaker_edited')}
             states = {s['recording_id']: s['state'] for s in r.list(db.recording_transcriptions, db.recording_transcriptions.c.meeting_id == mid)}
             recordings = r.list(db.recordings, db.recordings.c.meeting_id == mid)
             for rec in recordings:
                 rec['transcription'] = states.get(rec['id'], {'phase': 'unverified', 'verified_samples': 0})
+                rec['transcription'].pop('upload_url', None)
                 if rec['transcription']['phase'] in {'live', 'connecting', 'reconnecting'} and mid not in captures:
-                    rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording stopped before verification. Check saved audio.'}
+                    rec['transcription'] = {**rec['transcription'], 'phase': 'interrupted', 'message': 'Recording was interrupted. Saved audio and the existing transcript are available.'}
             return {**m, 'knowledge': knowledge.view(who, mid), "recording": mid in captures, 'connector': bots.view(who, mid), 'transcription_available': transcriptions.available,
-                "utterances": r.list(db.utterances, db.utterances.c.meeting_id == mid),
+                "utterances": [{**u, "user_edited": u["id"] in edited} for u in r.list(db.utterances, db.utterances.c.meeting_id == mid)],
                 "assistant_utterances": speech_transcript(r, mid, recordings),
+                "answer_checks": r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.meeting_id == mid),
+                "browser_answers": browser_answer_history(bots, who, mid),
                 "sections": r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid),
                 "overviews": r.list(db.recording_summaries, db.recording_summaries.c.meeting_id == mid),
                 "minutes": r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid),
-                "recordings": recordings}
+                "recordings": recordings, **findings.view(who, mid), **interventions.view(who, mid)}
 
     def scoped_records(r, mid, recording_id):
         if recording_id and recording_id != "notes":
@@ -186,8 +227,14 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for minutes in r.list(db.meeting_minutes, db.meeting_minutes.c.meeting_id == mid):
                 if set(minutes["evidence_ids"]) & ids:
                     r.remove(db.meeting_minutes, minutes["id"])
+            purge_findings(r, mid, ids)
+            purge_interventions(r, mid, ids)
             app.state.service.purge_meeting_evidence(r, mid, ids)
+            for event in r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid,
+                    db.meeting_agent_events.c.connection_id == 'browser-recording:' + rid):
+                r.remove(db.meeting_agent_events, event['id'])
             r.remove(db.recordings, rid)
+            meeting_debug.clear(who, mid)
             r.log("meeting.recording_deleted", meeting_id=mid, recording_id=rid)
         return view(who, mid)
 
@@ -244,11 +291,58 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             r.change(db.meetings, mid, title=data.title)
         return view(owner(request), mid)
 
+    @app.get('/api/meetings/{mid}/answers/{eid}')
+    async def answer_detail(request: Request, mid: str, eid: str):
+        who = owner(request)
+        with store.scope(who) as r:
+            get(r, mid)
+            event = need(r.get(db.meeting_agent_events, eid), 'Answer')
+            if event['meeting_id'] != mid:
+                raise Problem('Answer not found.', 404)
+            checks = r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.event_id == eid)
+        with store.scope(who) as r:
+            triggers = answer_triggers(r, eid)
+        return {'event': {k: event[k] for k in ('id', 'request', 'response', 'status', 'error', 'created_at')},
+            'check': checks[0]['detail'] if checks else None, 'triggers': triggers,
+            'citations': bots.knowledge.citations(who, mid, eid)}
+
+    @app.get('/api/meetings/{mid}/debug')
+    async def debug_index(request: Request, mid: str):
+        who = owner(request)
+        with store.scope(who) as r:
+            m = get(r, mid)
+            events = r.c.execute(select(db.meeting_agent_events).where(
+                db.meeting_agent_events.c.owner_id == who,
+                db.meeting_agent_events.c.meeting_id == mid).order_by(
+                    db.meeting_agent_events.c.created_at.desc()).limit(100)).mappings()
+            return {'title': m['title'], 'events': [dict(e) for e in events],
+                'recordings': [{'id': x['id'], 'created_at': x['created_at']} for x in r.list(
+                    db.recordings, db.recordings.c.meeting_id == mid)],
+                'runtime': meeting_debug.snapshot(who, mid), 'runtime_limit': meeting_debug.LIMIT}
+
+    @app.get('/api/meetings/{mid}/debug/{eid}')
+    async def debug_answer(request: Request, mid: str, eid: str):
+        with store.scope(owner(request)) as r:
+            get(r, mid)
+            event = need(r.get(db.meeting_agent_events, eid), 'Answer')
+            if event['meeting_id'] != mid:
+                raise Problem('Answer not found.', 404)
+            traces = r.list(db.meeting_answer_traces, db.meeting_answer_traces.c.event_id == eid)
+            checks = r.list(db.meeting_answer_checks, db.meeting_answer_checks.c.event_id == eid)
+            return {'event': event, 'trace': traces[0]['detail'] if traces else None,
+                'check': checks[0]['detail'] if checks else None}
+
     @app.get("/api/meetings/{mid}/export")
     async def export_meeting(request: Request, mid: str):
         result = view(owner(request), mid)
-        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge')}
+        export = {key: result[key] for key in ('id', 'title', 'status', 'revision', 'created_at', 'utterances', 'assistant_utterances', 'minutes', 'knowledge', 'findings', 'finding_reviews', 'approved_record', 'interventions', 'intervention_reviews', 'tracked_tasks', 'answer_checks', 'browser_answers')}
         export['recordings'] = [{key: rec[key] for key in ('id', 'sample_rate', 'samples', 'created_at')} for rec in result['recordings']]
+        with store.scope(owner(request)) as r:
+            export['answers'] = [{**{k: e[k] for k in ('id', 'request', 'response', 'status', 'error', 'created_at')},
+                'citations': bots.knowledge.citations(owner(request), mid, e['id']),
+                'triggers': answer_triggers(r, e['id'])}
+                for e in r.list(db.meeting_agent_events, db.meeting_agent_events.c.meeting_id == mid)]
+            export['answer_traces'] = r.list(db.meeting_answer_traces, db.meeting_answer_traces.c.meeting_id == mid)
         return Response(json.dumps(export, ensure_ascii=False), media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="meeting-{mid}.json"'})
 
@@ -258,7 +352,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         result = view(who, mid)
         if mid not in captures and transcriptions.available:
             for rec in result['recordings']:
-                if rec['transcription']['phase'] in {'verifying', 'interrupted'}:
+                if rec['transcription']['phase'] == 'verifying':
                     transcriptions.start(who, mid, rec['id'])
         return result
 
@@ -311,7 +405,17 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 raise Problem('Select an audio recording.')
         if mid in captures:
             raise Problem('Stop recording before checking saved audio.', 409)
-        transcriptions.start(who, mid, rid, retry=True)
+        try:
+            body = await request.json() if await request.body() else {}
+        except ValueError:
+            raise Problem('Invalid transcription request.')
+        mode = body.get('mode', 'retry') if isinstance(body, dict) else None
+        if mode not in {'full', 'retry'}:
+            raise Problem('Choose retry or full reprocessing.')
+        state = transcriptions.state(who, mid, rid)
+        if mode == 'retry' and not (state.get('job_id') or state.get('mode') or state.get('summary_phase') == 'error'):
+            raise Problem('No repair task to retry. Choose full reprocessing explicitly.', 409)
+        transcriptions.start(who, mid, rid, retry=True, full=mode == 'full')
         return view(who, mid)
 
     @app.delete("/api/meetings/{mid}")
@@ -329,14 +433,17 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 raise Problem("Pause recording before deleting this meeting.", 409)
             app.state.service.purge_meeting_evidence(r, mid)
             r.remove(db.meetings, mid)
+            meeting_debug.clear(who, mid)
         return {"ok": True}
 
     @app.post("/api/meetings/{mid}/utterances", status_code=201)
     async def add_text(request: Request, mid: str, data: UtteranceInput):
         with store.scope(owner(request)) as r:
             get(r, mid, True)
-            return r.add(db.utterances, meeting_id=mid, recording_id=None,
+            u = r.add(db.utterances, meeting_id=mid, recording_id=None,
                 start_ms=0, end_ms=0, **data.model_dump())
+        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': u})
+        return u
 
     @app.patch("/api/meetings/{mid}/utterances/{uid}")
     async def correct(request: Request, mid: str, uid: str, data: UtteranceInput):
@@ -360,7 +467,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 for s in r.list(db.meeting_sections, db.meeting_sections.c.meeting_id == mid):
                     r.change(db.meeting_sections, s["id"], status="stale")
                 r.log("meeting.transcript_corrected", meeting_id=mid, utterance_id=uid)
-        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': {**u, **data.model_dump()}})
+        transcriptions.feed.publish(owner(request), mid, {'type': 'utterance', 'utterance': {**u, **data.model_dump(), 'user_edited': True}})
         return view(owner(request), mid)
 
     @app.post("/api/meetings/{mid}/minutes")
@@ -569,6 +676,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             if mid in captures:
                 raise Problem("Pause recording before ending the meeting.", 409)
             r.change(db.meetings, mid, status="ended")
+        findings.notify(owner(request), mid, None)
         return view(owner(request), mid)
 
     @app.get("/api/meetings/{mid}/recordings/{rid}/audio")
@@ -628,6 +736,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
         rate = settings.assemblyai_sample_rate
         sequence = 0
         writer = None
+        answers = None
         send_lock = asyncio.Lock()
 
         async def send(event):
@@ -640,6 +749,7 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                 get(r, mid, True)
 
         async def live_state(phase, message):
+            meeting_debug.record(who, mid, 'stt_connection', recording_id=rec['id'], phase=phase, message=message)
             if writer and phase != 'live':
                 writer.clear()
             state = transcriptions.state(who, mid, rec['id'], phase=phase, message=message)
@@ -648,6 +758,14 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
 
         async def consume(event, offset_ms, session):
             validate()
+            words = timed_words(event.raw.get('words'), offset_ms)
+            audio_ms = round(samples * 1000 / rate)
+            meeting_debug.record(who, mid, 'stt', recording_id=rec['id'],
+                start_ms=words[0]['start'] if words else None,
+                end_ms=words[-1]['end'] if words else None,
+                audio_lag_ms=max(0, audio_ms - words[-1]['end']) if words else None,
+                kind=event.type.value, text=event.transcript[:6000], connection=session,
+                offset_ms=offset_ms, received_audio_ms=round(samples * 1000 / rate))
             rows = writer.consume(event, offset_ms, session, round(samples * 1000 / rate))
             # Keep capture sockets compatible; other viewers use the shared feed.
             if event.type == STTEventType.PARTIAL:
@@ -657,12 +775,15 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             for u in rows:
                 with contextlib.suppress(Exception):
                     await send({'type': 'utterance', 'utterance': u})
+            if answers and event.type in {STTEventType.FINAL, STTEventType.PARTIAL}:
+                await answers.transcript(event, rows, offset_ms)
 
         try:
             await ws.accept()
             with store.scope(who) as r:
                 rec = r.add(db.recordings, meeting_id=mid, sample_rate=rate, samples=0)
             writer = TranscriptWriter(store, who, mid, rec['id'], transcriptions.feed)
+            answers = BrowserMeetingAnswers(bots, who, mid, rec['id'], send, validate)
             phase = 'connecting' if settings.stt_provider != 'mock' else 'unverified'
             rec['transcription'] = transcriptions.state(who, mid, rec['id'], phase=phase, message='')
             if settings.stt_provider != 'mock':
@@ -692,16 +813,26 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
                     if live:
                         live.feed(pcm, samples)
                 elif packet.get('text') == 'stop':
+                    await answers.close()
                     if live:
                         await live.finish()
-                        live = None
                     await send({'type': 'stopped'})
                     break
+                elif packet.get('text'):
+                    try:
+                        control = json.loads(packet['text'])
+                        if isinstance(control, dict) and control.get('type') in {
+                                'direct_config', 'direct_stop', 'direct_speech', 'local_speech_guard'}:
+                            await answers.control(control)
+                    except (ValueError, TypeError):
+                        await send({'type': 'warning', 'message': 'Invalid recording control.'})
         except Exception as exc:
             logger.warning('Meeting capture disconnected: recording=%s type=%s', rec and rec['id'], type(exc).__name__)
             with contextlib.suppress(Exception):
                 await send({'type': 'warning', 'message': 'Recording disconnected. Acknowledged audio is saved.'})
         finally:
+            if answers:
+                await answers.close()
             if live:
                 await live.finish()
             if writer:
@@ -709,9 +840,6 @@ def install_meetings(app, store, auth, ai, settings, owner, same_origin):
             captures.discard(mid)
             if rec:
                 with contextlib.suppress(Exception):
-                    if samples and transcriptions.available:
-                        transcriptions.start(who, mid, rec['id'])
-                    else:
-                        transcriptions.state(who, mid, rec['id'], phase='unverified')
+                    await transcriptions.finish_recording(who, mid, rec['id'], live)
             with contextlib.suppress(Exception):
                 await ws.close()

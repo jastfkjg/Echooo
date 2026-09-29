@@ -1,0 +1,17 @@
+.debug-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; font-size: .85rem; }
+.debug-step { min-width: 0; }
+.debug-step > summary { padding: 12px 0; cursor: pointer; }
+label[for="debug-recording"], label[for="debug-answer"] { display: block; margin: 16px 0 6px; }
+#debug-detail { margin-top: 24px; }
+.debug-trace-step { margin: 20px 0; border-top: 1px solid var(--border, #ddd); padding: 8px 0; }
+.debug-trace-step > summary { font-weight: 600; font-size: 1rem; }
+.debug-io { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; padding: 12px 0 20px; }
+.debug-io > section { min-width: 0; }
+.debug-io h3 { margin: 0 0 16px; font-size: 1rem; }
+.debug-io h4 { margin: 12px 0 6px; font-size: .85rem; }
+.debug-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow: auto; font: inherit; line-height: 1.6; margin: 8px 0 16px; }
+.debug-fold { margin: 8px 0; min-width: 0; }
+.debug-fold > summary { padding: 10px 0; cursor: pointer; }
+.debug-passage { padding: 8px 0; border-bottom: 1px solid var(--border, #ddd); }
+.debug-result { font-weight: 600; }
+@media (max-width: 760px) { .debug-io { grid-template-columns: minmax(0, 1fr); gap: 20px; } }

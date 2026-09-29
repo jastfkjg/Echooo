@@ -47,16 +47,16 @@ const echoooWorkletSource = `${EchoooPCMBuffer.toString()}
 class EchoooProcessor extends AudioWorkletProcessor {
  constructor() { super(); this.pcm = null; this.port.onmessage = ({data:m}) => {
    try {
-    if (m.action === 'start') this.pcm = new EchoooPCMBuffer(m.sample_rate, sampleRate);
+    if (m.action === 'start') { this.pcm = new EchoooPCMBuffer(m.sample_rate, sampleRate); this.startedAt=currentTime; this.firstAudio=null; }
     else if (m.action === 'chunk') this.pcm.push(m.samples);
     else if (m.action === 'finish') this.pcm.finished = true;
     else if (m.action === 'pause') this.pcm.paused = true;
     else if (m.action === 'resume') { this.pcm.paused = false; this.pcm.fade = 0; }
     else if (m.action === 'stop') this.pcm = null;
-    this.port.postMessage({request:m.request, ...this.pcm?.status()});
+    this.port.postMessage({request:m.request, ...this.pcm?.status(), first_audio_ms:this.firstAudio});
    } catch (_) { this.port.postMessage({request:m.request,error:'Invalid audio stream'}); }
  }; }
- process(inputs, outputs) { const out=outputs[0][0]; if(this.pcm) this.pcm.render(out); else out.fill(0); return true; }
+ process(inputs, outputs) { const out=outputs[0][0]; if(this.pcm) { this.pcm.render(out); if(this.firstAudio===null && this.pcm.played>0)this.firstAudio=(currentTime-this.startedAt)*1000; } else out.fill(0); return true; }
 }
 registerProcessor('echooo-continuous-pcm', EchoooProcessor);`;
 

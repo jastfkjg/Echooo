@@ -91,13 +91,13 @@ async def test_revocation_during_generation_prevents_send_and_foreign_citations_
     async def revoke(*args,**kwargs):
         with agent.store.scope(agent.who) as r:
             r.change(db.memories,fact['id'],visibility='private')
-        return {'reply':'Friday','citations':[fact['id']]}
+        return {'action':'answer','support':'supported','reply':'Friday','citations':[fact['id']]}
     agent.intelligence.json_call=revoke
     await agent.accept('first','When?','public','');event=agent.queue.get_nowait()
     with pytest.raises(ValueError,match='changed'):
         await agent.answer(event)
     assert not agent.manager.client.chats
-    async def foreign(*args,**kwargs):return {'reply':'Friday','citations':['not-authorized']}
+    async def foreign(*args,**kwargs):return {'action':'answer','support':'supported','reply':'Friday','citations':['not-authorized']}
     agent.intelligence.json_call=foreign
     await agent.accept('second','When?','public','')
     with pytest.raises(ValueError,match='citation'):
@@ -243,7 +243,7 @@ async def test_transcript_citations_show_corrections_instead_of_replacing_eviden
     m=meeting(client);base='/api/meetings/'+m['id']
     u=client.post(base+'/utterances',json={'speaker':'Alice','content':'Friday is only a proposal.'}).json()
     agent=connect_agent(client,app,m['id']);agent.settings=replace(agent.settings,llm_provider='openai_compatible')
-    async def reply(*args,**kwargs):return {'reply':'Friday is a proposal, not a commitment.','citations':[u['id']]}
+    async def reply(*args,**kwargs):return {'action':'answer','support':'supported','reply':'Friday is a proposal, not a commitment.','citations':[u['id']]}
     agent.intelligence.json_call=reply
     await agent.accept('cited','What did Alice say?','public','');event=agent.queue.get_nowait();await agent.answer(event)
     assert agent.events()[0]['citations'][0]['content']==u['content']
@@ -282,9 +282,9 @@ async def test_repo_question_reaches_model_with_shared_memory_and_returns_citati
     agent = connect_agent(client, app, m['id'])
     agent.settings = replace(agent.settings, llm_provider='openai_compatible')
     async def answer(system, context, **kwargs):
-        assert context['project'] == 'Assembly.AI'
+        assert 'project' not in context
         assert context['knowledge'][0]['content'] == repo['content']
-        return {'reply': repo['content'], 'citations': [repo['id']]}
+        return {'action':'answer','support':'supported','reply': repo['content'], 'citations': [repo['id']]}
     agent.intelligence.json_call = answer
     await agent.accept('repo', 'What is our GitHub repo link?', 'public', '')
     event = agent.queue.get_nowait()

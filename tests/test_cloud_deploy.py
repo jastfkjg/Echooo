@@ -24,6 +24,7 @@ def deployment(tmp_path):
     for name in ("deploy.sh", "compose.sh", "validate_config.py"):
         source = (ROOT / "deploy/cloud" / name).read_text()
         (release / name).write_text(source.replace("/opt/echooo", str(home)))
+    (release / "preflight.sh").write_text("#!/bin/bash\nexit 0\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -34,8 +35,11 @@ with open(os.environ['CALLS'], 'a') as f:
     f.write(json.dumps(args) + '\\n')
 mode = os.environ.get('FAIL_MODE', '')
 if 'config' in args and 'json' in args:
-    print(json.dumps({'services': {'db': {'environment': {'POSTGRES_PASSWORD': 'a'*64}}, 'app': {'environment': {'PUBLIC_ORIGIN': os.environ.get('TEST_ORIGIN', 'https://example.com'), 'COOKIE_SECURE': os.environ.get('TEST_SECURE', 'true')}}, 'proxy': {'environment': {'DOMAIN': os.environ.get('TEST_DOMAIN', 'example.com'), 'ACME_EMAIL': 'admin@example.com'}}}}))
+    print(json.dumps({'services': {'db': {'environment': {'POSTGRES_PASSWORD': 'a'*64}}, 'app': {'environment': {'PUBLIC_ORIGIN': os.environ.get('TEST_ORIGIN', 'https://example.com'), 'COOKIE_SECURE': os.environ.get('TEST_SECURE', 'true')}}}}))
 if 'pull' in args and mode == 'pull': sys.exit(1)
+if 'run' in args and mode == 'config': sys.exit(1)
+if 'ps' in args and mode in ('existing_db', 'credentials'): print('existing-db-container')
+if 'run' in args and mode == 'credentials' and any('create_engine' in a for a in args): sys.exit(1)
 if 'pg_dump' in args:
     print('database snapshot')
     if mode == 'backup': sys.exit(1)
@@ -44,7 +48,10 @@ if 'up' in args and args[-1] == '180' and mode == 'startup': sys.exit(1)
     docker.chmod(0o755)
     # macOS has no flock. Lock behavior belongs to the Linux utility; these tests
     # exercise script ordering, not the OS lock implementation.
-    for name, body in {"flock": "exit 0", "curl": 'printf "%s\\n" "$@" > "$CALLS.curl"; [ "${FAIL_MODE:-}" != https ]' }.items():
+    curl = bin_dir / "curl"
+    curl.write_text("#!/usr/bin/env python3\nimport os, pathlib, sys\npath = pathlib.Path(os.environ['CALLS'] + '.curl')\nwith path.open('a') as f:\n    print(' '.join(sys.argv[1:]), file=f)\nif '--retry-all-errors' in sys.argv: sys.exit(2)\nattempt = len(path.read_text().splitlines())\nmode = os.environ.get('FAIL_MODE')\nif mode == 'https' or (mode == 'transient' and attempt < 3): sys.exit(7)\n")
+    curl.chmod(0o755)
+    for name, body in {"flock": "exit 0", "sleep": "exit 0"}.items():
         path = bin_dir / name
         path.write_text("#!/bin/sh\n" + body + "\n")
         path.chmod(0o755)
@@ -54,7 +61,7 @@ if 'up' in args and args[-1] == '180' and mode == 'startup': sys.exit(1)
 
 def run(deployment, mode="", image=IMAGE):
     home, release, old, env = deployment
-    result = subprocess.run(["bash", str(release / "deploy.sh"), image], env=dict(env, FAIL_MODE=mode), capture_output=True, text=True)
+    result = subprocess.run(["bash", str(release / "deploy.sh"), image, IMAGE], env=dict(env, FAIL_MODE=mode), capture_output=True, text=True)
     calls_path = Path(env["CALLS"])
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()] if calls_path.exists() else []
     return result, calls
@@ -71,6 +78,10 @@ def test_success_backs_up_before_starting_and_records_previous(deployment):
     assert (home / 'current').resolve() == release
     assert (home / 'previous').resolve() == old
     assert len(list((home / 'backups').glob('*.dump'))) == 1
+    recorded = (release / 'image.env').read_text()
+    assert f'POSTGRES_IMAGE={IMAGE}' in recorded
+    assert 'CADDY_IMAGE' not in recorded
+    assert not any('proxy' in c for c in calls)
 
 
 @pytest.mark.parametrize('mode', ['pull', 'backup', 'startup', 'https'])
@@ -129,3 +140,40 @@ def test_rejects_cookie_scheme_mismatch_before_downtime(deployment, origin, secu
     assert result.returncode != 0
     assert 'COOKIE_SECURE' in result.stderr
     assert not any('stop' in c for c in calls)
+
+
+def test_public_health_check_recovers_from_transient_connection_errors(deployment):
+    home, release, _, env = deployment
+    result, _ = run(deployment, mode='transient')
+    assert result.returncode == 0, result.stderr
+    assert len(Path(env['CALLS'] + '.curl').read_text().splitlines()) == 3
+    assert (home / 'current').resolve() == release
+
+
+def test_public_health_check_stops_after_bounded_retries(deployment):
+    home, _, old, env = deployment
+    result, _ = run(deployment, mode='https')
+    assert result.returncode != 0
+    assert 'after 13 attempts' in result.stderr
+    assert len(Path(env['CALLS'] + '.curl').read_text().splitlines()) == 13
+    assert (home / 'current').resolve() == old
+
+
+def test_bad_provider_configuration_does_not_stop_running_service(deployment):
+    result, calls = run(deployment, mode='config')
+    assert result.returncode != 0
+    assert not any('stop' in c for c in calls)
+
+
+def test_existing_database_is_backed_up_before_recreation(deployment):
+    result, calls = run(deployment, mode='existing_db')
+    assert result.returncode == 0, result.stderr
+    backup = next(i for i, c in enumerate(calls) if 'pg_dump' in c)
+    assert not any('up' in c for c in calls[:backup])
+
+
+def test_wrong_database_credentials_fail_before_downtime(deployment):
+    result, calls = run(deployment, mode='credentials')
+    assert result.returncode != 0
+    assert not any('stop' in c for c in calls)
+    assert not any('pg_dump' in c for c in calls)

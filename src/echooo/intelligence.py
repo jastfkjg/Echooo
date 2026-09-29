@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar
 from urllib.parse import urlsplit
 
 import httpx
 
 from echooo.config import Settings
+
+
+# Task-local diagnostics, enabled only by the meeting-answer workflow.
+JSON_CALL_TRACE = ContextVar('json_call_trace', default=None)
 
 
 FALLBACK = "That is outside the information I can confirm in this conversation. I will ask the owner to clarify."
@@ -52,6 +57,9 @@ class Intelligence:
             elif host == "api.deepseek.com" and model.startswith("deepseek-v4"):
                 payload["thinking"] = {"type": "disabled"}
         timeout = httpx.Timeout(self.settings.llm_timeout_seconds, connect=10)
+        trace = JSON_CALL_TRACE.get()
+        if trace:
+            trace(request=payload)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 self.settings.llm_base_url.rstrip("/") + "/chat/completions",
@@ -63,6 +71,11 @@ class Intelligence:
         if not choices or not isinstance(choices[0], dict):
             raise ValueError("Model returned no choices")
         message = choices[0].get("message") or {}
+        if trace:
+            content = message.get('content')
+            trace(response={'content': content[:24000] if isinstance(content, str) else None,
+                'content_truncated': isinstance(content, str) and len(content) > 24000,
+                'finish_reason': choices[0].get('finish_reason')})
         if choices[0].get("finish_reason") == "length":
             raise ValueError("Model output was truncated")
         output = message.get("content")

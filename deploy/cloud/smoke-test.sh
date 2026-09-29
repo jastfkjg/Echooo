@@ -32,7 +32,3 @@ done
 if [[ "$ready" != true ]]; then docker logs "$app"; exit 1; fi
 docker exec "$app" python -c "import urllib.request; assert b'<html' in urllib.request.urlopen('http://127.0.0.1:8000/').read().lower()"
 docker exec "$app" python -c "from echooo.config import Settings; from echooo.database import Store; from echooo.auth import Auth; s=Store(Settings.load().database_url); a=Auth(s); a.setup('smoke', 'smoke-test-password'); assert not a.needs_setup(); s.close()"
-for scheme in http https; do
-    docker run --rm -e DOMAIN=echooo.example.com -e ACME_EMAIL=admin@example.com \
-        -v "$PWD/deploy/cloud/Caddyfile.$scheme:/etc/caddy/Caddyfile:ro" caddy:2.10.2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-done

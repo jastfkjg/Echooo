@@ -32,6 +32,7 @@ export class MeetingAudio {
   }
 
   async open(includeTab = true) {
+    let requestingTab = includeTab;
     try {
       if (includeTab) {
         if (!this.mediaDevices?.getDisplayMedia) {
@@ -39,26 +40,45 @@ export class MeetingAudio {
         }
         // This must be the first permission request, while the click is active.
         const shared = this.keep(await this.mediaDevices.getDisplayMedia({
-          video: true,
+          video: {displaySurface: 'browser'},
           audio: {suppressLocalAudioPlayback: false},
           preferCurrentTab: false,
           selfBrowserSurface: 'exclude',
           systemAudio: 'exclude',
+          windowAudio: 'exclude',
+          monitorTypeSurfaces: 'exclude',
           surfaceSwitching: 'exclude',
         }));
+        // Picker preferences are hints; reject unsupported sources before asking for the mic.
+        const surface = shared.getVideoTracks()[0]?.getSettings?.().displaySurface;
+        if (surface && surface !== 'browser') {
+          throw new Error('Choose a Chrome tab, not a window or screen, and enable “Share tab audio”.');
+        }
         if (!shared.getAudioTracks().length) {
-          throw new Error('No shared audio. Choose the meeting or video tab and enable “Share tab audio”, then try again.');
+          throw new Error('No shared audio. Choose a tab and enable “Share tab audio”.');
         }
       }
-      this.keep(await this.mediaDevices.getUserMedia({
+      requestingTab = false;
+      const microphone = this.keep(await this.mediaDevices.getUserMedia({
         audio: {echoCancellation: true, noiseSuppression: true},
       }));
+      // Cancel local speaker output in the microphone path, never the shared tab.
+      // Capability-gated: older browsers keep their ordinary AEC. Do not gate
+      // capture or remove matching transcript text: people may quote the assistant.
+      for (const track of microphone.getAudioTracks()) {
+        if (track.getCapabilities?.().echoCancellation?.includes('all') && track.applyConstraints) {
+          try { await track.applyConstraints({echoCancellation: {exact: 'all'}}); }
+          catch { /* Keep the initially requested ordinary AEC and continuous capture. */ }
+        }
+      }
+      // Inspect the effective setting, not merely the requested constraint.
+      this.echoCancellation = microphone.getAudioTracks()[0]?.getSettings?.().echoCancellation ?? null;
       if (this.closed) throw new Error('Recording setup was cancelled.');
       return this;
     } catch (error) {
       this.close();
       if (error.name === 'NotAllowedError' || error.name === 'AbortError') {
-        throw new Error('Recording was not started. Allow microphone access and, for tab recording, share the meeting or video tab with audio.');
+        throw new Error(requestingTab ? 'Recording not started. Share a tab with audio to retry.' : 'Recording not started. Allow microphone access to retry.');
       }
       throw error;
     }

@@ -1,0 +1,13 @@
+{
+    auto_https off
+    admin off
+}
+https://echooo-attendee-gateway:8443 {
+    tls /tls/server.crt /tls/server.key
+    handle /ws/meeting-bots/* {
+        reverse_proxy echooo-upstream:8000
+    }
+    handle {
+        respond 404
+    }
+}

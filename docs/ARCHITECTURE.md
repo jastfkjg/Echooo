@@ -54,7 +54,7 @@ All browser paths share the Service permission checks. Models have no database c
 
 ## Identity and storage isolation
 
-- This release is a single-owner deployment. Registration closes after initial setup. Tables still have owner_id, and repository queries always use the authenticated owner.
+- A deployment supports multiple independent owner workspaces. Public registration closes after initial setup; additional accounts are provisioned by the server operator using `create_owner.py --additional`. Tables have owner_id, and repository queries always use the authenticated owner. Each account receives its own default domain without changing existing workspaces.
 - Owner and guest use separate HttpOnly, SameSite=Strict cookies. Only SHA-256 hashes of random tokens are stored. Passwords use scrypt. Invitation tokens arrive in a URL fragment, which is removed on page load; redemption atomically consumes the original token.
 - A guest credential is bound to one conversation. It does not grant owner APIs, domain lists, private notes, authorization details, or other rooms. Issuing another invitation invalidates previous guest credentials.
 - PostgreSQL application-data transactions switch to the `echooo_scoped` role, which has no login or BYPASSRLS privilege. RLS restricts reads and writes using the trusted owner scope. SQLite relies on repository and service checks.

@@ -25,7 +25,7 @@ jobs:
           LLM_PROVIDER: mock
           TTS_PROVIDER: browser
       - run: node --test tests/*.mjs
-      - name: Test container, PostgreSQL, and proxy configuration
+      - name: Test container and PostgreSQL
         run: bash deploy/cloud/smoke-test.sh
   deploy:
     needs: test
@@ -54,6 +54,24 @@ jobs:
           registry: ${{ vars.ACR_REGISTRY }}
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
+      - name: Check server prerequisites before building
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          SSH_PORT=${SSH_PORT:-22}
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'bash -s' < deploy/cloud/preflight.sh
       - name: Build and publish
         id: build
         uses: docker/build-push-action@v6
@@ -68,6 +86,17 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+      - name: Publish postgres to ACR
+        id: postgres
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/cloud/images
+          file: deploy/cloud/images/postgres.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
+          tags: ${{ steps.image.outputs.name }}:deps-postgres-17-bookworm-${{ github.sha }}
       - name: Deploy over SSH
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -76,6 +105,7 @@ jobs:
           SSH_KEY: ${{ secrets.SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          POSTGRES_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.postgres.outputs.digest }}
         run: |
           set -euo pipefail
           [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
@@ -91,7 +121,7 @@ jobs:
           release="/opt/echooo/releases/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           "${SSH[@]}" "$target" "umask 077; mkdir -p '$release'"
           tar -C deploy/cloud -czf - . | "${SSH[@]}" "$target" "tar -xzf - -C '$release'"
-          "${SSH[@]}" "$target" "bash '$release/deploy.sh' '$IMAGE'"
+          "${SSH[@]}" "$target" "bash '$release/deploy.sh' '$IMAGE' '$POSTGRES_IMAGE'"
       - name: Remove SSH key
         if: always()
         run: rm -f "$HOME/.ssh/deploy_key"

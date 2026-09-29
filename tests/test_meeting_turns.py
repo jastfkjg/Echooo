@@ -18,7 +18,9 @@ def decisions(agent):
     actions = []
     async def classify(system, context, **kwargs):
         calls.append(context)
-        return {'action': actions.pop(0) if actions else 'respond'}
+        action = actions.pop(0) if actions else 'answer'
+        return {'action': action} if action in {'listen', 'end'} else {
+            'action': 'answer', 'support': 'not_applicable', 'reply': 'Here is more detail.', 'citations': []}
     agent.intelligence.json_call = classify
     return calls, actions
 
@@ -149,7 +151,7 @@ async def test_stop_invalidates_delayed_model_decision(agent):
             await release.wait()
         except asyncio.CancelledError:
             pass  # Even an uncancellable result must be discarded.
-        return {'action': 'respond'}
+        return {'action': 'answer', 'support': 'not_applicable', 'reply': 'Here is more detail.', 'citations': []}
     agent.intelligence.json_call = slow
     await agent.transcript(turn('Echooo，你好'), 'rec:1:1'); agent.queue.get_nowait()
     await agent.transcript(turn('英文版本'), 'rec:1:2')
@@ -177,3 +179,117 @@ async def test_turn_classifier_never_reads_private_chat(agent, decisions):
     await agent.transcript(turn('展开一点'), 'rec:1:2'); await settle(agent)
     assert 'PRIVATE_QUESTION' not in str(calls)
     assert agent.queue.get_nowait()['request'] == '展开一点'
+
+
+@pytest.mark.parametrize('search', [False, True])
+async def test_combined_followup_reuses_first_call_and_preserves_citations(agent, monkeypatch, search):
+    from dataclasses import replace
+    from echooo import database as db, meeting_answers
+    from test_meeting_answers import add, answer, detail
+    agent.settings = replace(agent.settings, llm_provider='openai_compatible')
+    source = add(agent, 'The team selected Telegram for communication.')
+    if search:
+        for i in range(65):
+            add(agent, f'Unrelated update {i}.')
+    calls, spoken = [], []
+    async def model(system, context, **kwargs):
+        calls.append((system, context))
+        if len(calls) == 1:
+            assert meeting_answers.FOLLOWUP_PROTOCOL in system
+            if search:
+                return {'action': 'search', 'queries': ['team communication Telegram']}
+        else:
+            assert meeting_answers.FOLLOWUP_PROTOCOL not in system
+            assert 'retrieval' in context
+        return answer('Telegram.', [source['id']])
+    async def speak(text, event):
+        spoken.append(text)
+    agent.intelligence.json_call = model
+    monkeypatch.setattr(agent, 'speak', speak)
+    agent.conversation_until = time.monotonic() + 15
+    await agent.transcript(turn('Which platform did we select?'), 'followup:1')
+    await settle(agent)
+    event = agent.queue.get_nowait()
+    await agent.answer(event)
+    assert len(calls) == (2 if search else 1)
+    assert spoken == ['Telegram.'] and event['status'] == 'spoken'
+    assert detail(agent)['model_calls'] == len(calls)
+    assert agent.events()[-1]['citations'][0]['content'] == source['content']
+    with agent.store.scope(agent.who) as r:
+        trace = r.list(db.meeting_answer_traces, db.meeting_answer_traces.c.event_id == event['id'])[0]['detail']
+    assert len(trace['calls']) == len(calls)
+    assert trace['calls'][0]['system'] == calls[0][0]
+    stages = trace['timing']['stages']
+    assert stages['llm_1_started'] <= stages['llm_1_finished'] <= stages['queued'] <= stages['answer_started']
+    assert trace['timing']['input']['follow_up_combined']
+    assert 'turn_classification_ms' not in trace['timing']['input']
+
+
+@pytest.mark.parametrize('action', ['clarify', 'insufficient'])
+async def test_combined_followup_preserves_clarification_and_insufficient_fallback(agent, monkeypatch, action):
+    from dataclasses import replace
+    from test_meeting_answers import answer, detail
+    agent.settings = replace(agent.settings, llm_provider='openai_compatible')
+    calls = []
+    async def model(system, context, **kwargs):
+        calls.append(context)
+        if action == 'clarify':
+            return {'action': 'clarify', 'reply': 'Which project?', 'citations': []}
+        return answer('The available evidence does not establish a date.', support='insufficient')
+    async def speak(*args):
+        pass
+    agent.intelligence.json_call = model
+    monkeypatch.setattr(agent, 'speak', speak)
+    agent.conversation_until = time.monotonic() + 15
+    await agent.transcript(turn('When does that launch?'), 'followup:1')
+    await settle(agent)
+    await agent.answer(agent.queue.get_nowait())
+    assert len(calls) == (1 if action == 'clarify' else 2)
+    assert detail(agent)['search_used'] == (action == 'insufficient')
+
+
+@pytest.mark.parametrize('mutation', ['edit', 'append', 'revoke'])
+async def test_combined_followup_rejects_evidence_changed_before_consumption(agent, monkeypatch, mutation):
+    from dataclasses import replace
+    from echooo import database as db
+    from test_meeting_answers import add, answer
+    agent.settings = replace(agent.settings, llm_provider='openai_compatible')
+    source = add(agent, 'The team selected Telegram.')
+    calls = []
+    async def model(*args, **kwargs):
+        calls.append(1)
+        return answer('Telegram.', [source['id']])
+    async def forbidden(*args):
+        pytest.fail('Stale evidence must never be spoken')
+    agent.intelligence.json_call = model
+    monkeypatch.setattr(agent, 'speak', forbidden)
+    agent.conversation_until = time.monotonic() + 15
+    await agent.transcript(turn('Which platform was chosen?'), 'followup:1')
+    await settle(agent)
+    event = agent.queue.get_nowait()
+    if mutation == 'edit':
+        with agent.store.scope(agent.who) as r:
+            r.change(db.utterances, source['id'], content='The team selected Slack.')
+    elif mutation == 'append':
+        add(agent, 'Correction: no platform has been selected.')
+    else:
+        monkeypatch.setattr(agent.manager.knowledge, 'valid', lambda *args: False)
+    with pytest.raises(ValueError, match='changed'):
+        await agent.answer(event)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('result', [
+    {'action': 'respond'},
+    {'action': 'listen', 'reply': 'Unsolicited answer'},
+    {'action': 'search', 'queries': [], 'recipient': 'everyone'},
+    {'action': 'answer', 'support': 'supported', 'reply': 'Invented.', 'citations': ['foreign']},
+])
+async def test_invalid_combined_turn_never_accepts_or_speaks(agent, result):
+    async def model(*args, **kwargs):
+        return result
+    agent.intelligence.json_call = model
+    agent.conversation_until = time.monotonic() + 15
+    await agent.transcript(turn('Please elaborate on that.'), 'followup:1')
+    await settle(agent)
+    assert agent.queue.empty() and agent.turn_decision == 'unavailable'
