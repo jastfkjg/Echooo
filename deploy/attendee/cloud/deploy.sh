@@ -24,7 +24,15 @@ fi
 openssl x509 -checkend 604800 -noout -in "$home/tls/server.crt" >/dev/null || { echo 'Renew the private callback certificate before deploying (see docs/ATTENDEE_CLOUD.md).' >&2; exit 1; }
 compose() { bash "$release/compose.sh" "$@"; }
 app() { bash /opt/echooo/current/compose.sh "$@"; }
-previous=$(readlink -f "$home/current" 2>/dev/null || true)
+# GNU readlink -f can succeed for a missing final path component.
+# Establish that a usable deployment exists before resolving its location.
+previous=""
+if [[ -f "$home/current/compose.sh" ]]; then
+    previous=$(readlink -f "$home/current")
+elif [[ -e "$home/current" || -L "$home/current" ]]; then
+    echo 'Existing Attendee deployment is incomplete; inspect current before retrying.' >&2
+    exit 1
+fi
 compose config --quiet
 compose pull
 if [[ -n "$previous" ]]; then

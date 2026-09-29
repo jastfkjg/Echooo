@@ -25,6 +25,7 @@ def deployment(tmp_path):
         source = (ROOT / "deploy/cloud" / name).read_text()
         (release / name).write_text(source.replace("/opt/echooo", str(home)))
     (release / "preflight.sh").write_text("#!/bin/bash\nexit 0\n")
+    (old / "compose.sh").write_text((release / "compose.sh").read_text())
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -51,6 +52,11 @@ if 'up' in args and args[-1] == '180' and mode == 'startup': sys.exit(1)
     curl = bin_dir / "curl"
     curl.write_text("#!/usr/bin/env python3\nimport os, pathlib, sys\npath = pathlib.Path(os.environ['CALLS'] + '.curl')\nwith path.open('a') as f:\n    print(' '.join(sys.argv[1:]), file=f)\nif '--retry-all-errors' in sys.argv: sys.exit(2)\nattempt = len(path.read_text().splitlines())\nmode = os.environ.get('FAIL_MODE')\nif mode == 'https' or (mode == 'transient' and attempt < 3): sys.exit(7)\n")
     curl.chmod(0o755)
+    # Match GNU readlink -f even when running these tests on macOS.
+    readlink = bin_dir / "readlink"
+    readlink.write_text('#!/usr/bin/env python3\nimport pathlib, sys\n'
+                        'print(pathlib.Path(sys.argv[-1]).resolve())\n')
+    readlink.chmod(0o755)
     for name, body in {"flock": "exit 0", "sleep": "exit 0"}.items():
         path = bin_dir / name
         path.write_text("#!/bin/sh\n" + body + "\n")
@@ -82,6 +88,32 @@ def test_success_backs_up_before_starting_and_records_previous(deployment):
     assert f'POSTGRES_IMAGE={IMAGE}' in recorded
     assert 'CADDY_IMAGE' not in recorded
     assert not any('proxy' in c for c in calls)
+
+
+def test_first_deployment_does_not_record_a_missing_previous(deployment):
+    home, release, _, _ = deployment
+    (home / 'current').unlink()
+    result, _ = run(deployment)
+    assert result.returncode == 0, result.stderr
+    assert (home / 'current').resolve() == release
+    assert not (home / 'previous').is_symlink()
+
+
+@pytest.mark.parametrize('broken_link', [False, True])
+def test_incomplete_current_fails_before_stopping_services(deployment, broken_link):
+    home, _, old, _ = deployment
+    current = home / 'current'
+    if broken_link:
+        current.unlink()
+        current.symlink_to(home / 'releases/missing')
+    else:
+        (old / 'compose.sh').unlink()
+    target = current.readlink()
+    result, calls = run(deployment)
+    assert result.returncode != 0
+    assert 'incomplete' in result.stderr
+    assert not any('stop' in c for c in calls)
+    assert current.readlink() == target
 
 
 @pytest.mark.parametrize('mode', ['pull', 'backup', 'startup', 'https'])

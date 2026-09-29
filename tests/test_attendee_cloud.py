@@ -95,6 +95,11 @@ for flag in ('-keyout', '-out'):
     if flag in args: pathlib.Path(args[args.index(flag)+1]).write_text('test certificate')
 ''')
     (bindir / 'flock').write_text('#!/bin/sh\nexit 0\n')
+    # GNU readlink -f resolves a missing final component. Reproduce Linux
+    # behavior on macOS too, where a missing current can otherwise hide this bug.
+    (bindir / 'readlink').write_text(
+        '#!/usr/bin/env python3\nimport pathlib, sys\n'
+        'print(pathlib.Path(sys.argv[-1]).resolve())\n')
     for file in bindir.iterdir():
         file.chmod(0o755)
     env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'], CALLS=str(tmp_path / 'calls'))
@@ -153,3 +158,21 @@ def test_first_deployment(deployment):
     assert result.returncode == 0, result.stderr
     assert not any('pg_dump' in c for c in calls)
     assert (home / 'attendee/current').resolve() == release
+    assert not (home / 'attendee/previous').is_symlink()
+
+
+@pytest.mark.parametrize('broken_link', [False, True])
+def test_incomplete_current_fails_before_stopping_services(deployment, broken_link):
+    home, _, old, _ = deployment
+    current = home / 'attendee/current'
+    if broken_link:
+        current.unlink()
+        current.symlink_to(home / 'attendee/releases/missing')
+    else:
+        (old / 'compose.sh').unlink()
+    target = current.readlink()
+    result, calls = run(deployment)
+    assert result.returncode != 0
+    assert 'incomplete' in result.stderr
+    assert not any('stop' in c for c in calls)
+    assert current.readlink() == target

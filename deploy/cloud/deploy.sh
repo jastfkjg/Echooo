@@ -25,7 +25,14 @@ compose run --rm --no-deps app python -c 'from echooo.config import Settings; Se
 if [[ -n "$(compose ps --status running -q db)" ]]; then
     compose run --rm --no-deps app python -c 'from sqlalchemy import create_engine, text; from echooo.config import Settings; engine=create_engine(Settings.load().database_url); connection=engine.connect(); connection.execute(text("SELECT 1")); connection.close(); engine.dispose(); print("Database credentials passed.")'
 fi
-previous=$(readlink -f /opt/echooo/current 2>/dev/null || true)
+# GNU readlink -f can succeed for a missing final path component.
+previous=""
+if [[ -f /opt/echooo/current/compose.sh ]]; then
+    previous=$(readlink -f /opt/echooo/current)
+elif [[ -e /opt/echooo/current || -L /opt/echooo/current ]]; then
+    echo 'Existing Echooo deployment is incomplete; inspect current before retrying.' >&2
+    exit 1
+fi
 # Quiesce writes before backup and startup migrations. Do not overlap app workers.
 compose stop app
 # Back up the existing database before recreating it with a new image.
