@@ -18,6 +18,8 @@ Zoom is the first live-tested interactive platform. The pinned Google Meet and T
 
 The worker uses a small reproducible overlay from `deploy/attendee/overlay.py`, applied to copies under `.local/attendee-overlay`. It preserves Zoom recipient/self metadata, forwards active-speaker hints, and installs continuous audio playback with interruption support. The pinned upstream checkout remains unmodified. Setup fails if patch anchors change. After updating an existing installation, run `python3 scripts/attendee.py up` and restart Echooo; bots already in a meeting must leave and rejoin to load the new browser adapter.
 
+For the existing GitHub Actions cloud deployment, use the separate [Deploy Attendee workflow](ATTENDEE_CLOUD.md).
+
 ## Start locally
 
 Requirements: Docker with Compose, Git, Python 3, OpenSSL, and working internet access to the meeting platform. Start Docker Desktop first on macOS. The upstream image targets **linux/amd64**; Apple Silicon runs it under emulation, so the first build is large and browser startup is slower.

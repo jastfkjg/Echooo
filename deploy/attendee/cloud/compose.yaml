@@ -1,0 +1,103 @@
+name: echooo-attendee-cloud
+x-app: &app
+  image: ${ATTENDEE_IMAGE:?Set immutable Attendee image}
+  platform: linux/amd64
+  restart: unless-stopped
+  env_file: /opt/echooo/attendee/attendee.env
+  environment:
+    DJANGO_SETTINGS_MODULE: attendee.settings.echooo
+    DJANGO_SSL_REQUIRE: 'false'
+    POSTGRES_SSL_REQUIRE: 'false'
+    DISABLE_EMAIL: 'true'
+    POSTGRES_HOST: postgres
+    POSTGRES_DB: attendee
+    POSTGRES_USER: attendee
+    REDIS_URL: redis://redis:6379/5
+    DISABLE_SIGNUP: 'true'
+    CHARGE_CREDITS_FOR_BOTS: 'false'
+    CONCURRENT_BOTS_LIMIT: '1'
+  volumes:
+    - debug:/attendee/local-debug
+    - static:/attendee/staticfiles
+  logging: &logging
+    driver: json-file
+    options: {max-size: 10m, max-file: '3'}
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set immutable PostgreSQL image}
+    restart: unless-stopped
+    env_file: /opt/echooo/attendee/attendee.env
+    environment: {POSTGRES_DB: attendee, POSTGRES_USER: attendee}
+    volumes: ['postgres:/var/lib/postgresql/data']
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U attendee']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+  redis:
+    image: ${REDIS_IMAGE:?Set immutable Redis image}
+    restart: unless-stopped
+    volumes: ['redis:/data']
+    command: [redis-server, --appendonly, 'yes']
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+  api:
+    <<: *app
+    entrypoint: []
+    command: [gunicorn, attendee.wsgi:application, --bind, '0.0.0.0:8000', --workers, '2', --timeout, '60']
+    ports: ['127.0.0.1:8011:8000']
+    networks:
+      default:
+      proxy:
+        aliases: [attendee-api]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import os, urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/api/v1/bots', headers={'Authorization': 'Token '+os.environ['ECHOOO_CONNECTOR_KEY']}); urllib.request.urlopen(r, timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+  worker:
+    <<: *app
+    entrypoint: [/tini, --, /bin/bash, /attendee/echooo-worker.sh]
+    command: [celery, -A, attendee, worker, -l, WARNING, '--concurrency=1']
+    shm_size: 2gb
+    volumes:
+      - debug:/attendee/local-debug
+      - /opt/echooo/attendee/tls/server.crt:/echooo-ca.crt:ro
+    depends_on:
+      api: {condition: service_healthy}
+      gateway: {condition: service_started}
+    healthcheck:
+      test: [CMD-SHELL, 'celery -A attendee inspect ping --destination celery@$$HOSTNAME --timeout 10 | grep -q pong']
+      interval: 30s
+      timeout: 20s
+      retries: 6
+      start_period: 30s
+  gateway:
+    image: ${CADDY_IMAGE:?Set immutable Caddy image}
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/echooo/attendee/tls:/tls:ro
+    networks:
+      default:
+        aliases: [echooo-attendee-gateway]
+      proxy:
+    logging: *logging
+volumes:
+  postgres:
+  redis:
+  debug:
+  static:
+networks:
+  proxy:
+    external: true
+    name: echooo_proxy

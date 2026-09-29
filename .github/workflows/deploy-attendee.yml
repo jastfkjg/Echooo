@@ -1,0 +1,150 @@
+name: Deploy Attendee
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test deployment helpers
+        run: |
+          pip install pytest pyyaml
+          python -m pytest -q tests/test_attendee_cloud.py
+          for script in deploy/attendee/cloud/*.sh; do bash -n "$script"; done
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate registry configuration
+        id: image
+        env:
+          ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ vars.ACR_NAMESPACE }}
+          ACR_REPOSITORY: ${{ vars.ACR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          [[ "$ACR_REGISTRY" =~ ^[a-z0-9][a-z0-9.-]*\.aliyuncs\.com$ ]] || { echo 'Set ACR_REGISTRY to the public ACR hostname, without https:// or a path.' >&2; exit 1; }
+          [[ "$ACR_NAMESPACE" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo 'Set ACR_NAMESPACE.' >&2; exit 1; }
+          [[ "$ACR_REPOSITORY" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo 'Set ACR_REPOSITORY.' >&2; exit 1; }
+          echo "name=$ACR_REGISTRY/$ACR_NAMESPACE/$ACR_REPOSITORY" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      - name: Check server prerequisites before building
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          SSH_PORT=${SSH_PORT:-22}
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'bash -s' < deploy/attendee/cloud/preflight.sh
+      - uses: actions/checkout@v4
+        with:
+          repository: attendee-labs/attendee
+          ref: 60e885df6f9ed0f38ef141438caac9978a38a6cc
+          path: attendee-build
+          persist-credentials: false
+      - name: Apply Echooo adapters
+        run: python deploy/attendee/cloud/prepare_build.py attendee-build
+      - name: Build and publish Attendee
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: attendee-build
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
+          tags: ${{ steps.image.outputs.name }}:attendee-${{ github.sha }}
+          cache-from: type=gha,scope=attendee
+          cache-to: type=gha,scope=attendee,mode=max
+      - name: Publish PostgreSQL to ACR
+        id: postgres
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/attendee/cloud
+          file: deploy/attendee/cloud/postgres.Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
+          tags: ${{ steps.image.outputs.name }}:attendee-postgres-${{ github.sha }}
+      - name: Publish Redis to ACR
+        id: redis
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/attendee/cloud
+          file: deploy/attendee/cloud/redis.Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
+          tags: ${{ steps.image.outputs.name }}:attendee-redis-${{ github.sha }}
+      - name: Publish Caddy to ACR
+        id: caddy
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/attendee/cloud
+          file: deploy/attendee/cloud/caddy.Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
+          tags: ${{ steps.image.outputs.name }}:attendee-caddy-${{ github.sha }}
+      - name: Smoke test published stack
+        env:
+          ATTENDEE_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          POSTGRES_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.postgres.outputs.digest }}
+          REDIS_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.redis.outputs.digest }}
+          CADDY_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.caddy.outputs.digest }}
+        run: bash deploy/attendee/cloud/smoke-test.sh
+      - name: Deploy over SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          POSTGRES_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.postgres.outputs.digest }}
+          REDIS_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.redis.outputs.digest }}
+          CADDY_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.caddy.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          SSH_PORT=${SSH_PORT:-22}
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          SSH=(ssh -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15)
+          target="$SSH_USER@$SSH_HOST"
+          release="/opt/echooo/attendee/releases/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          "${SSH[@]}" "$target" "umask 077; mkdir -p '$release'"
+          tar -C deploy/attendee/cloud -czf - . | "${SSH[@]}" "$target" "tar -xzf - -C '$release'"
+          "${SSH[@]}" "$target" "bash '$release/deploy.sh' '$IMAGE' '$POSTGRES_IMAGE' '$REDIS_IMAGE' '$CADDY_IMAGE'"
+      - name: Remove SSH key
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key"
