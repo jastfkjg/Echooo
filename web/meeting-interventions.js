@@ -2,6 +2,21 @@ import {LocalQuestionSpeech} from './local-question-speech.js?v=server-tts-1';
 const esc = (v='') => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels={proposed:'Needs approval',deferred:'Deferred',approved:'Waiting to speak',speaking:'Speaking',spoken:'Spoken',stale:'No longer current',rejected:'Dismissed',cancelled:'Cancelled',failed:'Failed'};
 const active = p => ['proposed','deferred','approved','speaking','failed'].includes(p.status);
+const isLocal=value=>!value.connector?.bot||['ended','fatal_error','data_deleted','not_created'].includes(value.connector.bot.state);
+
+export function speechRequirement(meeting, localRecording, audioAvailable){
+  if(isLocal(meeting)){
+    if(!audioAvailable)return 'Local speech playback is unavailable in this browser.';
+    if(!localRecording)return meeting.recording?'Play from the browser tab that is recording.':'Start recording in this browser to play.';
+    return '';
+  }
+  const {bot,agent,audio_connected:audioConnected}=meeting.connector;
+  if(bot.state!=='joined_recording'||bot.desired_state!=='joined'||(bot.deadline!=null&&Date.now()/1000>=bot.deadline))return 'Wait for Echooo to join and start recording before asking in the meeting.';
+  if(!audioConnected||!agent)return 'Wait for Echooo to connect to meeting audio.';
+  if(!agent.voice_available)return 'Voice replies need speech synthesis and live transcription.';
+  if(!agent.voice_enabled)return 'Turn on Answer when called to ask in the meeting.';
+  return '';
+}
 
 export function suggestionQueue(items, editingId=null){
   const priority=p=>['approved','speaking'].includes(p.status)?0:p.id===editingId?1:p.state?.task_priority==='blocking'||p.kind==='contradiction'?2:3;
@@ -57,7 +72,7 @@ export function trackedGapsHTML(tasks,records=[],ended=false){
   return `<section class="tracked-gaps"><h3>Tracked gaps</h3><p class="muted">${ended?'Unresolved details at the end of the meeting.':'Following the discussion before suggesting questions.'}</p>${tasks.slice(0,3).map(t=>trackedGapHTML(t,records)).join('')}${tasks.length>3?`<details data-suggestion-details="tracked-overflow"><summary>More tracked gaps · ${tasks.length-3}</summary>${tasks.slice(3).map(t=>trackedGapHTML(t,records)).join('')}</details>`:''}</section>`;
 }
 
-export function interventionHTML(p, reviews=[], ended=false, {local=false, editing=null,records=[]}={}){
+export function interventionHTML(p, reviews=[], ended=false, {local=false, speechBlocked=false, editing=null,records=[]}={}){
   const reviewable=['proposed','deferred','failed','cancelled'].includes(p.status)&&!ended;
   const edit=reviewable&&editing?.id===p.id;
   const evidence=evidenceGroups(p.evidence,records).map(g=>`<blockquote class="intervention-evidence"><p>${esc(g.quote)}</p><footer><span>${esc(g.speaker)} · ${stamp(g.start_ms)}${Math.floor(g.end_ms/1000)>Math.floor(g.start_ms/1000)?'–'+stamp(g.end_ms):''}</span><button class="meeting-text-button" data-proposal-source="${esc(g.items[0].utterance_id)}" data-proposal-sources="${esc(JSON.stringify(g.items.map(e=>e.utterance_id)))}">Open transcript</button></footer></blockquote>`).join('');
@@ -65,15 +80,14 @@ export function interventionHTML(p, reviews=[], ended=false, {local=false, editi
   const actionItems=(p.action_items||[]).map(f=>`<p class="intervention-linked-action">${esc(f.statement)} <span class="muted">· ${esc(f.status==='provisional'?'Awaiting review':f.status==='approved'||f.status==='edited'?'Confirmed':f.status)}</span> <button class="meeting-text-button" data-proposal-finding="${esc(f.id)}">View action</button></p>`).join('');
   const followup=responses||actionItems?`<details data-suggestion-details="answers-${esc(p.id)}"><summary>Participant replies${p.responses?.length?` · ${p.responses.length}`:''}</summary>${responses}${actionItems}</details>`:'';
   const question=edit?`<label for="question-${esc(p.id)}">Question</label><textarea id="question-${esc(p.id)}" data-question-draft required maxlength="1000" rows="3">${esc(editing.text)}</textarea>`:`<p class="intervention-question">${esc(p.question)}</p>`;
-  const actions=reviewable?`<button class="btn primary" data-proposal-action="approve">${local?'Play locally':'Ask in meeting'}</button><button class="btn" data-proposal-action="${edit?'cancel-edit':'edit'}">${edit?'Cancel edit':'Edit'}</button>${['proposed','deferred'].includes(p.status)?'<button class="btn" data-proposal-action="reject">Dismiss</button>':''}${p.status==='proposed'?`<details class="intervention-more" data-suggestion-details="more-${esc(p.id)}"><summary class="btn">More</summary><button class="btn" data-proposal-action="defer">Save for later</button></details>`:''}`:'';
+  const actions=reviewable?`<button class="btn primary" data-proposal-action="approve"${speechBlocked?' disabled aria-describedby="suggestion-speech-requirement"':''}>${local?'Play locally':'Ask in meeting'}</button><button class="btn" data-proposal-action="${edit?'cancel-edit':'edit'}">${edit?'Cancel edit':'Edit'}</button>${['proposed','deferred'].includes(p.status)?'<button class="btn" data-proposal-action="reject">Dismiss</button>':''}${p.status==='proposed'?`<details class="intervention-more" data-suggestion-details="more-${esc(p.id)}"><summary class="btn">More</summary><button class="btn" data-proposal-action="defer">Save for later</button></details>`:''}`:'';
   return `<article class="intervention-row" data-intervention="${esc(p.id)}"><div class="intervention-meta"><span class="intervention-kind">${p.kind==='contradiction'?'Conflicting information':'Missing detail'}</span>${p.status==='proposed'?'':`<span class="muted">${esc(labels[p.status]||p.status)}</span>`}</div>${question}<p class="intervention-reason">${esc(p.reason)}</p>${followup}<details data-suggestion-details="${esc(p.id)}"><summary>Supporting conversation</summary>${evidence}${reviews.length?`<details data-suggestion-details="history-${esc(p.id)}"><summary>Review history · ${reviews.length}</summary>${reviews.map(r=>`<p>${esc(r.action)} · ${esc(new Date(r.created_at*1000).toLocaleString())}</p>${r.before.question!==r.after.question?`<blockquote>${esc(r.before.question)} → ${esc(r.after.question)}</blockquote>`:''}`).join('')}</details>`:''}</details><div class="actions">${actions}${['approved','speaking'].includes(p.status)?'<button class="btn" data-proposal-action="cancel">Stop</button>':''}</div>${p.state?.delivery_error?`<p class="meeting-warning">${esc(p.state.delivery_error)}</p>`:''}</article>`;
 }
 
 export function mountInterventions(root,{api,base,refresh,showSource,openFinding=()=>{},getLocalRecording=()=>null,onLocalSpeech=async()=>{}}){
   let snapshot, busy=false,disposed=false,localError='',editing=null,expanded=false;
-  const isLocal=value=>!value.connector?.bot||['ended','fatal_error','data_deleted','not_created'].includes(value.connector.bot.state);
-  root.innerHTML='<div class="meeting-section-heading"><h2><button class="meeting-suggestions-toggle" data-toggle-suggestions aria-expanded="false" aria-controls="meeting-suggestions-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>Suggested questions <span data-suggestion-count>0</span><span data-tracked-gap-count hidden></span></button></h2><button class="meeting-icon-button" data-check-suggestions aria-label="Check for suggested questions" title="Check for suggested questions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5"/></svg></button></div><p data-intervention-status role="status" aria-live="polite" hidden></p><p data-intervention-error role="alert"></p><div id="meeting-suggestions-content" data-intervention-list hidden></div>';
-  const status=root.querySelector('[data-intervention-status]'),error=root.querySelector('[data-intervention-error]'),list=root.querySelector('[data-intervention-list]');
+  root.innerHTML='<div class="meeting-section-heading"><h2><button class="meeting-suggestions-toggle" data-toggle-suggestions aria-expanded="false" aria-controls="meeting-suggestions-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>Suggested questions <span data-suggestion-count>0</span><span data-tracked-gap-count hidden></span></button></h2><button class="meeting-icon-button" data-check-suggestions aria-label="Check for suggested questions" title="Check for suggested questions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5"/></svg></button></div><p data-intervention-status role="status" aria-live="polite" hidden></p><p data-intervention-error role="alert"></p><p id="suggestion-speech-requirement" data-speech-requirement hidden></p><div id="meeting-suggestions-content" data-intervention-list hidden></div>';
+  const status=root.querySelector('[data-intervention-status]'),error=root.querySelector('[data-intervention-error]'),requirement=root.querySelector('[data-speech-requirement]'),list=root.querySelector('[data-intervention-list]');
   const localSpeech=new LocalQuestionSpeech({api,base,
     changed:()=>{if(!disposed)refresh().catch(()=>{});},error:message=>{localError=message;if(!disposed)error.textContent=message;}});
   const speechRequest=localSpeech.request.bind(localSpeech);
@@ -104,6 +118,9 @@ export function mountInterventions(root,{api,base,refresh,showSource,openFinding
     root.querySelector('[data-check-suggestions]').disabled=busy||ended||progress.phase==='checking'||!progress.available;
     if(editing&&!items.some(p=>p.id===editing.id&&p.revision===editing.revision&&['proposed','deferred','failed','cancelled'].includes(p.status))){editing=null;error.textContent='This suggestion changed. Review the latest question.';}
     const queue=suggestionQueue(items,editing?.id);
+    const reason=speechRequirement(value,getLocalRecording(),localSpeech.available);
+    requirement.textContent=reason;
+    requirement.hidden=!expanded||!reason||ended||!items.some(p=>['proposed','deferred','failed','cancelled'].includes(p.status));
     root.querySelector('[data-toggle-suggestions]').setAttribute('aria-expanded',String(expanded));
     root.querySelector('[data-suggestion-count]').textContent=String(queue.visible.length+queue.more.length+queue.saved.length);
     const trackedCount=root.querySelector('[data-tracked-gap-count]');
@@ -111,7 +128,7 @@ export function mountInterventions(root,{api,base,refresh,showSource,openFinding
     trackedCount.textContent=tracked.length?`· Tracked gaps ${tracked.length}`:'';
     list.hidden=!expanded;
     status.hidden=!expanded&&!busy&&!localSpeech.active&&!['checking','waiting','scheduled'].includes(progress.phase)&&progress.last_check?.outcome!=='expired';
-    const row=p=>interventionHTML(p,(value.intervention_reviews||[]).filter(r=>r.intervention_id===p.id),ended,{local:isLocal(value),editing,records:value.utterances||[]});
+    const row=p=>interventionHTML(p,(value.intervention_reviews||[]).filter(r=>r.intervention_id===p.id),ended,{local:isLocal(value),speechBlocked:!!reason,editing,records:value.utterances||[]});
     const html=suggestionQueueHTML(queue,row,trackedGapsHTML(tracked,value.utterances||[],ended));
     if(list._html!==html){
       const opened=new Set([...list.querySelectorAll('details[open]')].map(d=>d.dataset.suggestionDetails));
@@ -122,12 +139,12 @@ export function mountInterventions(root,{api,base,refresh,showSource,openFinding
       if(restore&&replacement){replacement.focus();replacement.setSelectionRange(...selection);}
     }
     root.setAttribute('aria-busy',String(busy));
-    list.querySelectorAll('[data-proposal-action]').forEach(b=>b.disabled=busy&&b.dataset.proposalAction!=='cancel');
+    list.querySelectorAll('[data-proposal-action]').forEach(b=>b.disabled=(busy&&b.dataset.proposalAction!=='cancel')||(b.dataset.proposalAction==='approve'&&!!reason));
     const draft=list.querySelector('[data-question-draft]');if(draft)draft.disabled=busy;
   }
   root.oninput=event=>{if(event.target.matches('[data-question-draft]')&&editing)editing.text=event.target.value;};
   root.onclick=async event=>{
-    const button=event.target.closest('button');if(!button||!snapshot)return;
+    const button=event.target.closest('button');if(!button||button.disabled||!snapshot)return;
     if(button.hasAttribute('data-toggle-suggestions')){expanded=!expanded;render(snapshot);return;}
     const p=snapshot.interventions?.find(p=>p.id===button.closest('[data-intervention]')?.dataset.intervention);
     if(busy){

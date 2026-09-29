@@ -582,6 +582,7 @@ html:has(.meeting-activity-dialog[open]) { overflow:hidden; }
 .tracked-gap-fields{font-size:13px;color:var(--accent);margin:0}
 .meeting-interventions>[data-intervention-status]{font-size:12px}
 .meeting-interventions>[data-intervention-error]:not(:empty){font-size:13px;margin:8px 0;color:var(--danger)}
+.meeting-interventions>[data-speech-requirement]:not([hidden]){font-size:14px;line-height:1.5;margin:8px 0;padding:10px 12px;border-left:3px solid var(--accent);border-radius:6px;background:var(--soft);color:var(--fg)}
 @media(max-width:600px){
  .meeting-controls .meeting-bot,.meeting-controls .meeting-capture{flex-basis:auto;max-width:100%}
  .meeting-assistant>.meeting-section-heading{display:grid;grid-template-columns:1fr 44px;gap:0 8px}

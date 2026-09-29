@@ -101,7 +101,7 @@ export async function showMeetings({api,shell,openDialog,field,navigate,toast,is
   if(!browserSpeech.available){$('#recording-answer-enabled').checked=false;$('#recording-answer-enabled').disabled=true;}
   const interventionsPanel=mountInterventions($('#meeting-interventions'),{api,base,refresh,openDialog,showSource,
     openFinding:fid=>{const f=meeting.findings?.find(item=>item.id===fid);if(f?.evidence?.[0])selectRecording(f.evidence[0].recording_id||'notes');setPanel('review');if(!findingsPanel.openFinding(fid))$('#meeting-findings').scrollIntoView({block:'start'});},
-    getLocalRecording:()=>!disposed&&!stopping&&socket?.readyState===WebSocket.OPEN?captureRecording:null,
+    getLocalRecording:()=>!disposed&&!stopping&&capture&&context?.state==='running'&&socket?.readyState===WebSocket.OPEN?captureRecording:null,
     onLocalSpeech:active=>browserSpeech.guard(active),
     });
   const findingsPanel=mountFindings($('#meeting-findings'),{api,base,refresh,showSource,recordRoot:$('#meeting-approved-record'),getRecordScope:()=>selectedRecording,

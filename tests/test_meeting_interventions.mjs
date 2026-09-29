@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {interventionHTML,evidenceGroups,suggestionQueue,suggestionQueueHTML,unaskedTaskGaps,trackedGapHTML,trackedGapsHTML} from '../web/meeting-interventions.js';
+import {interventionHTML,evidenceGroups,suggestionQueue,suggestionQueueHTML,speechRequirement,unaskedTaskGaps,trackedGapHTML,trackedGapsHTML} from '../web/meeting-interventions.js';
 import {approvedRecordHTML, findingEditorHTML} from '../web/meeting-findings.js';
 const p={id:'p',kind:'missing_detail',status:'proposed',question:'Who owns <script>this</script>?',reason:'Missing owner',evidence:[{utterance_id:'u',speaker:'Alice',quote:'<b>Owner needed</b>',start_ms:61000}],state:{}};
 const task={id:'t',task:'Prepare the launch checklist',status:'open',readiness:'wait',missing:['owner','timing'],evidence_current:true,reason:'The allocation exchange is still continuing.',evidence:p.evidence};
@@ -100,6 +100,23 @@ test('delivery is explicit and editing is inline with escaped draft text',()=>{
   assert.ok(html.includes('data-question-draft')&&html.includes('Cancel edit'));
   assert.ok(!html.includes('<script>'));
   assert.ok(!interventionHTML({...p,status:'deferred'}).includes('data-proposal-action="defer"'));
+});
+test('speech approval is disabled until the current delivery path is ready',()=>{
+  const local={recording:false,connector:{bot:null}};
+  assert.equal(speechRequirement(local,null,true),'Start recording in this browser to play.');
+  assert.equal(speechRequirement({...local,recording:true},null,true),'Play from the browser tab that is recording.');
+  assert.equal(speechRequirement(local,'recording-id',true),'');
+  assert.match(speechRequirement(local,'recording-id',false),/unavailable/);
+  const bot={state:'joined_recording',desired_state:'joined'};
+  const agent={voice_available:true,voice_enabled:true};
+  const remote={connector:{bot,agent,audio_connected:true}};
+  assert.equal(speechRequirement(remote,null,true),'');
+  assert.match(speechRequirement({...remote,connector:{...remote.connector,audio_connected:false}},null,true),/audio/);
+  assert.match(speechRequirement({...remote,connector:{...remote.connector,agent:{...agent,voice_enabled:false}}},null,true),/Answer when called/);
+  assert.match(speechRequirement({...remote,connector:{...remote.connector,bot:{...bot,state:'waiting_room'}}},null,true),/join/);
+  assert.match(speechRequirement({...remote,connector:{...remote.connector,bot:{...bot,deadline:1}}},null,true),/join/);
+  assert.match(interventionHTML(p,[],false,{local:true,speechBlocked:true}),/data-proposal-action="approve" disabled aria-describedby="suggestion-speech-requirement"/);
+  assert.doesNotMatch(interventionHTML(p,[],false,{local:true}),/data-proposal-action="approve" disabled/);
 });
 test('review history preserves changed wording',()=>{
   assert.ok(interventionHTML(p,[{action:'approve',created_at:0,before:{question:'Original'},after:{question:'Edited'}}]).includes('Original → Edited'));
