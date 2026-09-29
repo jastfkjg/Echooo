@@ -1,8 +1,12 @@
-# <img src="web/favicon.svg" alt="Echooo logo" width="32"> Echooo
+<p align="center"><img src="web/favicon.svg" alt="Echooo logo" width="72"></p>
 
-**A meeting voice agent that turns conversation into an evidence-backed record, with the host in control.**
+<h1 align="center">Echooo</h1>
 
-[Live demo](https://echooo.jastcraft.com/) · [AssemblyAI Voice Agent Hackathon](https://lablab.ai/ai-hackathons/assemblyai-voice-agent-hackathon)
+<p align="center"><strong>A meeting voice agent that turns conversation into an evidence-backed record, with the host in control.</strong></p>
+
+<h3 align="center"><a href="https://echooo.jastcraft.com/">▶ Open the live demo →</a></h3>
+
+<p align="center"><a href="https://lablab.ai/ai-hackathons/assemblyai-voice-agent-hackathon">AssemblyAI Voice Agent Hackathon</a></p>
 
 ## Hackathon at a glance
 
@@ -34,8 +38,8 @@ Suggestions depend on the discussion and may not appear for a resolved issue. On
 ### Architecture and technology
 
 ```mermaid
-flowchart LR
-    Audio --> AssemblyAI[AssemblyAI Realtime STT]
+flowchart TB
+    Audio[Meeting audio] --> AssemblyAI[AssemblyAI Realtime STT]
     AssemblyAI --> Transcript[Timed transcript]
     Transcript --> Echooo[Echooo analysis and evidence checks]
     Echooo --> Review[Host review]
@@ -48,7 +52,7 @@ flowchart LR
 | Browser | JavaScript, Web Audio / AudioWorklet, browser speech synthesis |
 | Server and analysis | Python, FastAPI, WebSockets, Server-Sent Events, configurable OpenAI-compatible LLM API |
 | Speech | AssemblyAI Realtime STT; optional AssemblyAI post-recording transcription and DashScope/CosyVoice TTS |
-| Storage and hosting | SQLAlchemy, SQLite or PostgreSQL, Docker, GitHub Actions, Alibaba Cloud Container Registry, Caddy |
+| Storage and hosting | SQLAlchemy, SQLite or PostgreSQL, Docker |
 
 The model proposes findings; the host approves the record and proactive speech separately. See [Architecture](docs/ARCHITECTURE.md) and [governed participation](docs/MILESTONE_2.md) for details.
 
@@ -59,9 +63,9 @@ The model proposes findings; the host approves the record and proactive speech s
 
 ### Known limitations
 
-- One owner per deployment; reviewers need owner credentials. The online bot requires separate Attendee and server TTS setup.
-- Mock mode has no microphone transcription. Live features depend on provider access, and browser voices vary by device.
-- AI findings and speaker labels need human review. Browser recordings last up to 30 minutes each; tab capture records only the selected tab.
+- AI findings and speaker labels need human review.
+- Browser recordings last up to 30 minutes each.
+- Tab capture records only the selected tab.
 
 ## Run locally
 
