@@ -8,8 +8,8 @@
 @media(max-width:480px){.two-col{grid-template-columns:1fr;gap:0}.heading .actions{width:100%}.heading .actions .btn{flex:1}.list-head{align-items:flex-start;flex-direction:column}.search{max-width:none}.session-row{gap:10px}.dialog-body{padding:20px 18px 0}.dialog-head,.dialog-footer{padding:16px 18px}.conversation-top,.transcript{padding:17px}.composer{padding:12px}.composer form .btn{padding:10px}.composer .foot{flex-wrap:wrap}.settings-section{align-items:flex-start;flex-direction:column}.topbar .status{display:none}.guest-header{margin-bottom:25px}.guest-shell .brand{font-size:23px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
-/* Global chat stays discoverable alongside knowledge navigation. */
-.sidebar > .btn[data-action="quick-chat"]{width:100%;margin-bottom:16px;justify-content:center}
+/* Meetings are the primary workspace entry. */
+.sidebar > .btn[data-action="new-meeting"]{width:100%;margin-bottom:16px;justify-content:center}
 .composer .foot > .actions{flex-shrink:0}
 
 /* Keep routine guidance secondary; preserve readable labels and status feedback. */
@@ -31,3 +31,14 @@
 .assistant-voice-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:24px}
 #assistant-voice-settings .assistant-voice-footer p{margin:0;font-size:13px;line-height:1.5}
 .assistant-voice-footer .btn{flex-shrink:0;margin-left:auto}
+
+.sidebar-secondary{margin-top:24px;min-height:0;overflow-y:auto}
+.knowledge-nav{margin:0}
+.knowledge-nav>summary{list-style:none}
+.knowledge-nav>summary::-webkit-details-marker{display:none}
+.knowledge-nav>summary::after{content:'›';margin-left:auto;transition:transform .16s}
+.knowledge-nav[open]>summary::after{transform:rotate(90deg)}
+.knowledge-nav>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.knowledge-nav>.navlink,.knowledge-nav>.domain-nav{margin-left:12px}
+.knowledge-nav>button{width:calc(100% - 12px)}
+.advanced-navigation{display:grid;justify-items:start;gap:4px;margin:12px 0}

@@ -3,6 +3,7 @@ let disposeAssistantVoice=()=>{};
 import {showMeetingDebug} from './meeting-debug.js?v=5';
 import { Voice } from './voice.js';
 import {showMeetings, leaveMeeting} from './meetings.js?v=linked-evidence-1';
+import {newProjectMeeting} from './meeting-project.js?v=project-simple-3';
 import { voiceControls, sessionHeader, updateVoiceUI } from './chat-ui.js';
 import {sessionStatus, filterSessions, privateContextForm, bindPrivateContext} from './session-ui.js?v=project-simple-3';
 import {enhanceSelects} from './select.js';
@@ -96,11 +97,20 @@ async function refreshBase() {
 }
 const domainName=id=>state.domains.find(d=>d.id===id)?.name || 'Removed domain';
 function navigate(hash) { if(location.hash==='#'+hash) renderRoute(); else location.hash=hash; }
-function shell(body,crumb='My domains',chatHeader='') {
+function shell(body,crumb='Project knowledge',chatHeader='') {
   const pending=state.proposals.filter(p=>p.status==='pending').length;
-  $('#app').innerHTML=`<div class="shell ${chatHeader?'chat-shell':''}"><aside class="sidebar">${brand}<button class="btn primary" data-action="quick-chat">${icon('chat')}Talk with Echooo</button><a class="navlink ${!state.route[0]?'active':''}" href="#">${icon('grid')}<span>My domains</span></a><a class="navlink ${state.route[0]==='sessions'?'active':''}" href="#sessions">${icon('chat')}<span>Conversations</span><span class="count">${state.sessions.length||''}</span></a><a class="navlink ${state.route[0]==='review'?'active':''}" href="#review">${icon('review')}<span>Review</span>${pending?`<span class="count">${pending}</span>`:''}</a><div class="label">Domains · ${state.domains.length}</div><nav class="domain-nav" aria-label="Domains">${state.domains.map(d=>`<a class="navlink ${state.route[1]===d.id?'active':''}" href="#domain/${d.id}/memories"><i class="domain-dot ${esc(d.color)}"></i><span class="name">${esc(d.name)}</span><span class="count">${d.memory_count}</span></a>`).join('')}</nav><button class="navlink" data-action="new-domain">${icon('plus')}<span>Add domain</span></button><div class="side-bottom">${themePicker()}<a class="navlink ${state.route[0]==='settings'?'active':''}" href="#settings">${icon('settings')}<span>Workspace settings</span></a><div class="profile"><span class="avatar">${esc(state.user.name.slice(0,1).toUpperCase())}</span><div><strong>${esc(state.user.name)}</strong><small>Private workspace</small></div></div></div></aside><main class="main" id="main"><header class="topbar">${chatHeader||`<div class="path"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation">${icon('menu')}</button><span>Personal workspace</span><span>/</span><strong>${esc(crumb)}</strong></div><span class="status">Private workspace</span>`}</header><div class="workspace">${body}</div></main></div>`;
-  $('.sidebar a[href="#sessions"]')?.insertAdjacentHTML('afterend', `<a class="navlink ${state.route[0]==='meetings'?'active':''}" href="#meetings">${icon('mic')}<span>Meetings</span></a>`);
-  if(state.route[0]==='meetings') $('.topbar .status').textContent='Private meeting workspace';
+  const knowledge=['domains','domain','review'].includes(state.route[0]);
+  $('#app').innerHTML=`<div class="shell ${chatHeader?'chat-shell':''}"><aside class="sidebar">${brand}
+    <button class="btn primary" data-action="new-meeting">${icon('plus')}New meeting</button>
+    <nav aria-label="Workspace"><a class="navlink ${state.route[0]==='meetings'?'active':''}" href="#meetings" ${state.route[0]==='meetings'?'aria-current="page"':''}>${icon('mic')}<span>Meetings</span></a></nav>
+    <div class="sidebar-secondary"><details class="knowledge-nav" ${knowledge?'open':''}><summary class="navlink">${icon('folder')}<span>Project knowledge</span></summary>
+      <a class="navlink ${state.route[0]==='domains'?'active':''}" href="#domains">${icon('grid')}<span>All projects</span></a>
+      <nav class="domain-nav" aria-label="Projects">${state.domains.map(d=>`<a class="navlink ${state.route[1]===d.id?'active':''}" href="#domain/${d.id}/memories"><i class="domain-dot ${esc(d.color)}"></i><span class="name">${esc(d.name)}</span></a>`).join('')}</nav>
+      <button class="navlink" data-action="new-domain">${icon('plus')}<span>Add project</span></button>
+      <a class="navlink ${state.route[0]==='review'?'active':''}" href="#review">${icon('review')}<span>Memory review</span>${pending?`<span class="count">${pending}</span>`:''}</a>
+    </details></div>
+    <div class="side-bottom">${state.route[0]==='sessions'?`<a class="navlink active" href="#sessions">${icon('chat')}<span>Conversations</span></a>`:''}<a class="navlink ${state.route[0]==='settings'?'active':''}" href="#settings">${icon('settings')}<span>Settings</span></a><div class="profile"><span class="avatar">${esc(state.user.name.slice(0,1).toUpperCase())}</span><div><strong>${esc(state.user.name)}</strong><small>Private workspace</small></div></div></div>
+    </aside><main class="main" id="main"><header class="topbar">${chatHeader||`<div class="path"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Open navigation" aria-expanded="false">${icon('menu')}</button><span>Echooo</span><span>/</span><strong>${esc(crumb)}</strong></div><span class="status">Meeting agent</span>`}</header><div class="workspace">${body}</div></main></div>`;
   bindActions();
 }
 const demoBanner=()=>state.config.demo?`<div class="banner">${icon('info')}<span>Demo mode · Connect a live model for natural replies.</span></div>`:'';
@@ -110,7 +120,9 @@ async function renderRoute() {
   disposeAssistantVoice();
   leaveMeeting();
   disconnect();
-  state.route=location.hash.slice(1).split('/').filter(Boolean); state.filter=''; state.session=null;
+  state.route=location.hash.slice(1).split('/').filter(Boolean);
+  if(!state.route.length){state.route=['meetings'];history.replaceState(null,'','#meetings');}
+  state.filter=''; state.session=null;
   try {
     await refreshBase(); if(run!==navigation)return;
     const [page,id,tab]=state.route;
@@ -119,7 +131,7 @@ async function renderRoute() {
     } else if(page==='meetings') {
       await showMeetings({api,shell,openDialog,field,navigate,toast,isCurrent:()=>run===navigation},id);
     } else if(page==='domain') {
-      const d=state.domains.find(d=>d.id===id); if(!d){navigate('');return;}
+      const d=state.domains.find(d=>d.id===id); if(!d){navigate('domains');return;}
       [state.memories,state.sources]=await Promise.all([api(`/domains/${id}/memories`),api(`/domains/${id}/sources`)]);
       if(run!==navigation)return;
       renderDomain(d,tab||'memories');
@@ -134,7 +146,7 @@ async function renderRoute() {
 }
 function renderHome() {
   const pending=state.proposals.filter(p=>p.status==='pending').length;
-  shell(`<div class="heading"><div><h1>My domains</h1></div><div class="actions"><button class="btn primary" data-action="new-domain">${icon('plus')}Add domain</button></div></div>${demoBanner()}${pending?`<a class="review-prompt" href="#review">${countLabel(pending,'update')} ready to review ${icon('arrow')}</a>`:''}${state.domains.length?state.domains.map(d=>`<a class="session-row" href="#domain/${d.id}/memories"><div><h3><i class="domain-dot ${esc(d.color)}"></i> ${esc(d.name)}</h3>${d.description?`<p class="muted">${esc(d.description)}</p>`:''}<div class="meta"><span>${countLabel(d.memory_count,'memory','memories')}</span>${d.pending_count?`<span>${d.pending_count} pending</span>`:''}</div></div>${icon('arrow')}</a>`).join(''):empty('Add your first domain','Keep related knowledge together.',`<button class="btn primary" data-action="new-domain">${icon('plus')}Add domain</button>`)} `);
+  shell(`<div class="heading"><div><h1>Project knowledge</h1></div><div class="actions"><button class="btn primary" data-action="new-domain">${icon('plus')}Add project</button></div></div>${demoBanner()}${pending?`<a class="review-prompt" href="#review">${countLabel(pending,'update')} ready to review ${icon('arrow')}</a>`:''}${state.domains.length?state.domains.map(d=>`<a class="session-row" href="#domain/${d.id}/memories"><div><h3><i class="domain-dot ${esc(d.color)}"></i> ${esc(d.name)}</h3>${d.description?`<p class="muted">${esc(d.description)}</p>`:''}<div class="meta"><span>${countLabel(d.memory_count,'memory','memories')}</span>${d.pending_count?`<span>${d.pending_count} pending</span>`:''}</div></div>${icon('arrow')}</a>`).join(''):empty('Add your first project','Keep related knowledge together.',`<button class="btn primary" data-action="new-domain">${icon('plus')}Add project</button>`)} `);
 }
 function renderDomain(d,tab) {
   const body=`<div class="heading"><div><h1>${esc(d.name)}</h1>${d.description?`<p>${esc(d.description)}</p>`:''}</div><div class="actions"><button class="btn" data-action="new-private">${icon('chat')}Private chat</button><button class="btn primary" data-action="new-delegate">${icon('arrow')}Delegate</button><button class="icon-btn" data-action="edit-domain" aria-label="Manage domain">${icon('settings')}</button></div></div><nav class="tabs" aria-label="Domain content"><a class="${tab==='memories'?'active':''}" href="#domain/${d.id}/memories">Confirmed memories <small>${state.memories.length}</small></a><a class="${tab==='sources'?'active':''}" href="#domain/${d.id}/sources">Sources <small>${state.sources.length}</small></a></nav>${tab==='sources'?`<div class="list-head"><small>Private sources · Review extracted memories before use.</small><div class="actions"><button class="btn" data-action="upload">${icon('upload')}Upload file</button><button class="btn primary" data-action="new-source">${icon('plus')}Paste text</button></div></div><div id="source-list">${sourceList()}</div>`:`<div class="list-head"><input class="search" id="memory-search" aria-label="Search domain memories" placeholder="Search memories…"><button class="btn primary" data-action="new-memory">${icon('plus')}Add memory</button></div><div id="memory-list">${memoryList()}</div>`}`;
@@ -183,10 +195,10 @@ function deleteSessionDialog(id=state.session?.id) {
 }
 function renderReview() {
   const pending=state.proposals.filter(p=>p.status==='pending');
-  shell(`<div class="heading"><div><h1>Review <span class="muted">${pending.length}</span></h1><p>Confirm what to remember.</p></div></div>${pending.length?pending.map(p=>`<article class="review-row"><div class="review-header"><div><span class="tag">${esc(domainName(p.domain_id))}</span><h3>${esc(p.title)}</h3></div><div class="actions"><button class="btn subtle" data-action="reject-proposal" data-id="${p.id}">Dismiss</button><button class="btn primary" data-action="review-proposal" data-id="${p.id}">Review ${icon('arrow')}</button></div></div><p>${esc(p.content)}</p><details><summary>View evidence · ${countLabel(p.evidence.length,'item')}</summary>${p.evidence.map(e=>`<div class="evidence"><strong>${esc(e.speaker||'Imported source')}</strong>: ${esc(e.content)}</div>`).join('')}</details><small>${p.session_id?'From a conversation':'Extracted from a source'} · ${dt(p.created_at)} · Not yet used in replies</small></article>`).join(''):empty('No updates to review','Proposed memories will appear here.','', 'check')}<p class="muted"><small>${countLabel(state.proposals.length-pending.length,'update')} processed</small></p>`,'Review');
+  shell(`<div class="heading"><div><h1>Memory review <span class="muted">${pending.length}</span></h1><p>Confirm what to remember.</p></div></div>${pending.length?pending.map(p=>`<article class="review-row"><div class="review-header"><div><span class="tag">${esc(domainName(p.domain_id))}</span><h3>${esc(p.title)}</h3></div><div class="actions"><button class="btn subtle" data-action="reject-proposal" data-id="${p.id}">Dismiss</button><button class="btn primary" data-action="review-proposal" data-id="${p.id}">Review ${icon('arrow')}</button></div></div><p>${esc(p.content)}</p><details><summary>View evidence · ${countLabel(p.evidence.length,'item')}</summary>${p.evidence.map(e=>`<div class="evidence"><strong>${esc(e.speaker||'Imported source')}</strong>: ${esc(e.content)}</div>`).join('')}</details><small>${p.session_id?'From a conversation':'Extracted from a source'} · ${dt(p.created_at)} · Not yet used in replies</small></article>`).join(''):empty('No updates to review','Proposed memories will appear here.','', 'check')}<p class="muted"><small>${countLabel(state.proposals.length-pending.length,'update')} processed</small></p>`,'Memory review');
 }
 function renderSettings() {
-  shell(`<div class="heading"><div><h1>Settings</h1></div></div>${demoBanner()}<section class="settings-section" id="assistant-voice-settings"></section><section class="settings-section appearance-setting"><h3>Appearance</h3>${themePicker()}</section><section class="settings-section"><div><h3>Export data</h3><p>Download your workspace as JSON.</p></div><a class="btn" href="/api/export" download>${icon('download')}Export</a></section><details class="settings-details"><summary>Connections & storage</summary><section class="settings-section"><div><h3>Model connections</h3><p>STT: ${esc(state.config.providers?.stt)} · LLM: ${esc(state.config.providers?.llm)} · TTS: ${esc(state.config.providers?.tts)}</p><p>Configured on the server.</p></div><span class="tag">${state.config.demo?'Demo':'Configured'}</span></section><section class="settings-section"><div><h3>Storage</h3><p>${state.config.database==='sqlite'?'Local SQLite':'PostgreSQL'}</p></div></section></details><section class="settings-section"><h3>${esc(state.user.name)}</h3><button class="btn" data-action="logout">${icon('logout')}Sign out</button></section>`,'Settings');
+  shell(`<div class="heading"><div><h1>Settings</h1></div></div>${demoBanner()}<section class="settings-section" id="assistant-voice-settings"></section><section class="settings-section appearance-setting"><h3>Appearance</h3>${themePicker()}</section><section class="settings-section"><div><h3>Export data</h3><p>Download your workspace as JSON.</p></div><a class="btn" href="/api/export" download>${icon('download')}Export</a></section><details class="settings-details"><summary>Advanced</summary><nav class="advanced-navigation" aria-label="Advanced tools"><a class="navlink" href="#sessions">${icon('chat')}<span>Conversations</span></a><button class="navlink" data-action="quick-chat">${icon('wave')}<span>Talk with Echooo</span></button><a class="navlink" href="#domains">${icon('folder')}<span>Project knowledge</span></a><a class="navlink" href="#review">${icon('review')}<span>Memory review</span></a></nav></details><details class="settings-details"><summary>Connections & storage</summary><section class="settings-section"><div><h3>Model connections</h3><p>STT: ${esc(state.config.providers?.stt)} · LLM: ${esc(state.config.providers?.llm)} · TTS: ${esc(state.config.providers?.tts)}</p><p>Configured on the server.</p></div><span class="tag">${state.config.demo?'Demo':'Configured'}</span></section><section class="settings-section"><div><h3>Storage</h3><p>${state.config.database==='sqlite'?'Local SQLite':'PostgreSQL'}</p></div></section></details><section class="settings-section"><h3>${esc(state.user.name)}</h3><button class="btn" data-action="logout">${icon('logout')}Sign out</button></section>`,'Settings');
   disposeAssistantVoice=mountAssistantVoice($('#assistant-voice-settings'),api);
 }
 function messageHTML(m) {
@@ -430,7 +442,7 @@ function domainDialog(edit=false) {
   if(edit)$('#delete-domain',modal).onclick=()=>{
     modal.close();openDialog('Delete domain',`<p class="dialog-help">Delete sources, memories, versions, and related conversations for “${esc(d.name)}” and stop active conversations. Derived memories may also be removed from other domains. This cannot be undone.</p>`+field('confirm','Type the domain name to confirm','','text','required'),async fd=>{
       if(fd.get('confirm')!==d.name)throw new Error('The name does not match.');
-      await api(`/domains/${d.id}`,'DELETE');toast('Domain and related data deleted.');navigate('');
+      await api(`/domains/${d.id}`,'DELETE');toast('Domain and related data deleted.');navigate('domains');
     },'Confirm deletion');
   };
 }
@@ -582,6 +594,11 @@ function bindActions(root=document) {
     try{
       const menu=b.closest('.toolbar-menu');if(menu){menu.open=false;$('summary',menu)?.focus();}
       if(action==='menu'){const open=$('.shell').classList.toggle('menu-open');b.setAttribute('aria-expanded',String(open));}
+      if(action==='new-meeting'){
+        $('.shell')?.classList.remove('menu-open');
+        $('[data-action=menu]')?.setAttribute('aria-expanded','false');
+        newProjectMeeting({api,openDialog,field,projects:state.domains,onCreate:m=>navigate(`meetings/${m.id}`)});
+      }
       if(action==='new-domain')domainDialog();
       if(action==='edit-domain')domainDialog(true);
       if(action==='new-memory')memoryDialog();
@@ -636,7 +653,7 @@ function bindActions(root=document) {
   });
 }
 function authPage(needsSetup) {
-  $('#app').innerHTML=`<div class="auth-appearance">${themePicker()}</div><main class="auth-page" id="main">${brand}<p class="eyebrow">Personal agent workspace</p><h1>${needsSetup?'Create your private workspace':'Welcome back'}</h1><form id="auth-form"><div class="form-error" role="alert"></div>${field('name','Username','','text','required minlength="2" maxlength="60" autocomplete="username"')}${field('password','Password','','password',`required maxlength="200" autocomplete="${needsSetup?'new-password':'current-password'}"`)}<button class="btn primary" type="submit">${needsSetup?'Create workspace':'Sign in'} ${icon('arrow')}</button></form></main>`;
+  $('#app').innerHTML=`<div class="auth-appearance">${themePicker()}</div><main class="auth-page" id="main">${brand}<p class="eyebrow">Meeting agent</p><h1>${needsSetup?'Create your private workspace':'Welcome back'}</h1><form id="auth-form"><div class="form-error" role="alert"></div>${field('name','Username','','text','required minlength="2" maxlength="60" autocomplete="username"')}${field('password','Password','','password',`required maxlength="200" autocomplete="${needsSetup?'new-password':'current-password'}"`)}<button class="btn primary" type="submit">${needsSetup?'Create workspace':'Sign in'} ${icon('arrow')}</button></form></main>`;
   $('#auth-form').onsubmit=async e=>{e.preventDefault();const b=$('button',e.target);b.disabled=true;try{const d=await api(needsSetup?'/auth/setup':'/auth/login','POST',Object.fromEntries(new FormData(e.target)));state.user=d.user;await startOwner();}catch(err){$('.form-error',e.target).textContent=err.message;}finally{b.disabled=false;}};
 }
 function renderGuest() {

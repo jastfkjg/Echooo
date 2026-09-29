@@ -28,6 +28,9 @@ Echooo streams audio to **AssemblyAI Realtime Speech-to-Text** over WebSocket. T
 
 Request dedicated account credentials for the [demo](https://echooo.jastcraft.com/) privately. Server operators can [provision an independent judge/demo workspace](docs/DEPLOYMENT.md#add-a-judgedemo-account). Use desktop Chrome, a microphone, and speakers or headphones; tell participants before recording.
 
+The workspace opens on **Meetings**. **Project knowledge** is collapsed in the
+sidebar; general conversations are available under **Settings → Advanced**.
+
 1. **Record:** Open **Meetings → New meeting** and start **Microphone only**. For a remote meeting, choose **Tab + microphone** and enable **Share tab audio**.
 2. **Inspect:** Discuss a decision, an assigned action, and an unresolved detail. Check the live transcript and source passages in **Review**.
 3. **Approve:** Edit, approve, and reject findings. Check the confirmed record in **Summary & notes**.

@@ -6,7 +6,7 @@ that meeting. There is no separate memory-selection or disclosure checkbox.
 
 ## Set up a project meeting
 
-1. Create a project in **My domains**, or use an existing domain.
+1. Expand **Project knowledge** in the sidebar to create a project or use an existing one.
 2. Add confirmed memories. Mark information **Shareable** if it may be used in project
    meetings. Private, audience-restricted, expired and unreviewed information is excluded.
 3. Create a meeting and select the project. Its eligible memories are available immediately.
