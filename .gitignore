@@ -1,4 +1,9 @@
 .env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+!*.env.example
 .local/
 .venv/
 __pycache__/
@@ -6,6 +11,16 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .playwright-cli/
+.playwright-mcp/
+playwright/.auth/
+playwright-report/
+blob-report/
+test-results/
+console-*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 output/
 dist/
 build/
