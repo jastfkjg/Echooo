@@ -26,7 +26,7 @@ Echooo streams audio to **AssemblyAI Realtime Speech-to-Text** over WebSocket. T
 
 ### Final demo and testing flow
 
-The [demo](https://echooo.jastcraft.com/) has one owner workspace. Request owner credentials privately. Use desktop Chrome, a microphone, and speakers or headphones; tell participants before recording.
+Request dedicated account credentials for the [demo](https://echooo.jastcraft.com/) privately. Server operators can [provision an independent judge/demo workspace](docs/DEPLOYMENT.md#add-a-judgedemo-account). Use desktop Chrome, a microphone, and speakers or headphones; tell participants before recording.
 
 1. **Record:** Open **Meetings → New meeting** and start **Microphone only**. For a remote meeting, choose **Tab + microphone** and enable **Share tab audio**.
 2. **Inspect:** Discuss a decision, an assigned action, and an unresolved detail. Check the live transcript and source passages in **Review**.

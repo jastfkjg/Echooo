@@ -13,6 +13,7 @@ from echooo.contracts import Input
 from echooo.models import VoiceProfile
 from echooo.providers.factory import create_tts
 from echooo.service import Problem
+from echooo.voice_ownership import visible_voices
 
 
 class VoiceSettings(Input):
@@ -74,7 +75,7 @@ async def synthesize(tts, text, cancel=None):
 
 
 def routes(app, store, settings, owner):
-    async def catalogue():
+    async def catalogue(who):
         services = []
         for provider in providers(settings):
             if provider == 'dashscope':
@@ -82,7 +83,7 @@ def routes(app, store, settings, owner):
                 manager = app.state.voice_manager
                 if manager:
                     try:
-                        custom = await manager.list_voices()
+                        custom = visible_voices(store, who, await manager.list_voices())
                         known = {v['id'] for v in voices}
                         voices += [v for v in custom if v.get('status') == 'OK' and v['id'] not in known]
                     except Exception:
@@ -93,8 +94,8 @@ def routes(app, store, settings, owner):
                 'voices': voices})
         return services
 
-    async def validate(data):
-        services = await catalogue()
+    async def validate(who, data):
+        services = await catalogue(who)
         if not any(s['id'] == data.provider and any(v['id'] == data.voice for v in s['voices']) for s in services):
             raise Problem('Choose an available speech service and voice.', 422)
 
@@ -103,12 +104,12 @@ def routes(app, store, settings, owner):
     @app.get('/api/settings/assistant-voice')
     async def get_voice(request: Request):
         who = owner(request)
-        return {**preferences(store, who, settings), 'services': await catalogue()}
+        return {**preferences(store, who, settings), 'services': await catalogue(who)}
 
     @app.put('/api/settings/assistant-voice')
     async def save_voice(request: Request, data: VoiceSettings):
         who = owner(request)
-        await validate(data)
+        await validate(who, data)
         # An upsert also handles two settings pages saving for the first time.
         if store.postgres:
             from sqlalchemy.dialects.postgresql import insert
@@ -122,8 +123,8 @@ def routes(app, store, settings, owner):
 
     @app.post('/api/settings/assistant-voice/preview')
     async def preview(request: Request, data: VoiceSettings):
-        owner(request)
-        await validate(data)
+        who = owner(request)
+        await validate(who, data)
         tts = create_tts(replace(settings, tts_provider=data.provider))
         tts.configure_voice(VoiceProfile(mode='sft', speaker_id=data.voice))
         try:

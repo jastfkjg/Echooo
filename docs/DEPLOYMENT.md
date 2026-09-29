@@ -2,7 +2,7 @@
 
 This deployment runs one Echooo application worker and PostgreSQL 17 behind the independent jastcraft-infra Caddy gateway on a Linux server. GitHub Actions runs only when **Deploy → Run workflow** is selected. Pushes and merges do not deploy. Choose a trusted branch in the dropdown; the workflow must first exist on the repository's default branch and on the selected branch. Server files and secrets are not committed to Git.
 
-This is an invitation-based test environment, not public multi-user registration. Each instance has one owner. Attendee is not included; the existing local Attendee stack requires separate cloud configuration. Browser recording, knowledge, chat, and guest invitations are included. Mock providers are the initial default; configure live providers for real AI and transcription.
+This is an invitation-based test environment, not public multi-user registration. Each instance supports multiple independent owner accounts, provisioned through trusted server access. Attendee is not included; the existing local Attendee stack requires separate cloud configuration. Browser recording, knowledge, chat, and guest invitations are included. Mock providers are the initial default; configure live providers for real AI and transcription.
 
 ## 1. Prepare the server and independent gateway
 
@@ -79,7 +79,21 @@ For the first deployment, connect to the server as deploy and run:
 bash /opt/echooo/current/compose.sh exec app python /app/deploy/cloud/create_owner.py
 ```
 
-Enter the owner name and a password of at least 16 characters interactively. Public `/api/auth/setup` is blocked by Caddy, so visitors cannot claim the initial workspace. Open your configured URL and sign in. The setup command refuses to create another owner.
+Enter the owner name and a password of at least 16 characters interactively. Public `/api/auth/setup` is blocked by Caddy, so visitors cannot claim the initial workspace. Open your configured URL and sign in. Without flags, the setup command still refuses to create another owner.
+
+### Add a judge/demo account
+
+After deploying the updated application, run on the server:
+
+```bash
+bash /opt/echooo/current/compose.sh exec app python /app/deploy/cloud/create_owner.py --additional
+```
+
+Enter `judge-demo` and a unique password of 16–200 characters at the prompts. Passwords are not passed as command-line arguments or printed. Duplicate names are rejected without changing the existing account. The new account starts with an empty `default` domain; existing accounts, sessions, and data remain intact. Public registration remains closed.
+
+Sign in using a separate browser profile and populate only synthetic demo meetings and knowledge. Each account can access only its own workspace, including uploads, chats, meeting recordings, exports, and live connections. Guest invitations still grant access only to their designated conversation. Share demo credentials through the submission platform's private credential field, never in this repository or public README.
+
+Newly cloned voices belong to their creating account. Provider voices created before ownership tracking remain available to the original account. Explicitly configured server voice presets remain shared.
 
 Check:
 
@@ -128,7 +142,7 @@ For a known database-compatible rollback, stop the failed/current application an
 
 After rolling back to `previous`, update the current link to that release and verify the configured public URL. Rollback uses that release's business Compose and today's server env files. Never run a pre-gateway-split Compose release with whole-stack up: it would recreate the old proxy. To restore older application code, use the new split Compose with the older app digest and the current database image. For incompatible schema changes, stop the app and plan a database restore from the matching pre-deploy dump; this loses writes made after that backup. Retain the image digest in ACR and the corresponding release directory as long as you need rollback.
 
-The standard Caddy image does not add comprehensive request-rate limits or model-spending quotas. Keep this environment invitation-only; add an appropriate edge access/rate-control layer before broader exposure. Use a separate instance and database per tester if independent owner workspaces are required.
+The standard Caddy image does not add comprehensive request-rate limits or model-spending quotas. Keep this environment invitation-only; add an appropriate edge access/rate-control layer before broader exposure. Accounts have independent workspaces within the same instance. Provider credentials, configured voice presets, infrastructure, and usage limits remain server-wide; use separate deployments when those resources also need isolation.
 
 ## Local container check
 

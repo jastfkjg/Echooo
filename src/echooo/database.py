@@ -49,6 +49,9 @@ assistant_voice_settings = owned_table("assistant_voice_settings",
     Column("provider", String, nullable=False), Column("voice", String, nullable=False),
     constraints=(UniqueConstraint("owner_id"),))
 
+custom_voices = owned_table("custom_voices",
+    Column("voice_id", String, nullable=False, unique=True))
+
 
 domains = owned_table("domains", Column("name", String, nullable=False),
     Column("description", Text, nullable=False), Column("color", String, nullable=False),
@@ -252,7 +255,7 @@ meeting_intervention_findings = owned_table('meeting_intervention_findings', mee
     Column('finding_id', String, ForeignKey('meeting_findings.id', ondelete='CASCADE'), nullable=False),
     constraints=(UniqueConstraint('intervention_id', 'finding_id'),))
 
-OWNED = [assistant_voice_settings, domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
+OWNED = [assistant_voice_settings, custom_voices, domains, sources, memories, versions, sessions, messages, proposals, actions, audit,
     meetings, recordings, audio_parts, utterances, meeting_sections, recording_summaries, recording_transcriptions, meeting_minutes, meeting_bots,
     meeting_agent_settings, meeting_agent_events, utterance_sources,
     meeting_knowledge, meeting_answer_sources, meeting_answer_checks, meeting_answer_traces, meeting_answer_triggers, meeting_proposal_links, meeting_speech, meeting_findings, meeting_finding_reviews, meeting_finding_progress,

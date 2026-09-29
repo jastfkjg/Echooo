@@ -7,6 +7,9 @@ import threading
 import time
 
 from sqlalchemy import delete, func, insert, select, text
+from sqlalchemy.exc import IntegrityError
+
+from echooo.contracts import Credentials
 
 from echooo.database import Store, tokens, users, uid, token_hash, ensure_default_domain
 
@@ -38,15 +41,28 @@ class Auth:
             return c.execute(select(func.count()).select_from(users)).scalar_one() == 0
 
     def setup(self, name: str, password: str) -> tuple[dict, str]:
+        user = self.create_owner(name, password, first_only=True)
+        return user, self.issue(user["id"], "owner", 86400 * 7)
+
+    def create_owner(self, name: str, password: str, *, first_only: bool = False) -> dict:
+        """Provision an independent workspace from a trusted server-side command.
+
+        Public setup must use first_only; this method is not a registration route.
+        """
+        credentials = Credentials(name=name, password=password)
         with self.lock, self.store.engine.begin() as c:
             if self.store.postgres:
                 c.execute(text("SELECT pg_advisory_xact_lock(76823918)"))
-            if c.execute(select(func.count()).select_from(users)).scalar_one():
+            if first_only and c.execute(select(func.count()).select_from(users)).scalar_one():
                 raise AuthError("This workspace is already set up. Please sign in.")
-            user = {"id": uid(), "name": name, "password": hash_password(password), "created_at": time.time()}
-            c.execute(insert(users).values(**user))
+            user = {"id": uid(), "name": credentials.name,
+                "password": hash_password(credentials.password), "created_at": time.time()}
+            try:
+                c.execute(insert(users).values(**user))
+            except IntegrityError as exc:
+                raise AuthError("An account with this name already exists.") from exc
             ensure_default_domain(c, user["id"])
-        return {"id": user["id"], "name": name}, self.issue(user["id"], "owner", 86400 * 7)
+        return {"id": user["id"], "name": user["name"]}
 
     def login(self, name: str, password: str, client: str) -> tuple[dict, str]:
         now = time.time()
