@@ -66,6 +66,7 @@ The model proposes findings; the host approves the record and proactive speech s
 
 ### Known limitations
 
+- The live demo does not yet support Echooo joining meetings as a participant because Attendee requires substantial server memory. A [local Attendee setup](docs/ATTENDEE.md) supports joining Google Meet, Zoom, and Microsoft Teams. **Zoom also requires [Zoom credentials](docs/ATTENDEE.md#configure-zoom-before-joining).**
 - AI findings and speaker labels need human review.
 - Browser recordings last up to 30 minutes each.
 - Tab capture records only the selected tab.
