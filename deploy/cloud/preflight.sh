@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # No service mutations: safe to run before building or deploying.
 set -euo pipefail
+if [[ "${ECHOOO_DEPLOY_TARGET:-existing}" == tencent-prod ]]; then
+    [[ -r /opt/echooo/deployment-target && $(cat /opt/echooo/deployment-target) == tencent-prod ]] || {
+        echo 'Expected tencent-prod in /opt/echooo/deployment-target.' >&2
+        exit 1
+    }
+fi
 for tool in docker python3 curl flock tar readlink; do
     command -v "$tool" >/dev/null || { echo "Missing server dependency: $tool" >&2; exit 1; }
 done

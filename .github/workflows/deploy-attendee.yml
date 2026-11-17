@@ -1,11 +1,20 @@
 name: Deploy Attendee
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        type: choice
+        default: existing
+        options: [existing, tencent-prod]
 permissions:
   contents: read
 concurrency:
   group: deploy
   cancel-in-progress: false
+env:
+  DEPLOY_TARGET: ${{ inputs.target || 'existing' }}
+  SSH_SECRET_PREFIX: ${{ inputs.target == 'tencent-prod' && 'TENCENT_' || '' }}
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -42,22 +51,25 @@ jobs:
           password: ${{ secrets.ACR_PASSWORD }}
       - name: Check server prerequisites before building
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets[format('{0}SSH_HOST', env.SSH_SECRET_PREFIX)] }}
+          SSH_PORT: ${{ secrets[format('{0}SSH_PORT', env.SSH_SECRET_PREFIX)] }}
+          SSH_USER: ${{ secrets[format('{0}SSH_USER', env.SSH_SECRET_PREFIX)] }}
+          SSH_KEY: ${{ secrets[format('{0}SSH_KEY', env.SSH_SECRET_PREFIX)] }}
+          KNOWN_HOSTS: ${{ secrets[format('{0}SSH_KNOWN_HOSTS', env.SSH_SECRET_PREFIX)] }}
         run: |
           set -euo pipefail
-          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          case "$DEPLOY_TARGET" in
+            existing|tencent-prod) ;;
+            *) echo 'Unknown deployment target.' >&2; exit 1 ;;
+          esac
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ && "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ && -n "$SSH_KEY" && -n "$KNOWN_HOSTS" ]] || { echo 'Configure the SSH secrets for the selected deployment target.' >&2; exit 1; }
           SSH_PORT=${SSH_PORT:-22}
           [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
           printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          ssh -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'bash -s' < deploy/attendee/cloud/preflight.sh
+          ssh -i "$HOME/.ssh/deploy_key" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "ECHOOO_DEPLOY_TARGET=$DEPLOY_TARGET bash -s" < deploy/attendee/cloud/preflight.sh
       - uses: actions/checkout@v4
         with:
           repository: attendee-labs/attendee
@@ -120,11 +132,11 @@ jobs:
         run: bash deploy/attendee/cloud/smoke-test.sh
       - name: Deploy over SSH
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets[format('{0}SSH_HOST', env.SSH_SECRET_PREFIX)] }}
+          SSH_PORT: ${{ secrets[format('{0}SSH_PORT', env.SSH_SECRET_PREFIX)] }}
+          SSH_USER: ${{ secrets[format('{0}SSH_USER', env.SSH_SECRET_PREFIX)] }}
+          SSH_KEY: ${{ secrets[format('{0}SSH_KEY', env.SSH_SECRET_PREFIX)] }}
+          KNOWN_HOSTS: ${{ secrets[format('{0}SSH_KNOWN_HOSTS', env.SSH_SECRET_PREFIX)] }}
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
           POSTGRES_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.postgres.outputs.digest }}
           REDIS_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.redis.outputs.digest }}
@@ -144,7 +156,7 @@ jobs:
           release="/opt/echooo/attendee/releases/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           "${SSH[@]}" "$target" "umask 077; mkdir -p '$release'"
           tar -C deploy/attendee/cloud -czf - . | "${SSH[@]}" "$target" "tar -xzf - -C '$release'"
-          "${SSH[@]}" "$target" "bash '$release/deploy.sh' '$IMAGE' '$POSTGRES_IMAGE' '$REDIS_IMAGE' '$CADDY_IMAGE'"
+          "${SSH[@]}" "$target" "ECHOOO_DEPLOY_TARGET=$DEPLOY_TARGET bash '$release/deploy.sh' '$IMAGE' '$POSTGRES_IMAGE' '$REDIS_IMAGE' '$CADDY_IMAGE'"
       - name: Remove SSH key
         if: always()
         run: rm -f "$HOME/.ssh/deploy_key"

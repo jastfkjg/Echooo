@@ -52,10 +52,15 @@ if ! compose up -d --wait --wait-timeout 180; then
     echo "Deployment failed. Backup: $backup. Check compose logs. No automatic database rollback was attempted." >&2
     exit 1
 fi
-# Verify the configured public route; HTTPS also verifies certificate trust.
+# Verify the configured route; HTTPS also verifies certificate trust.
+health_options=(--fail --silent --show-error --connect-timeout 5 --max-time 10)
+if [[ "${ECHOOO_DEPLOY_TARGET:-existing}" == tencent-prod ]]; then
+    # Use the local gateway even if public DNS still points to the old server.
+    health_options+=(--noproxy '*' --connect-to '::127.0.0.1:')
+fi
 healthy=false
 for attempt in {1..13}; do
-    if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 "$origin/health" > /dev/null; then
+    if curl "${health_options[@]}" "$origin/health" > /dev/null; then
         healthy=true
         break
     fi

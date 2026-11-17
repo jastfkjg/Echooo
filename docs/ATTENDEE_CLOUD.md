@@ -1,8 +1,8 @@
 # Deploy Attendee from GitHub Actions
 
-Use **Actions → Deploy Attendee → Run workflow** after the existing **Deploy** workflow has successfully deployed Echooo. Commit and push the new workflow to the default branch first. Select the branch containing the deployment changes when running it.
+Use **Actions → Deploy Attendee → Run workflow** after the **Deploy** workflow has successfully deployed Echooo. Commit and push the workflow to the default branch first. Select the branch containing the deployment changes and the same target used for Echooo.
 
-The workflow builds Attendee independently of Echooo, mirrors its dependencies to ACR, smoke-tests the published stack on the runner, then deploys immutable image digests over SSH. It reuses the existing repository variables `ACR_REGISTRY`, `ACR_NAMESPACE`, `ACR_REPOSITORY` and secrets `ACR_USERNAME`, `ACR_PASSWORD`, `SSH_HOST`, `SSH_PORT` (optional, defaults to 22), `SSH_USER`, `SSH_KEY`, `SSH_KNOWN_HOSTS`. No additional GitHub secrets are required. The server must already be able to pull from ACR, as for the Echooo deployment.
+The workflow builds Attendee independently of Echooo, mirrors its dependencies to ACR, smoke-tests the published stack on the runner, then deploys immutable image digests over SSH. It uses the same ACR and target-specific SSH settings as [Echooo's Deploy workflow](DEPLOYMENT.md#3-configure-github). The server must already be able to pull from ACR.
 
 ## Before running
 

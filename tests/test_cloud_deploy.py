@@ -161,7 +161,38 @@ def test_http_ip_deployment_checks_http_without_tls(deployment):
     env.update(TEST_ORIGIN='http://39.106.102.121', TEST_DOMAIN='39.106.102.121', TEST_SECURE='false')
     result, _ = run(deployment)
     assert result.returncode == 0, result.stderr
-    assert 'http://39.106.102.121/health' in Path(env['CALLS'] + '.curl').read_text()
+    request = Path(env['CALLS'] + '.curl').read_text()
+    assert 'http://39.106.102.121/health' in request
+    assert '--connect-to' not in request
+
+
+def test_tencent_health_check_uses_local_gateway_with_public_hostname(deployment):
+    _, _, _, env = deployment
+    env.update(ECHOOO_DEPLOY_TARGET='tencent-prod', TEST_ORIGIN='https://echooo.example.com')
+    result, _ = run(deployment)
+    assert result.returncode == 0, result.stderr
+    request = Path(env['CALLS'] + '.curl').read_text()
+    assert '--noproxy * --connect-to ::127.0.0.1: https://echooo.example.com/health' in request
+    assert '--insecure' not in request
+
+
+@pytest.mark.parametrize('path', ['deploy/cloud/preflight.sh', 'deploy/attendee/cloud/preflight.sh'])
+@pytest.mark.parametrize('marker', [None, 'aws-prod', 'tencent-prod'])
+def test_tencent_preflight_requires_matching_marker_before_using_docker(tmp_path, path, marker):
+    if marker is not None:
+        (tmp_path / 'deployment-target').write_text(marker + '\n')
+    docker = tmp_path / 'docker'
+    docker.write_text('#!/bin/bash\nexit 42\n')
+    docker.chmod(0o755)
+    (tmp_path / 'flock').symlink_to(docker)
+    script = (ROOT / path).read_text().replace('/opt/echooo', str(tmp_path))
+    env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ['PATH'], ECHOOO_DEPLOY_TARGET='tencent-prod')
+    result = subprocess.run(['bash', '-s'], input=script, env=env, capture_output=True, text=True)
+    if marker == 'tencent-prod':
+        assert result.returncode == 42  # The marker passed and the script reached Docker.
+    else:
+        assert result.returncode == 1
+        assert 'Expected tencent-prod' in result.stderr
 
 
 @pytest.mark.parametrize('origin,secure', [('http://example.com', 'true'), ('https://example.com', 'false')])

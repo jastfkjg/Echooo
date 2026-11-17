@@ -39,7 +39,7 @@ Enter the ACR registry access password interactively. This is the Docker registr
 
 ## 3. Configure GitHub
 
-Commit and push the deployment files. Put the workflow on the default branch once; this does not deploy anything. No GitHub Environment is required. Configure repository-level values at **Settings → Secrets and variables → Actions**. Anyone allowed to modify and deploy trusted branches can run code with deployment credentials.
+Commit and push the deployment files. Put the workflow on the default branch once. Configure repository-level values at **Settings → Secrets and variables → Actions**. The default target, `existing`, uses the current SSH secrets. The separate `tencent-prod` target uses dedicated SSH secrets. Neither target requires a GitHub Environment. Anyone allowed to modify and deploy trusted branches can run code with deployment credentials.
 
 In the **Secrets** tab, add:
 
@@ -65,11 +65,19 @@ The resulting image is `ACR_REGISTRY/ACR_NAMESPACE/ACR_REPOSITORY:COMMIT_SHA`. T
 
 Enable Actions; GitHub Packages permissions and a GitHub registry token are not needed. Actions publishes the Echooo application and mirrors the official PostgreSQL image to the same ACR repository under `deps-postgres-*` tags. Both immutable digests are saved in each release's `image.env`. No extra ACR repositories, variables, or credentials are needed. Only the GitHub runner needs Docker Hub access for builds and smoke tests; the server pulls all service images from ACR. Keep dependency tags/digests when configuring registry cleanup or retaining rollback releases.
 
-If you already deployed the earlier configuration, stop the old Compose project and preserve its database volume before switching: the project name is now `echooo`, which changes automatically generated volume names. Reattach the existing volume explicitly in Compose or restore a tested backup; otherwise the new project starts with a fresh database. Existing server provider env files remain usable. Create the renamed repository secrets; old environment-scoped secrets are not read by this workflow.
+If you are upgrading an earlier Compose configuration on the same host, stop the old Compose project and preserve its database volume before switching. The project name is now `echooo`, which changes automatically generated volume names. Reattach the existing volume explicitly in Compose or restore a tested backup. Existing server provider env files remain usable. Use the repository-level secrets listed above.
+
+### Prepare the Tencent Shanghai target
+
+Use the `tencent-shanghai-01` gateway target in `jastcraft-infra`. Bootstrap the `realquest,echooo` services with the `prod` environment to create `/opt/echooo` and its `deployment-target` marker (`tencent-prod`). Set `ECHOOO_ADDRESS` in `/opt/gateway/gateway.env` to match `DOMAIN` in `/opt/echooo/deploy.env`, then publish the gateway so it creates `echooo_proxy`. Configure the two Echooo env files and log in to ACR as the deployment user on that host.
+
+In the Echooo repository, add `TENCENT_SSH_HOST`, `TENCENT_SSH_USER`, `TENCENT_SSH_KEY`, `TENCENT_SSH_KNOWN_HOSTS` and, for a custom port, `TENCENT_SSH_PORT`. Use the Shanghai host and its verified SSH host key. Both Echooo workflows reuse the same ACR configuration and verify the server's `tencent-prod` marker before building.
+
+The Tencent release checks `/health` through the Shanghai Caddy gateway with the configured hostname and TLS verification. A test hostname can be used before switching production DNS. Make sure the configured hostname has a trusted certificate on the Shanghai gateway before running the HTTPS deployment check.
 
 ## 4. Deploy and create the owner
 
-Open **Actions → Deploy → Run workflow**, select the branch, and run it. It tests Python and JavaScript, smoke-tests the Docker image against disposable PostgreSQL, publishes both architectures, and deploys the immutable image digest. Concurrent deployments are serialized in GitHub and on the server.
+Open **Actions → Deploy → Run workflow**, select the branch and target, and run it. It tests Python and JavaScript, smoke-tests the Docker image against disposable PostgreSQL, publishes both architectures, and deploys the immutable image digest. Concurrent deployments are serialized in GitHub and on the server.
 
 The server pulls images before downtime, stops the old application, creates a database dump, starts the new release, and checks the configured HTTP or HTTPS URL. Existing voice/meeting connections are interrupted: publish between testing sessions. A release is marked current only after health checks succeed. `/health` is service liveness, not an end-to-end provider check.
 
